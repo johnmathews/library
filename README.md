@@ -48,7 +48,7 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for notable changes and
   [`docs/jobs-and-notifications.md`](docs/jobs-and-notifications.md).
 - **Interfaces:** cookie/bearer-authenticated REST API (OpenAPI at
   `/docs`) and an MCP server at `/mcp`, so LLM clients can search, read
-  and ingest documents.
+  and ingest documents — see [`docs/mcp.md`](docs/mcp.md).
 
 ## Stack
 

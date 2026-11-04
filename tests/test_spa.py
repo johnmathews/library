@@ -87,10 +87,38 @@ def test_unknown_api_path_is_json_404_not_index(spa_client: TestClient) -> None:
 
 
 def test_unknown_mcp_and_docs_paths_are_not_index(spa_client: TestClient) -> None:
-    for path in ("/healthz/nope", "/redoc/nope"):
+    for path in ("/healthz/nope", "/redoc/nope", "/.well-known/nope"):
         response = spa_client.get(path)
         assert response.status_code == 404, path
         assert '<div id="app">' not in response.text, path
+
+
+def test_well_known_is_json_404_not_index(spa_client: TestClient) -> None:
+    """OAuth discovery probes ``/.well-known/*``. Answering with a 200 HTML
+    page makes a client try to parse the SPA shell as metadata; a JSON 404 is
+    the answer that means "no such document"."""
+    for path in (
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/openid-configuration",
+    ):
+        response = spa_client.get(path)
+        assert response.status_code == 404, path
+        assert response.headers["content-type"] == "application/json", path
+        assert response.json() == {"detail": "Not Found"}, path
+
+
+def test_slashless_mcp_reaches_mcp_not_spa(spa_client: TestClient) -> None:
+    """With the SPA mounted, ``POST /mcp`` used to hit the GET-only catch-all
+    and answer 405. It must reach the MCP app, which 401s without a token."""
+    response = spa_client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        headers={"Accept": "application/json, text/event-stream"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 401
+    assert "Bearer" in response.headers["WWW-Authenticate"]
 
 
 def test_healthz_unaffected(spa_client: TestClient) -> None:

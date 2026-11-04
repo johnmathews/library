@@ -62,7 +62,11 @@ dependencies = [
     # ASGI/reverse-proxy deployments — which is exactly how the MCP app is
     # mounted here (app.py mounts create_mcp_http_app() into the FastAPI
     # lifespan, behind a proxy). 3.4.4 restores that compatibility.
-    "fastmcp>=3.4.4",
+    # >=3.4.11: the 3.4.6-3.4.11 hardening (SSRF-protected fetches, cookie
+    # headers withheld from get_http_headers, component auth re-checked after
+    # transforms). <4: a major version, so a routine `uv lock --upgrade` must
+    # not cross it; moving to 4.x is a deliberate migration of mcp_server.py.
+    "fastmcp>=3.4.11,<4",
     "watchfiles>=1.2.0",
     "imap-tools>=1.13.0",
     "sse-starlette>=2.1",

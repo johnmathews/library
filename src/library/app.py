@@ -9,9 +9,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 import library
-from library import telemetry
+from library import db, telemetry
 from library.api import (
     admin,
     ask,
@@ -136,8 +137,38 @@ _BACKEND_PREFIXES = frozenset(
     # "metrics" belongs here for the same reason as "healthz": without it the
     # SPA catch-all below answers a Prometheus scrape with index.html, which
     # is a 200 — so the scrape looks healthy while collecting nothing.
-    {"api", "mcp", "healthz", "metrics", "docs", "redoc", "openapi.json"}
+    # ".well-known" likewise: OAuth/MCP clients probe it for discovery
+    # metadata, and must get a JSON 404 (or the real document), never a
+    # 200 HTML page they would try to parse.
+    {"api", "mcp", ".well-known", "healthz", "metrics", "docs", "redoc", "openapi.json"}
 )
+
+#: Where the MCP app is mounted. Starlette's Mount only matches below it.
+MCP_MOUNT_PATH: str = "/mcp"
+
+
+class SlashlessMcpPath:
+    """ASGI middleware: serve ``/mcp`` exactly as ``/mcp/``, for every method.
+
+    Clients are configured with the URL users paste, and both vendors' docs
+    show it without a trailing slash. Without this, ``/mcp`` misses the mount:
+    the router answers a redirect (or, with the SPA's GET-only catch-all
+    registered, a 405), and a redirect is no fix either, because MCP clients
+    do not reliably re-send a POST body across one. Rewriting the path before
+    routing makes the two spellings one endpoint.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] == MCP_MOUNT_PATH:
+            scope = {
+                **scope,
+                "path": f"{MCP_MOUNT_PATH}/",
+                "raw_path": f"{MCP_MOUNT_PATH}/".encode(),
+            }
+        await self.app(scope, receive, send)
 
 
 def warn_if_no_public_base_url(public_base_url: str | None) -> None:
@@ -283,6 +314,8 @@ def create_app() -> FastAPI:
             if credentials_check is not None:
                 credentials_check.cancel()
             await broker.stop()
+            # Last: the pooled connections belong to this event loop.
+            await db.dispose_engine()
 
     app = FastAPI(
         title="Library",
@@ -396,7 +429,9 @@ def create_app() -> FastAPI:
     # MCP server (W13): bearer-token-authenticated tools at /mcp/ — see
     # docs/mcp.md. Auth is enforced inside the mounted app (FastMCP bearer
     # middleware running our token verifier), not by the /api dependencies.
-    app.mount("/mcp", mcp_http)
+    # /mcp without the slash is rewritten onto the mount before routing.
+    app.mount(MCP_MOUNT_PATH, mcp_http)
+    app.add_middleware(SlashlessMcpPath)
 
     # Production frontend (W17): when a built SPA is present (the Docker
     # image bakes it into /app/frontend/dist), serve it from this process.
