@@ -20,7 +20,14 @@ from sqlalchemy.pool import NullPool
 
 from library.auth import service
 from library.auth.deps import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE
-from library.models import ApiToken, User
+from library.models import (
+    ApiToken,
+    OAuthAuthorizationCode,
+    OAuthClient,
+    OAuthGrant,
+    OAuthToken,
+    User,
+)
 from library.models import Session as SessionModel
 from tests.conftest import AuthUser, create_user, fetch_all, login
 
@@ -539,11 +546,56 @@ async def test_revoke_api_token_unknown_id_returns_false(
         assert await service.revoke_api_token(db, user, 10_000_000) is False
 
 
+@pytest.fixture
+def bystander(api_database_url: str) -> AuthUser:
+    """A second active user, whose credentials must survive the first one's disable."""
+    return create_user(api_database_url)
+
+
+async def _seed_oauth(db: AsyncSession, user_id: int, client_id: str) -> OAuthGrant:
+    """A client, a live grant for ``user_id``, live access + refresh tokens and a code."""
+    if await db.get(OAuthClient, client_id) is None:
+        db.add(OAuthClient(client_id=client_id, client_name="Test app", client_info={}))
+        await db.flush()
+    grant = OAuthGrant(user_id=user_id, client_id=client_id)
+    db.add(grant)
+    await db.flush()
+    later = datetime.now(UTC) + timedelta(hours=1)
+    for kind in ("access", "refresh"):
+        db.add(
+            OAuthToken(
+                grant_id=grant.id,
+                kind=kind,
+                token_hash=hashlib.sha256(f"{client_id}-{user_id}-{kind}".encode()).hexdigest(),
+                family_id=f"family-{client_id}-{user_id}",
+                scopes=["library"],
+                expires_at=later,
+            )
+        )
+    db.add(
+        OAuthAuthorizationCode(
+            code_hash=hashlib.sha256(f"{client_id}-{user_id}-code".encode()).hexdigest(),
+            grant_id=grant.id,
+            code_challenge="challenge",
+            redirect_uri="https://claude.ai/api/mcp/auth_callback",
+            redirect_uri_provided_explicitly=True,
+            scopes=["library"],
+            expires_at=later,
+        )
+    )
+    await db.commit()
+    return grant
+
+
 async def test_revoke_all_credentials_deletes_sessions_and_revokes_live_tokens(
-    api_database_url: str, auth_user: AuthUser
+    api_database_url: str, auth_user: AuthUser, bystander: AuthUser
 ) -> None:
     async with _service_session(api_database_url) as db:
         user = await _load_user(db, auth_user.id)
+        client_id = f"client-{auth_user.id}"
+        grant = await _seed_oauth(db, user.id, client_id)
+        # Another user connected the same app; disabling this user leaves it alone.
+        other_grant = await _seed_oauth(db, bystander.id, client_id)
         raw_a = await service.create_session(db, user)
         raw_b = await service.create_session(db, user)
         _, live = await service.create_api_token(db, user, "live-token")
@@ -579,3 +631,43 @@ async def test_revoke_all_credentials_deletes_sessions_and_revokes_live_tokens(
             await db.execute(select(ApiToken.revoked_at).where(ApiToken.id == already.id))
         ).scalar_one()
         assert unchanged == already_ts
+
+        # OAuth: the grant and both its tokens are revoked, its pending code is
+        # gone, so the connected app can neither call /mcp nor refresh.
+        grant_stamp = select(OAuthGrant.revoked_at).where(OAuthGrant.id == grant.id)
+        assert (await db.execute(grant_stamp)).scalar_one() is not None
+        token_stamps = (
+            (await db.execute(select(OAuthToken.revoked_at).where(OAuthToken.grant_id == grant.id)))
+            .scalars()
+            .all()
+        )
+        assert len(token_stamps) == 2
+        assert all(stamp is not None for stamp in token_stamps)
+        codes = (
+            await db.execute(
+                select(OAuthAuthorizationCode.id).where(OAuthAuthorizationCode.grant_id == grant.id)
+            )
+        ).all()
+        assert codes == []
+
+        # The bystander's grant, tokens and code are untouched.
+        other_stamp = select(OAuthGrant.revoked_at).where(OAuthGrant.id == other_grant.id)
+        assert (await db.execute(other_stamp)).scalar_one() is None
+        other_stamps = (
+            (
+                await db.execute(
+                    select(OAuthToken.revoked_at).where(OAuthToken.grant_id == other_grant.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert other_stamps == [None, None]
+        other_codes = (
+            await db.execute(
+                select(OAuthAuthorizationCode.id).where(
+                    OAuthAuthorizationCode.grant_id == other_grant.id
+                )
+            )
+        ).all()
+        assert len(other_codes) == 1

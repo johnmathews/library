@@ -66,6 +66,13 @@ def test_client_side_route_serves_spa_shell(spa_client: TestClient) -> None:
     assert response.headers["cache-control"] == "no-cache"
 
 
+def test_oauth_consent_page_serves_spa_shell(spa_client: TestClient) -> None:
+    """/mcp/authorize redirects the browser here; the SPA, not a JSON 404, must answer."""
+    response = spa_client.get("/oauth/consent?request=abc")
+    assert response.status_code == 200
+    assert '<div id="app">' in response.text
+
+
 def test_hashed_assets_are_cached_forever(spa_client: TestClient) -> None:
     response = spa_client.get("/assets/index-abc123.js")
     assert response.status_code == 200

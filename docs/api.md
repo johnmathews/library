@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.9.4: the consent request routes need the binding cookie `/mcp/authorize` set, and answer `404` without it; approving or denying clears it and consumes the request atomically; the consent page is not shipped yet). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.9.4. Read `src/library/api/oauth.py` and `src/library/auth/oauth_service.py`; the binding-cookie rules, the `404` detail and the cookie clearing are asserted by `tests/test_mcp_oauth.py` (each new test seen red first), green. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-04 (§1.9.4: the consent page (`/oauth/consent`) and Settings → Connected apps now call these routes; the not-shipped caveat is gone. §1.9: `library user disable` also revokes OAuth grants and tokens). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.9.4's opening paragraph and the `user disable` comment in §1.9. Read `frontend/src/api/oauth.ts` (paths, methods, CSRF header, pinned by `api/__tests__/oauth.spec.ts`) and `revoke_all_credentials`; `tests/test_cli.py::test_user_disable_revokes_everything` green after being seen red. The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -631,7 +631,7 @@ the host with the bundled CLI — there is no signup endpoint:
 ```console
 library user add anna --display-name "Anna"   # prompts for password
 library user passwd anna
-library user disable anna                      # also revokes all sessions/tokens
+library user disable anna                      # also revokes sessions, tokens, connected apps
 library user list
 ```
 
@@ -713,9 +713,8 @@ When `LIBRARY_PUBLIC_BASE_URL` is set, the MCP server is also an OAuth
 authorization server for clients such as claude.ai, ChatGPT and Claude
 Code ([mcp.md §1.2, §1.5](mcp.md)). A client's `/mcp/authorize` sends the
 browser to `/oauth/consent?request=<request_id>`; these endpoints are what
-that page and the connected-apps settings use. **The consent page itself
-is not shipped yet** ([mcp.md §1.2](mcp.md)): the endpoints below are in
-place, but nothing in the web app calls them. When OAuth is off, **every
+that page and Settings → **Connected apps** use (what the user sees:
+[mcp.md §1.2](mcp.md)). When OAuth is off, **every
 route here answers `404`** (`{"detail": "OAuth is not enabled"}`) to an
 authenticated caller. Like the rest of `/api`, anonymous requests get `401`
 first.

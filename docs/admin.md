@@ -1,7 +1,7 @@
 # Admin role & admin views
 
-**Status:** active. **Last updated:** 2026-09-01 (§1.4's re-baseline note said the coverage tracer "was corrected" without saying how, which pointed a reader at the `concurrency = ["greenlet", "thread"]` line that no longer exists. It now names `core = "sysmon"`, records that the two report the same 95% but the old one cost ~75% of the backend suite's wall clock, and points at the guard test.) Earlier: 2026-08-31 (§1.2.5 said the override tables "have not been dropped yet". Migration 0038 dropped them, so the sentence now says the collision it describes cannot arise even in principle.) Earlier the same day (the legacy series stack was deleted: currency normalisation is now a single `UPDATE documents` with no conflict case, so the `409` and its conflict list are gone from §1.2.5; the confirm step stays. **Fix round 1:** §1.2.5 said the override tables "went with the legacy series stack", which reads as the drop migration having shipped — corrected to say the code that read them went, and that the tables are orphaned until the drop). Earlier: 2026-08-12 (documentation verification sweep: `/matters` is a normal route with admin-gated *writes*, not an admin-only page; the Metadata tab covers senders, recipients, kinds, currencies and FX, not recipients alone).
-**Last verified:** 2026-09-01 — method: partial, scoped to §1.4's coverage-tracer paragraph. Checked the new sentence against `pyproject.toml` (`core = "sysmon"` under `[tool.coverage.run]`, no `concurrency` key) and against two full-suite runs on this machine: 551s with `concurrency = ["greenlet", "thread"]` and 310s with `core = "sysmon"`, whose `coverage report` output was byte-identical (11284 statements, 601 missing, 95%). `tests/test_coverage_config.py` was proved to go red with the old setting restored. Nothing else was re-checked; the rest carries forward the verification below unchanged, whose method was: partial, scoped to §1.2.5's closing paragraph. Checked the corrected sentence against `migrations/versions/0038_drop_series_stack.py` (both override tables are in `_DROP_ORDER`) and against `tests/test_migrations.py::test_series_stack_tables_are_dropped`, which asserts the drop on a migrated database. Nothing else was re-checked; the rest carries forward the verification below unchanged, whose method was: partial, scoped to §1.2.5 and the `/currencies/normalize` route-table row.
+**Status:** active. **Last updated:** 2026-11-04 (§1.2: deactivating a user also revokes their OAuth connected apps). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to the deactivation sentence in §1.2. Read `api/admin/users.py` (a deactivating `PATCH` calls `revoke_all_credentials`) and that function in `auth/service.py`, which now also revokes OAuth grants and tokens; asserted by `tests/test_auth.py::test_revoke_all_credentials_deletes_sessions_and_revokes_live_tokens`, seen red first. The rest carries its earlier verifications forward.
 
 The library is a multi-user "named family accounts over one shared library"
 (see [architecture.md](architecture.md) §1.5). On top of that, a single boolean
@@ -81,7 +81,8 @@ concurrent admin edits can't interleave.
 
 **Last-admin protection:** `PATCH` refuses (409) any change that would leave
 zero active admins, so an admin cannot lock everyone out. Deactivating a user
-also revokes their sessions and API tokens (same as `library user disable`).
+also revokes their sessions, API tokens and OAuth connected apps (same as
+`library user disable`).
 
 ### 1.2.3 Recipient (metadata) management
 

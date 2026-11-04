@@ -1,8 +1,8 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-04 (OAuth hardening: a pending authorization request is bound to the browser that followed `/mcp/authorize` by a per-request cookie; the redirect allow-list is re-checked at `/authorize`; refresh scope narrowing; accepted limits in §1.4; `/mcp/.well-known/oauth-authorization-server` in §1.5).
-**Last verified:** 2026-11-04 — method: read `mcp_server.py`, `auth/oauth_provider.py`, `auth/oauth_service.py`, `api/oauth.py` and `config.py` against §1, §1.4 and §1.5; ran `tests/test_mcp_oauth.py` (binding cookie attributes, forwarded consent link refused, SDK client flow) and `tests/test_oauth_provider.py`, green, each new test seen red first.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py
+**Status:** active. **Last updated:** 2026-11-04 (§1.2: the consent page and Settings → Connected apps ship, so OAuth connects end to end; §1.4: `library user disable` also revokes OAuth grants and tokens). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.2 and §1.4's revocation bullet. Read `OAuthConsentView.vue`, `SettingsView.vue` and `revoke_all_credentials` against the prose; drove a real authorize → sign-in → approve round trip in a browser against a local server (redirect carried `code`, `state`, `iss`) and revoked the grant in Settings; the revocation is asserted by `test_cli.py::test_user_disable_revokes_everything`, seen red first.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,
@@ -71,14 +71,27 @@ nothing else: it registers itself, opens Library in the browser, and the
 user signs in **with their own Library account** and approves the client
 on Library's consent page (`/oauth/consent`). Each family member connects
 their own claude.ai or ChatGPT account this way, and everything the
-client does is attributed to whoever approved it. Approved clients are
-listed and revoked through the connected-apps API
-([api.md §1.9.4](api.md)).
+client does is attributed to whoever approved it.
 
-**Not usable end to end yet:** the server side above is in place, but the
-web app does not have the consent page yet, so a browser sent to
-`/oauth/consent` cannot approve anything. Until it ships, connect with a
-static token (Claude Code, the API connector, generic clients).
+**What the user sees.** The client opens Library's sign-in page if the
+browser is not signed in, then the consent page. It names the app (or,
+when the app registered no name, the host it returns to), shows
+prominently the host the answer goes back to (`claude.ai`, `chatgpt.com`,
+`localhost` for Claude Code — the thing to check against the app you
+started from), the account it connects as, with a *Not you?* link that
+signs out and back in as someone else, and what the app can do: search
+and read every document, download files and add documents, all recorded
+as that user. **Approve**
+returns to the app with the authorization code; **Deny** returns with
+`access_denied`. A request is valid for 10 minutes and works only in the
+browser that started it: an expired one offers only *Return to the app*
+(a deny, so the app stops waiting), and an unknown, used or forwarded
+link says to start again from the app. The page works at phone width.
+
+**Disconnecting.** Settings → **Connected apps** lists each approved app
+with when it connected and was last used; *Disconnect* (confirmed inline)
+revokes it and its tokens at once ([api.md §1.9.4](api.md)). When OAuth
+is off the tab says so instead of listing.
 
 ### claude.ai and Claude Desktop
 
@@ -187,8 +200,10 @@ and recipient by name substring; no facet, status or review filters, no
   every request (hashed at rest, last use touched at ~5-minute
   granularity), so revoking a static token, disconnecting an OAuth client
   (`DELETE /api/oauth/grants/{id}`, which kills its access and refresh
-  tokens) or disabling a user (`library user disable`) cuts MCP access
-  immediately.
+  tokens) or disabling a user (`library user disable`, or deactivating
+  them in Admin → Users) cuts MCP access immediately. Disabling also
+  revokes every OAuth grant and token of the user, so re-enabling them
+  brings no connected app back: each has to be approved again.
 - **Auth mechanism:** FastMCP bearer middleware rejects a request without
   a valid token before any tool code runs. Static tokens go through a
   `TokenVerifier` that calls the same `validate_api_token` service as the

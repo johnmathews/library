@@ -7,6 +7,9 @@
  *     live and auto-save per click (PUT /api/settings/appearance).
  *   - Notifications: Pushover push notifications + the email addresses a user
  *     forwards documents from (explicit save; PUT /api/settings/notifications).
+ *   - Connected apps: MCP clients (claude.ai, ChatGPT, Claude Code) approved
+ *     over OAuth, each with an inline-confirmed Disconnect (GET/DELETE
+ *     /api/oauth/grants, loaded lazily on first show; 404 = OAuth is off).
  *   - Email triage: a READ-ONLY view of the instance-wide email-in triage
  *     pipeline (GET /api/settings/email-triage, loaded lazily on first show).
  *     Nothing here is editable — the settings are environment-only.
@@ -45,6 +48,7 @@ import {
   type LLMBackends,
   type TilePreview,
 } from '@/api/settings'
+import { listOAuthGrants, revokeOAuthGrant, type OAuthGrant } from '@/api/oauth'
 import { listKinds, type KindOption } from '@/api/taxonomy'
 import { formatDateTime } from '@/utils/documentFormat'
 import { isHexColor, resolveKindColor } from '@/utils/kindColor'
@@ -53,7 +57,14 @@ import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 
-type Tab = 'dashboard' | 'appearance' | 'ask' | 'notifications' | 'email-triage' | 'llm-backend'
+type Tab =
+  | 'dashboard'
+  | 'appearance'
+  | 'ask'
+  | 'notifications'
+  | 'connected-apps'
+  | 'email-triage'
+  | 'llm-backend'
 const tab = ref<Tab>('dashboard')
 
 // --- Dashboard fields --------------------------------------------------------
@@ -398,6 +409,68 @@ async function onAskProfileSubmit(): Promise<void> {
   }
 }
 
+// --- Connected apps (OAuth grants) --------------------------------------------
+// Loaded lazily on the tab's first show. A 404 means OAuth is off on this
+// server (LIBRARY_PUBLIC_BASE_URL unset), which the tab explains rather than
+// reporting as an error.
+type GrantsState = 'idle' | 'loading' | 'loaded' | 'off' | 'error'
+const grants = ref<OAuthGrant[]>([])
+const grantsState = ref<GrantsState>('idle')
+/** The grant whose inline "Disconnect?" confirmation is showing. */
+const confirmingGrant = ref<number | null>(null)
+const revokingGrant = ref<number | null>(null)
+const grantsError = ref<string | null>(null)
+const revokedName = ref<string | null>(null)
+
+/** A grant's display name; clients may register without one. */
+function grantName(grant: OAuthGrant): string {
+  return grant.client_name || 'Unnamed app'
+}
+
+async function loadGrants(): Promise<void> {
+  grantsState.value = 'loading'
+  grantsError.value = null
+  try {
+    grants.value = await listOAuthGrants()
+    grantsState.value = 'loaded'
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      grantsState.value = 'off'
+    } else {
+      grantsState.value = 'error'
+      grantsError.value = 'Sorry, your connected apps could not be loaded. Try again.'
+    }
+  }
+}
+
+function askRevoke(grantId: number): void {
+  confirmingGrant.value = grantId
+  grantsError.value = null
+  revokedName.value = null
+}
+
+async function confirmRevoke(grant: OAuthGrant): Promise<void> {
+  if (revokingGrant.value !== null) return
+  revokingGrant.value = grant.id
+  grantsError.value = null
+  try {
+    await revokeOAuthGrant(grant.id)
+    grants.value = grants.value.filter((row) => row.id !== grant.id)
+    revokedName.value = grantName(grant)
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      // Already disconnected (another tab, or a disabled account): drop the row.
+      grants.value = grants.value.filter((row) => row.id !== grant.id)
+      revokedName.value = grantName(grant)
+    } else {
+      grantsError.value = `Sorry, ${grantName(grant)} could not be disconnected. Try again.`
+    }
+  } finally {
+    revokingGrant.value = null
+    confirmingGrant.value = null
+  }
+}
+
 // --- Email triage (read-only pipeline view) ----------------------------------
 
 // Loaded lazily on the tab's first show: the config is instance-wide and
@@ -430,6 +503,7 @@ async function loadTriage(): Promise<void> {
 }
 
 watch(tab, (current) => {
+  if (current === 'connected-apps' && grantsState.value === 'idle') void loadGrants()
   if (current === 'email-triage' && !triage.value && !triageLoading.value) void loadTriage()
   if (current === 'llm-backend' && !llm.value && !llmLoading.value) void loadLLMBackends()
 })
@@ -536,9 +610,13 @@ const triageStepTitleClass = 'text-sm font-semibold text-gray-800 dark:text-gray
 const triageStepTextClass = 'text-sm text-gray-500 dark:text-gray-400 mt-1'
 
 const cardClass = 'card p-6'
+// Seven tabs are wider than a phone, so the tablist scrolls sideways
+// (`overflow-x-auto`) and tabs never shrink or wrap. No `-mb-px` here, unlike
+// AdminView: inside a scroll container the 1px overlap becomes a 1px vertical
+// scroll, so the active underline sits on the hairline instead.
 const tabClass = (active: boolean): string =>
   [
-    'px-4 py-2 -mb-px text-sm font-medium border-b-2 transition cursor-pointer',
+    'shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium border-b-2 transition cursor-pointer',
     active
       ? 'border-violet-500 text-violet-600'
       : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200',
@@ -549,7 +627,7 @@ const tabClass = (active: boolean): string =>
   <div id="settings-page" class="w-full">
     <PageHeader title="Settings" />
 
-    <div id="settings-tablist" role="tablist" class="flex gap-1 border-b border-gray-200 dark:border-gray-700/60 mb-6">
+    <div id="settings-tablist" role="tablist" class="flex gap-1 overflow-x-auto border-b border-gray-200 dark:border-gray-700/60 mb-6">
       <button
         id="settings-tab-dashboard"
         role="tab"
@@ -597,6 +675,18 @@ const tabClass = (active: boolean): string =>
         @click="tab = 'notifications'"
       >
         Notifications
+      </button>
+      <button
+        id="settings-tab-connected-apps"
+        role="tab"
+        type="button"
+        :aria-selected="tab === 'connected-apps'"
+        :tabindex="tab === 'connected-apps' ? 0 : -1"
+        :class="tabClass(tab === 'connected-apps')"
+        data-testid="tab-connected-apps-btn"
+        @click="tab = 'connected-apps'"
+      >
+        Connected apps
       </button>
       <button
         id="settings-tab-email-triage"
@@ -1052,6 +1142,151 @@ const tabClass = (active: boolean): string =>
             <AppButton type="submit" :disabled="notifSaving">Save changes</AppButton>
           </div>
         </form>
+      </div>
+    </section>
+
+    <!-- Connected apps tab: MCP clients approved over OAuth. -->
+    <section
+      id="settings-panel-connected-apps"
+      v-show="tab === 'connected-apps'"
+      role="tabpanel"
+      data-testid="tab-connected-apps"
+    >
+      <div v-if="grantsError" class="mb-6">
+        <AppBanner variant="error" title="Something went wrong" data-testid="connected-apps-error">
+          <p>{{ grantsError }}</p>
+          <AppButton
+            v-if="grantsState === 'error'"
+            type="button"
+            variant="secondary"
+            size="sm"
+            class="mt-3"
+            data-testid="connected-apps-retry"
+            @click="loadGrants"
+          >
+            Try again
+          </AppButton>
+        </AppBanner>
+      </div>
+
+      <div v-if="revokedName" class="mb-6">
+        <AppBanner variant="success" data-testid="connected-apps-revoked">
+          <p>{{ revokedName }} is disconnected. It can no longer reach the Library.</p>
+        </AppBanner>
+      </div>
+
+      <div id="settings-card-connected-apps" :class="cardClass">
+        <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Connected apps</h2>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          Apps such as Claude and ChatGPT that you approved to use the Library as you. A
+          disconnected app loses access at once; to use it again, connect it again from the app.
+        </p>
+
+        <p
+          v-if="grantsState === 'loading'"
+          class="mt-4 text-sm text-gray-500 dark:text-gray-400"
+          data-testid="connected-apps-loading"
+        >
+          Loading your connected apps…
+        </p>
+
+        <p
+          v-else-if="grantsState === 'off'"
+          class="mt-4 text-sm text-gray-600 dark:text-gray-300"
+          data-testid="connected-apps-off"
+        >
+          Connecting apps this way is turned off on this Library server. An administrator turns it
+          on by setting the server's public address (<code>LIBRARY_PUBLIC_BASE_URL</code>).
+        </p>
+
+        <p
+          v-else-if="grantsState === 'loaded' && grants.length === 0"
+          class="mt-4 text-sm text-gray-600 dark:text-gray-300"
+          data-testid="connected-apps-empty"
+        >
+          No apps are connected. To connect one, add the Library as a connector in the app; it
+          sends you here to approve it.
+        </p>
+
+        <ul
+          v-else-if="grantsState === 'loaded'"
+          id="settings-connected-apps-list"
+          class="mt-4 divide-y divide-gray-200 dark:divide-gray-700"
+          data-testid="connected-apps-list"
+        >
+          <li
+            v-for="grant in grants"
+            :id="`settings-connected-app-${grant.id}`"
+            :key="grant.id"
+            class="py-4 first:pt-0 last:pb-0"
+            :data-testid="`connected-app-${grant.id}`"
+          >
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-sm font-semibold text-gray-800 dark:text-gray-100 break-words">
+                  {{ grantName(grant) }}
+                </p>
+                <dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+                  <div>
+                    <dt :class="triageLabelClass">Connected</dt>
+                    <dd :class="triageValueClass">{{ formatDateTime(grant.created_at) }}</dd>
+                  </div>
+                  <div>
+                    <dt :class="triageLabelClass">Last used</dt>
+                    <dd :class="triageValueClass">
+                      {{ grant.last_used_at ? formatDateTime(grant.last_used_at) : 'Not used yet' }}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+              <AppButton
+                v-if="confirmingGrant !== grant.id"
+                type="button"
+                variant="secondary"
+                size="sm"
+                :data-testid="`connected-app-revoke-${grant.id}`"
+                @click="askRevoke(grant.id)"
+              >
+                Disconnect
+              </AppButton>
+            </div>
+
+            <div
+              v-if="confirmingGrant === grant.id"
+              class="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 dark:border-red-500/30 dark:bg-red-500/10"
+              role="group"
+              :aria-label="`Disconnect ${grantName(grant)}`"
+              :data-testid="`connected-app-confirm-${grant.id}`"
+            >
+              <p class="text-sm text-gray-800 dark:text-gray-100">
+                Disconnect {{ grantName(grant) }}? It stops working at once and has to be approved
+                again to reconnect.
+              </p>
+              <div class="mt-3 flex flex-wrap gap-3">
+                <AppButton
+                  type="button"
+                  variant="warning"
+                  size="sm"
+                  :disabled="revokingGrant === grant.id"
+                  :data-testid="`connected-app-confirm-revoke-${grant.id}`"
+                  @click="confirmRevoke(grant)"
+                >
+                  Disconnect {{ grantName(grant) }}
+                </AppButton>
+                <AppButton
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  :disabled="revokingGrant === grant.id"
+                  :data-testid="`connected-app-cancel-${grant.id}`"
+                  @click="confirmingGrant = null"
+                >
+                  Cancel
+                </AppButton>
+              </div>
+            </div>
+          </li>
+        </ul>
       </div>
     </section>
 

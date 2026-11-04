@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.4 MCP row and §1.5 Authentication: MCP accepts static tokens and, with an https `LIBRARY_PUBLIC_BASE_URL`, OAuth access tokens from Library's own authorization server; consent needs a signed-in browser).
-**Last verified:** 2026-11-04 — method: partial, scoped to the §1.4 MCP row and §1.5, read against `build_mcp_auth`/`oauth_base_url` in `src/library/mcp_server.py` and `src/library/api/oauth.py`; `tests/test_mcp_oauth.py` green. Other sections carry forward their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-04 (§1.5: a client is approved on the web app's consent page, `/oauth/consent`, and disconnected under Settings → Connected apps; disabling a user revokes their OAuth grants and tokens). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.5's OAuth sentence, read against `frontend/src/router/index.ts` (the `oauth-consent` route), `OAuthConsentView.vue`, `SettingsView.vue` and `revoke_all_credentials` in `src/library/auth/service.py`. Other sections carry forward their earlier verifications.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -339,8 +339,10 @@ hashed, individually revocable. MCP additionally accepts OAuth access
 tokens when `LIBRARY_PUBLIC_BASE_URL` is `https` (or `http` on
 `localhost`/`127.0.0.1`): Library is then its own OAuth 2.1 authorization
 server for claude.ai, ChatGPT and Claude Code, and a client is connected
-by a user approving it from a signed-in browser session — the session
-that started the flow. See [mcp.md](mcp.md) and
+by a user approving it on the web app's consent page (`/oauth/consent`)
+from a signed-in browser session — the session that started the flow.
+Each user sees and disconnects their own apps under Settings → Connected
+apps; disabling a user revokes all of them. See [mcp.md](mcp.md) and
 [api.md §1.9.4](api.md).
 
 A single boolean **admin** role (`users.is_admin`) layers on top: admins

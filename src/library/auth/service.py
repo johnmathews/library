@@ -17,7 +17,7 @@ from sqlalchemy.orm import joinedload
 
 from library.auth.passwords import verify_password
 from library.config import get_settings
-from library.models import ApiToken, User
+from library.models import ApiToken, OAuthAuthorizationCode, OAuthGrant, OAuthToken, User
 from library.models import Session as SessionModel
 
 API_TOKEN_PREFIX: str = "library_"
@@ -132,11 +132,32 @@ async def revoke_api_token(db: AsyncSession, user: User, token_id: int) -> bool:
 
 
 async def revoke_all_credentials(db: AsyncSession, user_id: int) -> None:
-    """Kill every session and API token of a user (used by `user disable`)."""
+    """Kill every credential of a user (used by `user disable`).
+
+    Sessions are deleted; API tokens, OAuth grants and the OAuth access and
+    refresh tokens under those grants get ``revoked_at``; unredeemed OAuth
+    authorization codes are deleted. Re-enabling the user therefore brings
+    none of them back: every connected app has to be approved again.
+    """
+    moment = _now()
     await db.execute(delete(SessionModel).where(SessionModel.user_id == user_id))
     await db.execute(
         update(ApiToken)
         .where(ApiToken.user_id == user_id, ApiToken.revoked_at.is_(None))
-        .values(revoked_at=_now())
+        .values(revoked_at=moment)
+    )
+    users_grants = select(OAuthGrant.id).where(OAuthGrant.user_id == user_id)
+    await db.execute(
+        update(OAuthToken)
+        .where(OAuthToken.grant_id.in_(users_grants), OAuthToken.revoked_at.is_(None))
+        .values(revoked_at=moment)
+    )
+    await db.execute(
+        delete(OAuthAuthorizationCode).where(OAuthAuthorizationCode.grant_id.in_(users_grants))
+    )
+    await db.execute(
+        update(OAuthGrant)
+        .where(OAuthGrant.user_id == user_id, OAuthGrant.revoked_at.is_(None))
+        .values(revoked_at=moment)
     )
     await db.commit()

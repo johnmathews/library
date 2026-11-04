@@ -5,7 +5,9 @@ import DefaultLayout from '@/layouts/DefaultLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
-const isPublicRoute = computed(() => route.meta.public === true)
+// Public routes (/login) and `bare` ones (/oauth/consent, signed in but a stop
+// on the way back to another app) render without the shell.
+const isBareRoute = computed(() => route.meta.public === true || route.meta.bare === true)
 
 // Reflect the user's page-canvas tone onto <html data-canvas="…">, which
 // assets/main.css maps to the body background (light mode). Immediate so the
@@ -22,7 +24,7 @@ watch(
 </script>
 
 <template>
-  <RouterView v-if="isPublicRoute" />
+  <RouterView v-if="isBareRoute" />
   <DefaultLayout v-else>
     <RouterView />
   </DefaultLayout>
