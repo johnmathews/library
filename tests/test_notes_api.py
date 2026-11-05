@@ -88,7 +88,7 @@ def test_create_materializes_reader_without_worker(api_client: TestClient) -> No
 def test_created_note_is_findable_by_body_full_text_search(api_client: TestClient) -> None:
     """A note's body is findable by plain FTS right after create.
 
-    ``_apply_body`` sets ``pages_markdown`` synchronously, and FTS indexes
+    ``notes_service.apply_body`` sets ``pages_markdown`` synchronously, and FTS indexes
     ``coalesce(pages_markdown, ocr_text)`` — so a distinctive body phrase matches
     without waiting for the worker. The coined term is globally unique in the test
     DB, so it scopes the assertion on its own.
@@ -122,6 +122,24 @@ def test_create_and_patch_reject_empty_title(api_client: TestClient) -> None:
 
     note = create_note(api_client, "Has title", "body")
     assert api_client.patch(f"/api/notes/{note['id']}", json={"title": ""}).status_code == 422
+
+
+def test_create_and_patch_reject_an_overlong_title(api_client: TestClient) -> None:
+    """A note's title is capped at the web editor's 200 characters on create
+    and edit. Without the cap a long title reached the 1024-character
+    ``original_filename`` column (title + ".md") and was a 500."""
+    long_title = "t" * 1100
+    response = api_client.post("/api/notes", json={"title": long_title, "body_markdown": "x"})
+    assert response.status_code == 422
+    assert (
+        api_client.post("/api/notes", json={"title": "t" * 200, "body_markdown": "x"}).status_code
+        == 201
+    )
+
+    note = create_note(api_client, "Short title", "body")
+    assert (
+        api_client.patch(f"/api/notes/{note['id']}", json={"title": long_title}).status_code == 422
+    )
 
 
 def test_identical_notes_both_succeed_distinct_sha(api_client: TestClient) -> None:

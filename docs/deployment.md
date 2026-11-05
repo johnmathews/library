@@ -1,7 +1,7 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-11-04 (new §1.5.1: `LIBRARY_TRUSTED_CLIENT_IP_HEADER` for rate limiting behind a proxy; §1.5: with MCP OAuth on, the proxy must also pass the `/.well-known/oauth-*` discovery paths).
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.5.1, read against `client_key` in `src/library/auth/ratelimit.py` and the `trusted_client_ip_header` setting; `test_trusted_header_used_only_when_configured` green after being seen red. §1.5 carries forward its earlier check against `src/library/mcp_server.py`; the rest carries forward the 2026-10-22 deploy check.
+**Status:** active. **Last updated:** 2026-11-05 (§1.4: `compose-smoke` now also calls the MCP endpoint the way the reverse proxy forwards it, and checks the call log and `/metrics`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to the `compose-smoke` paragraph of §1.4: the steps ran against a locally built image (green), and red against builds with the MCP mount moved, the strict Host guard on, and the API log handler removed. The rest carries forward the 2026-11-04 check of §1.5 and §1.5.1.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
@@ -198,7 +198,18 @@ and `npm run dev` (Vite on :5173, proxying `/api` — see
 `docker compose ps` shows all three as `healthy` when the stack is up.
 CI's `compose-smoke` job boots this exact file and asserts healthy +
 login on every push to `main`, and on branches when backend, frontend or
-CI paths changed.
+CI paths changed. It runs with MCP OAuth and metrics on, as production
+does, and then makes one MCP call the way the tunnel and reverse proxy
+forward it (`scripts/mcp_smoke.py`), with a public `Host` header. (It
+also sends `X-Forwarded-Proto: https`, which uvicorn ignores in CI because
+it trusts proxy headers only from `127.0.0.1`, so the scheme is not under
+test there.) It checks that a request with no token gets
+`401` naming the OAuth discovery document, then creates a token and runs
+`initialize`, `notifications/initialized` and `tools/call library_stats`,
+which must answer `isError: false`. The two steps after it check that the
+call's `mcp_call` line is in `docker compose logs api` and that `/metrics`
+counts it. In-process tests send `Host: testserver`, so this is the only
+check that would catch a FastMCP Host/Origin regression like 3.4.3's.
 
 Note what the `api` healthcheck does *not* cover: `/healthz` returns 200
 whenever the process is serving, so a `degraded` status still counts as

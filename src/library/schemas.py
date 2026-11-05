@@ -382,17 +382,26 @@ class ExtractionQueuedResponse(BaseModel):
     job_id: int = Field(description="The Procrastinate job id (see GET /api/jobs).")
 
 
+#: A note's title cap: the web editor's limit. The title also becomes the
+#: stored filename (``<title>.md``, a 1024-character column).
+NOTE_TITLE_MAX_CHARS: int = 200
+
+
 class NoteCreate(BaseModel):
     """Body of POST /api/notes — author a new in-app note."""
 
-    title: str = Field(min_length=1, description="The note title (locked against re-extraction).")
+    title: str = Field(
+        min_length=1,
+        max_length=NOTE_TITLE_MAX_CHARS,
+        description="The note title (locked against re-extraction).",
+    )
     body_markdown: str = Field(description="The note body, authored as Markdown.")
 
 
 class NoteUpdate(BaseModel):
     """Body of PATCH /api/notes/{id}; only fields present in the body change."""
 
-    title: str | None = Field(default=None, min_length=1)
+    title: str | None = Field(default=None, min_length=1, max_length=NOTE_TITLE_MAX_CHARS)
     body_markdown: str | None = None
 
 

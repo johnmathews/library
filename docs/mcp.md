@@ -1,14 +1,15 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.3 *Money*: the date window applies to the document that carries a payment, chosen over the other filters, with the new reason `payment_dated_elsewhere`; a twin of a cut row is `over_limit`). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §1.3 *Money*. The month-window and row-cap tests in `tests/test_mcp_money.py` pass, each seen red first or killed by a hand-made mutant; the prose was read against `structured_query.py`.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
+**Status:** active. **Last updated:** 2026-11-05 (§1.3: `create_note` returns a `warning` instead of an error when the note was saved but not queued; *Files*: non-UTF-8 text comes back as a blob, and the filename is one URI segment; earlier the same day, *Monitoring*). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to the `create_note` row, *Notes* and *Files* changes. The new tests in `tests/test_mcp_notes_files.py` (queue failure, URI slashes, Latin-1 text) pass, each seen red first on the previous code; the prose was read against `mcp_server.py` and `notes_service.py`.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,
 the Anthropic API MCP connector, or any MCP-capable agent) can search the
 archive by keyword or by meaning, read documents, total amounts, fetch
-files, ingest new documents, correct document details and add comments.
+files, ingest new documents, write notes, correct document details and
+add comments.
 
 - **Endpoint:** `https://<your-host>/mcp` (Streamable HTTP transport,
   stateless, JSON responses). `/mcp/` with a trailing slash is the same
@@ -149,7 +150,7 @@ clients are not supported.
 
 All tools require auth.
 
-**Errors.** Expected failures (unknown or deleted document, oversized
+**Errors.** Expected failures (unknown or deleted document, oversized upload
 file, unsupported type) come back as MCP tool errors whose text is
 written for the model and never points at the REST API, which an LLM
 connector cannot call; where the user has to act, the text says to open
@@ -165,7 +166,7 @@ server log.
 **Titles and annotations.** Every tool declares a human-readable `title`
 and behaviour hints in `tools/list`, all with `openWorldHint: false`.
 The read tools are `readOnlyHint: true` (clients such as ChatGPT ask the
-user to confirm any tool without it). The three write tools are
+user to confirm any tool without it). The four write tools are
 `readOnlyHint: false`:
 
 | Tool | `destructiveHint` | `idempotentHint` | Why |
@@ -173,6 +174,7 @@ user to confirm any tool without it). The three write tools are
 | `ingest_document` | `false` | `true` | Only adds; the same bytes again return the existing document. |
 | `update_document_metadata` | `true` | `true` | Overwrites stored values; the same change applied twice leaves the same state. |
 | `add_comment` | `false` | `false` | Only adds; every call adds another comment. |
+| `create_note` | `false` | `false` | Only adds; notes are never deduplicated, so every call files another note. |
 
 | Tool | Parameters | Returns |
 |------|------------|---------|
@@ -181,7 +183,7 @@ user to confirm any tool without it). The three write tools are
 | `get_library_context` | — | `{context}`: the connected user's identity and the archive vocabulary as text. See *Searching by meaning* below. |
 | `get_document` | `document_id`, `start_page` (default 1), `max_chars` (default 20 000, 1 000–50 000) | Every field of a search result except `snippet`/`rank` (including `review_status` and, when it is `needs_review`, `review_findings`), plus provenance (`source`, `original_filename`, `sha256`, `ocr_confidence`), `web_url`, the document's `text` with its paging fields (*Reading* below), `comments` `[{id, document_id, author_id, body, created_at}]` newest first, and the audit-trail `events` `[{event, created_at}]`. `topics` are read-only auto-extracted. |
 | `money_query` | `aggregate` (`sum_amount` default, `distinct_senders`, `list`), `group_by?` (`sender`/`kind`, `sum_amount` only), `kind?`, `sender?`, `recipient?`, `tags?`, `projects?`, `matters?`, `facets?`, `date_from?`, `date_to?` (the `semantic_search` filters), `review_status?` | `{result_type, rows, coverage}`, `structured_query.query_documents`' result unchanged. `sum_amount` rows: `{key, total, currency, document_count, document_ids}` (`document_ids` cites at most 25; `document_count` is the true count) per currency (and per sender or kind with `group_by`; `key` is `null` without it), `total` a signed decimal string. `distinct_senders` rows: `{sender, document_count, document_ids}`; both at most 50 rows, the largest kept. `list` rows: `{id, title, sender, recipient, kind, document_date, amount_total, currency, review_status}`, up to 50. `coverage` is `{matched, included, excluded, needs_review}`. See *Money* below. |
-| `get_document_file` | `document_id`, `variant` = `"original"` (default) or `"searchable_pdf"` | `{filename, mime_type, size_bytes, content_base64}`. Files over 10 MB are refused with an error telling the user to download the file from the web app. A variant that was never produced is an error. |
+| `get_document_file` | `document_id`, `variant` = `"original"` (default) or `"searchable_pdf"` | MCP content blocks plus structured content `{document_id, variant, filename, mime_type, size_bytes, content_included, download_url, note}`. Up to 2 MB the file itself is a second content block; over 2 MB there are no bytes, `content_included` is `false` and `note` says why. Not an error either way. See *Files* below. A variant that was never produced, or a file missing on disk, is an error. |
 | `ingest_document` | `filename`, `content_base64` (PDF, JPEG, PNG, HEIC/HEIF, TIFF, plain text, Markdown, DOCX), `source_note?` | `{id, sha256, status, duplicate}`. Runs the same ingestion service as uploads (dedup by SHA-256, OCR + extraction queued); `source` is recorded as `mcp` and the calling token's user as uploader. A `source_note` is stored on the audit trail — but only when the ingest was not a duplicate, since a duplicate creates no new document to attach it to. Content matching a document in the trash is refused until it is restored or purged. |
 | `list_kinds` | — | `{kinds: [{slug, name, document_count}]}` |
 | `list_senders` | — | `{senders: [{id, name, document_count, colour}]}` — every sender, including those with no documents; `colour` is a chart colour or `null`. |
@@ -191,6 +193,7 @@ user to confirm any tool without it). The three write tools are
 | `list_matters` | — | `{matters: [{id, slug, name, hint, document_count}]}` — archived matters are omitted. Use the slugs in the `matters` filter of `search_documents` and `semantic_search`. |
 | `update_document_metadata` | `document_id`; any of `title?`, `summary?`, `document_date?`, `kind_slug?` (an existing kind), `sender?`, `recipient?` (names, matched case-insensitively, created if new), `tags?`, `projects?`, `matters?` (complete replacement lists; `[]` empties), `language?`, `amount_total?`, `currency?` (ISO 4217), `due_date?`, `expiry_date?`; `clear_fields?` (list of the nullable scalar fields above to empty); `apply` (default `false`); `preview_token?` | Preview (`apply` false): `{document_id, applied: false, changes: {field: {current, proposed}}, preview_token}`, nothing written. Apply: `{document_id, applied: true, updated_fields, current: {field: value}, review_status}`. See *Editing* below. |
 | `add_comment` | `document_id`, `body` (stripped; blank refused) | `{id, document_id, author_id, body, created_at}` — the comment, authored by the token's user. Writes a `comment_added` audit event and queues a re-embed so the comment becomes searchable (the same service as the web app's *Add comment*). Unknown or deleted document: error. |
+| `create_note` | `title` (stripped, 1–200 characters), `body_markdown` (Markdown; blank refused) | `{id, title, status, page_count, web_url, warning}` — the new note; `warning` is set when it was saved but its processing could not be queued. See *Notes* below. |
 | `library_stats` | — | `{total_documents, by_status, by_kind, ingested_last_7_days, oldest_document_date, newest_document_date}`. `by_status` counts the lifecycle states that have documents (`received`, `ocr`, `extract`, `markdown`, `embed`, `indexed`, `failed`); soft-deleted documents are excluded from every figure. |
 
 `search_documents` shares its query builder (`src/library/search.py`)
@@ -214,8 +217,10 @@ tools answer it with an empty result whose `total` or `coverage.matched`
 is 0, which is a count, not a total that reads like an answer.
 
 `search_documents`, `semantic_search`, `get_document`,
-`get_library_context` and `money_query` declare their result type, so
-`tools/list` carries an `outputSchema` for each. The three document tools build their fields
+`get_library_context`, `money_query`, `create_note` and
+`get_document_file` declare their result type, so `tools/list` carries an
+`outputSchema` for each. `search_documents`, `semantic_search` and
+`get_document` build their document fields
 with `document_reads.list_item_fields`, the same function as the web
 app's list and detail views (`src/library/document_reads.py`).
 
@@ -397,6 +402,48 @@ an argument error.
   `user_id`. An amount allocated across spend lines after the preview
   is still refused at apply, with nothing written.
 
+**Notes: `create_note`.** The web app's *New note*: both call
+`notes_service.create_note`, so a note made over MCP is the same
+born-digital `text/markdown` document (`source: note`, title locked
+against re-extraction) with the token's user as uploader. The body is
+written synchronously as the note's one page and its `pages_markdown`
+search mirror, so `get_document` reads it and `search_documents` finds
+it by its words as soon as the call returns; `process_document` is
+queued for the kind, summary, tags and embeddings. Notes skip content
+dedup (a salted SHA-256), so the same call twice makes two notes. That is
+why the tool is not idempotent, and why its description and the server
+instructions tell the model to call it once per note and not to retry
+blindly. For the same reason, a job-queue failure after the note is
+committed is not an error: the tool returns the saved note with a
+`warning` telling the model to report it and not to create it again
+(`notes_service.NoteNotQueued`). Editing a note stays in the web app ([ingestion.md *Notes*](ingestion.md)).
+
+**Files: `get_document_file`.** The result is MCP content, not a base64
+string in JSON:
+
+- the first block is `text`: the metadata as JSON, which the structured
+  content repeats (`outputSchema` describes it);
+- the second, when the file is 2 MB or less, carries the file. JPEG,
+  PNG, GIF and WebP are an `image` block the model can look at. A PDF
+  and anything else is an embedded `resource` with a base64 `blob`;
+  `text/*` (plain text, Markdown) is a `resource` with `text` when it
+  is UTF-8, and a `blob` of the exact bytes otherwise. TIFF and
+  HEIC are resources too, since LLM clients do not render them as
+  images. The resource URI is
+  `library://documents/{id}/{variant}/{filename}`, the filename
+  percent-encoded as one segment (a `/` in a title becomes `%2F`): it names the file
+  and is not readable through MCP `resources/read`.
+
+The bytes appear once: before this, FastMCP sent a dict result twice (as
+text and as structured content), so a 10 MB file was about 28 million
+characters of base64 in one result. Over 2 MB only the metadata comes back, with
+`download_url` = `{LIBRARY_PUBLIC_BASE_URL}/api/documents/{id}/original`
+(or `/searchable.pdf`), the web app's own download link, `null` when the
+setting is unset. That route is behind the web app's sign-in, so the
+link works in the user's browser and not with an MCP token. The
+description tells the model to give it to the user and not fetch it.
+`note` points the user at the web app when there is no link.
+
 ## 1.4 Security notes
 
 - **Token = full account access.** MCP tools run as the token's user
@@ -473,12 +520,19 @@ an argument error.
   everyone behind the proxy shares one bucket. `/api/auth/login` is
   throttled too (`docs/api.md` §1.9.1).
 - **Size caps:** ingest respects `LIBRARY_MAX_UPLOAD_BYTES` (default
-  100 MB, before base64 expansion); file retrieval is capped at 10 MB to
-  keep tool results inside LLM context budgets.
+  100 MB, before base64 expansion); `get_document_file` returns bytes
+  only up to 2 MB (about 2.7 MB of base64), to keep a tool result inside
+  LLM context budgets, and above that a sign-in-protected download link.
 - **Database connections:** tools and the token check take sessions
   from the process-wide pool the REST API uses (5 connections plus 10
   overflow). A client fanning out many parallel calls queues on that
   pool instead of exhausting Postgres connections.
+- **Monitoring:** every tool call is counted and timed by tool and
+  outcome (`library_mcp_calls_total`, `library_mcp_duration_seconds`) and
+  logged as one `mcp_call` line with the caller's user id, never with
+  arguments or results ([observability.md §3.1](observability.md)). CI's
+  `compose-smoke` job calls `library_stats` on the built image the way
+  the reverse proxy forwards it ([deployment.md §1.4](deployment.md)).
 
 ## 1.5 OAuth endpoints
 

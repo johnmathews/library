@@ -45,6 +45,14 @@ Anything else a tool raises is masked (``mask_error_details=True``) to a
 generic "Error calling tool …", so database errors never leak SQL or
 schema to a client. Error text never points at Library's REST API: an
 LLM connector cannot call it.
+
+Metrics
+-------
+``ToolCallMetrics`` (an ``on_call_tool`` middleware) counts and times every
+call through ``telemetry.record_mcp_call`` and logs one ``mcp_call`` line
+on ``call_logger`` (tool, user id, outcome, duration), never arguments or
+results. It re-raises everything, so it changes no result. See
+docs/observability.md.
 """
 
 import base64
@@ -53,26 +61,38 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import fastmcp
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import FastMCPError, NotFoundError, ToolError
 from fastmcp.server.auth import AccessToken, AuthProvider, MultiAuth, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.http import StarletteWithLifespan, create_streamable_http_app
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.tools import ToolResult
 from mcp.server.auth.handlers.metadata import ProtectedResourceMetadataHandler
 from mcp.server.auth.routes import build_metadata, build_resource_metadata_url, cors_middleware
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
 from mcp.shared.auth import ProtectedResourceMetadata
-from mcp.types import ToolAnnotations
-from pydantic import AnyHttpUrl, BaseModel, Field, StringConstraints
+from mcp.types import (
+    BlobResourceContents,
+    CallToolRequestParams,
+    ContentBlock,
+    EmbeddedResource,
+    ImageContent,
+    TextContent,
+    TextResourceContents,
+    ToolAnnotations,
+)
+from pydantic import AnyHttpUrl, AnyUrl, BaseModel, Field, StringConstraints
 from pydantic_core import to_jsonable_python
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,7 +102,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp
 
 import library
-from library import comments_service, matters, projects, taxonomy
+from library import comments_service, matters, notes_service, projects, taxonomy, telemetry
 from library.ask.context import load_archive_context, render_archive_context
 from library.auth.oauth_provider import LibraryOAuthProvider
 from library.auth.service import validate_api_token
@@ -91,7 +111,9 @@ from library.db import get_sessionmaker
 from library.document_reads import (
     DocumentText,
     DocumentTextRangeError,
+    FileVariant,
     TextSource,
+    document_file_url,
     document_text,
     document_web_url,
     list_item_fields,
@@ -122,6 +144,7 @@ from library.models import (
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.schemas import (
+    NOTE_TITLE_MAX_CHARS,
     CommentOut,
     CurrencyCode,
     DocumentFields,
@@ -160,7 +183,16 @@ logger = logging.getLogger(__name__)
 DOCUMENT_TEXT_DEFAULT_CHARS: int = 20_000
 DOCUMENT_TEXT_MIN_CHARS: int = 1_000
 DOCUMENT_TEXT_MAX_CHARS: int = 50_000
-MAX_FILE_BYTES: int = 10 * 1024 * 1024
+#: get_document_file returns a file's bytes only up to this size; above it the
+#: result is the metadata and a download link. Base64 adds a third, and a
+#: client puts the whole result in the model's context.
+MAX_FILE_BYTES: int = 2 * 1024 * 1024
+#: Image types LLM clients render from an ``image`` content block. Other
+#: images (TIFF, HEIC) travel as a resource, so they cannot make a client
+#: reject the whole result.
+INLINE_IMAGE_MIME_TYPES: frozenset[str] = frozenset(
+    {"image/jpeg", "image/png", "image/gif", "image/webp"}
+)
 SEARCH_LIMIT_MAX: int = 50
 #: semantic_search returns passage text with every hit, so its result grows
 #: with ``limit`` far faster than search_documents'. MCP clients cap a tool
@@ -212,9 +244,11 @@ Then `get_document` for one document's text, the household's comments on
 it and whether its details are trusted (`review_status`). Long documents
 come in pages: follow `next_start_page`. `list_kinds`, `list_senders`,
 `list_recipients`, `list_tags`, `list_projects`, and `list_matters` list
-filter values with document counts,
-`library_stats` gives an overview, `get_document_file` retrieves the
-actual file, and `ingest_document` adds a new document to the archive.
+filter values with document counts, and `library_stats` gives an
+overview. `get_document_file` returns the file itself (an image you can
+see, or the file as a resource) up to 2 MB; for a larger file it returns
+a `download_url` to give the user, which opens in their browser, where
+they are signed in to Library. Do not fetch that link yourself.
 
 Amounts: `amount_total` is always a magnitude and `amount_kind` says what
 it is (paid, due, refunded, a coverage limit, ...). Do not add amounts up
@@ -231,8 +265,13 @@ tags, ...) use `update_document_metadata` in two steps: call it without
 and only after they agree call it again with `apply=true` and the
 `preview_token` the preview returned. `add_comment` attaches a dated
 note to a document (for example "this is our current house"); it is
-recorded as the connected user and becomes searchable. Everything these
-tools change is recorded as the connected user.
+recorded as the connected user and becomes searchable.
+
+To file something new: `create_note` saves text you write (a summary of
+a call, what was agreed) as a new note, and `ingest_document` adds a
+file. Each `create_note` call makes another note, so call it once per
+note and never retry it blindly. Everything these tools change is
+recorded as the connected user.
 """
 
 
@@ -503,6 +542,82 @@ def _current_user_id() -> int | None:
     return user_id if isinstance(user_id, int) else None
 
 
+# ------------------------------------------------------------------ metrics
+
+#: One INFO line per tool call. Its own logger so the API process can turn
+#: on exactly this at INFO (main.py) without every other ``library`` logger.
+call_logger = logging.getLogger(f"{__name__}.calls")
+
+#: The ``tool`` label for a name the server does not have. A client can send
+#: any string, and every distinct label value is a new time series.
+UNKNOWN_TOOL = "unknown"
+
+
+def _is_masked(exc: ToolError, tool: str) -> bool:
+    """Whether FastMCP produced ``exc`` by masking an unexpected exception.
+
+    FastMCP masks inside ``call_tool``, so a middleware only ever sees the
+    ``ToolError`` it made. Its text is the one fixed marker
+    (``server.py``: ``f"Error calling tool {name!r}"``); a tool's own
+    ``ToolError`` is written for the model and never starts that way.
+    ``test_tool_call_metrics_recorded`` pins this against the installed
+    FastMCP.
+    """
+    return str(exc).startswith(f"Error calling tool {tool!r}")
+
+
+class ToolCallMetrics(Middleware):
+    """Counts, times and logs every ``tools/call``, without changing it.
+
+    Records ``telemetry.record_mcp_call`` and logs the tool name, the
+    caller's user id, the outcome and the duration. It never reads the
+    arguments or the result: both can hold document text. Every exception is
+    re-raised untouched, so errors reach the client exactly as before
+    (``ToolError`` text verbatim, anything else masked).
+    """
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[CallToolRequestParams],
+        call_next: CallNext[CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
+        tool = context.message.name
+        started = time.perf_counter()
+        # Anything not classified below (a BaseException such as a
+        # cancellation) counts as an error.
+        outcome = "error"
+        try:
+            result = await call_next(context)
+        except NotFoundError:
+            # The only path for a name the server does not have: FastMCP
+            # resolves the tool before anything else can fail.
+            tool, outcome = UNKNOWN_TOOL, "tool_error"
+            raise
+        except ToolError as exc:
+            outcome = "error" if _is_masked(exc, tool) else "tool_error"
+            raise
+        except FastMCPError:
+            # Argument validation and the like: refused with a message.
+            outcome = "tool_error"
+            raise
+        else:
+            outcome = "ok"
+            return result
+        finally:
+            duration_s = time.perf_counter() - started
+            telemetry.record_mcp_call(tool, outcome, duration_s)
+            call_logger.info(
+                "mcp_call tool=%s user_id=%s outcome=%s duration_ms=%.0f",
+                tool,
+                _current_user_id(),
+                outcome,
+                duration_s * 1000,
+            )
+
+
+mcp.add_middleware(ToolCallMetrics())
+
+
 async def _get_document(
     session: AsyncSession, document_id: int, *, for_update: bool = False
 ) -> Document:
@@ -658,6 +773,57 @@ class MoneyQueryResult(BaseModel):
             "the rows are the whole story); needs_review: included documents whose "
             "extracted details validation flagged."
         )
+    )
+
+
+class DocumentFile(BaseModel):
+    """get_document_file's metadata part. The bytes are not in it: they come
+    as an ``image`` or embedded ``resource`` content block beside it."""
+
+    document_id: int
+    variant: FileVariant
+    filename: str
+    mime_type: str
+    size_bytes: int
+    content_included: bool = Field(
+        description=(
+            "True when the file itself is in this result, as an image or a resource "
+            "content block; false when it is over the 2 MB limit."
+        )
+    )
+    download_url: str | None = Field(
+        description=(
+            "The file's download link in the Library web app. It opens in the user's "
+            "browser, where they are signed in to Library: give it to the user, do not "
+            "fetch it. Null when the server has no public URL configured."
+        )
+    )
+    note: str | None = Field(
+        description="Why the file is not included and what to do instead; null when it is."
+    )
+
+
+class CreatedNote(BaseModel):
+    """The result of create_note: the new note document."""
+
+    id: int = Field(description="The new note's document id.")
+    title: str
+    status: DocumentStatus = Field(
+        description="Processing state; the text is readable and searchable already."
+    )
+    page_count: int | None
+    web_url: str | None = Field(
+        description=(
+            "The note's page in the Library web app, to give the user; null when the "
+            "server has no public URL configured."
+        )
+    )
+    warning: str | None = Field(
+        default=None,
+        description=(
+            "Set when the note was saved but something after saving failed; tell the "
+            "user, and do not create the note again."
+        ),
     )
 
 
@@ -1246,11 +1412,42 @@ async def money_query(
     return MoneyQueryResult.model_validate(result)
 
 
-@mcp.tool(title="Get document file", annotations=READ_ONLY)
+def _utf8_or_none(data: bytes) -> str | None:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _file_block(data: bytes, mime_type: str, uri: AnyUrl) -> ImageContent | EmbeddedResource:
+    """The content block that carries a file: an image block for the types
+    clients render, a text resource for text, a blob resource otherwise."""
+    if mime_type in INLINE_IMAGE_MIME_TYPES:
+        return ImageContent(type="image", data=base64.b64encode(data).decode(), mimeType=mime_type)
+    resource: TextResourceContents | BlobResourceContents
+    text = _utf8_or_none(data) if mime_type.startswith("text/") else None
+    if text is not None:
+        resource = TextResourceContents(uri=uri, mimeType=mime_type, text=text)
+    else:
+        # Not text, or text in another encoding: the exact bytes, so a
+        # Latin-1 file is not handed on with replacement characters.
+        resource = BlobResourceContents(
+            uri=uri, mimeType=mime_type, blob=base64.b64encode(data).decode()
+        )
+    return EmbeddedResource(type="resource", resource=resource)
+
+
+@mcp.tool(
+    title="Get document file",
+    annotations=READ_ONLY,
+    # The return is a ToolResult (content blocks plus structured content), so
+    # FastMCP cannot derive the schema; it describes the metadata part.
+    output_schema=DocumentFile.model_json_schema(),
+)
 async def get_document_file(
     document_id: DocumentId,
     variant: Annotated[
-        Literal["original", "searchable_pdf"],
+        FileVariant,
         Field(
             description=(
                 "'original' (default) for the stored file as uploaded; "
@@ -1259,12 +1456,21 @@ async def get_document_file(
             )
         ),
     ] = "original",
-) -> dict[str, Any]:
-    """Retrieve a document's file as base64 (for reading or re-saving it).
+) -> ToolResult:
+    """Retrieve a document's file itself, to look at it or hand it on.
 
-    Returns filename, mime_type, size_bytes, and content_base64. Files
-    larger than 10 MB are refused; the user can download those by opening
-    the document in the Library web app. Errors if the document id is
+    For a document's text, use get_document instead: this returns the
+    file. A JPEG, PNG, GIF or WebP image comes back as an image you can
+    see; a PDF or any other file as an embedded resource (text files as
+    text). Beside it is the metadata: filename, mime_type, size_bytes,
+    content_included and download_url.
+
+    Files over 2 MB are not returned: the result is the metadata alone,
+    with content_included false and a note saying why. That is not an
+    error. download_url is the file's link in the Library web app (null
+    when the server has no public URL). It opens in the user's browser,
+    where they are signed in to Library, so give the link to the user
+    rather than fetching it yourself. Errors if the document id is
     unknown or deleted, or the requested variant was never produced.
     """
     async with _session() as session:
@@ -1287,17 +1493,38 @@ async def get_document_file(
     if not path.is_file():
         raise ToolError(f"no {variant} file stored for document {document_id}")
     size = path.stat().st_size
-    if size > MAX_FILE_BYTES:
-        raise ToolError(
-            f"file is {size} bytes, over the 10 MB MCP limit; open document "
-            f"{document_id} in the Library web app to download it"
+    included = size <= MAX_FILE_BYTES
+    download_url = document_file_url(get_settings().public_base_url, document_id, variant)
+    note: str | None = None
+    if not included:
+        where = (
+            "Give the user download_url: it opens in their browser, where they are "
+            "signed in to Library."
+            if download_url
+            else f"Ask the user to open document {document_id} in the Library web app "
+            "to download it."
         )
-    return {
-        "filename": filename,
-        "mime_type": mime,
-        "size_bytes": size,
-        "content_base64": base64.b64encode(path.read_bytes()).decode(),
-    }
+        note = (
+            f"The file is {size} bytes, over the 2 MB limit for returning a file here, "
+            f"so it is not included. {where} For its text, use get_document."
+        )
+    meta = DocumentFile(
+        document_id=document_id,
+        variant=variant,
+        filename=filename,
+        mime_type=mime,
+        size_bytes=size,
+        content_included=included,
+        download_url=download_url,
+        note=note,
+    )
+    # The metadata as JSON text first: clients that read only text content
+    # still see it (and the structured content repeats it for the rest).
+    content: list[ContentBlock] = [TextContent(type="text", text=meta.model_dump_json())]
+    if included:
+        uri = AnyUrl(f"library://documents/{document_id}/{variant}/{quote(filename, safe='')}")
+        content.append(_file_block(path.read_bytes(), mime, uri))
+    return ToolResult(content=content, structured_content=meta.model_dump(mode="json"))
 
 
 @mcp.tool(
@@ -1334,7 +1561,7 @@ async def ingest_document(
     true means identical content already existed and no new document was
     created (the existing document's id is returned). Errors on invalid
     base64, unsupported file types, and content matching a deleted
-    document.
+    document. To file text you wrote yourself, use create_note instead.
     """
     try:
         content = base64.b64decode(content_base64, validate=True)
@@ -1696,6 +1923,67 @@ async def add_comment(
         except comments_service.CommentError as exc:
             raise ToolError(str(exc)) from exc
         return CommentOut.model_validate(comment).model_dump(mode="json")
+
+
+@mcp.tool(
+    title="Create note",
+    # Only adds; notes are never deduplicated, so each call files another one.
+    annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+    ),
+)
+async def create_note(
+    title: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=NOTE_TITLE_MAX_CHARS),
+        Field(description="The note's title, e.g. 'Call with the insurer, 4 March'."),
+    ],
+    body_markdown: Annotated[
+        str,
+        Field(min_length=1, description="The note's text, as Markdown. Must not be blank."),
+    ],
+) -> CreatedNote:
+    """Write a new note into the archive, as the connected user.
+
+    A note is a document whose text you write: a summary of a phone
+    call, what was agreed with a contractor, where a paper original is
+    kept. It is the web app's New note: readable through get_document and
+    findable by search_documents as soon as this returns, and its kind,
+    summary and tags are filled in afterwards from the text.
+
+    Each call creates a new note, even with the same title and text, so
+    do not call it again for the same note (not to retry either: if a
+    call may have gone through, look for the title with search_documents
+    first). To add context to an existing document use add_comment.
+    Returns {id, title, status, page_count, web_url}.
+    """
+    if not body_markdown.strip():
+        raise ToolError("body_markdown must not be blank")
+    warning: str | None = None
+    async with _session() as session:
+        try:
+            document = await notes_service.create_note(
+                session, title=title, body_markdown=body_markdown, uploader_id=_current_user_id()
+            )
+        except notes_service.NoteNotQueued as exc:
+            logger.exception(
+                "mcp create_note: note %s saved, processing not queued", exc.document.id
+            )
+            document = exc.document
+            warning = (
+                "The note is saved and readable, and keyword search finds it, but its "
+                "processing could not be queued, so its kind, summary, tags and meaning "
+                "search will be missing until it is reprocessed. Tell the user; do not "
+                "create it again."
+            )
+        return CreatedNote(
+            id=document.id,
+            title=title,
+            status=document.status,
+            page_count=document.page_count,
+            web_url=document_web_url(get_settings().public_base_url, document.id),
+            warning=warning,
+        )
 
 
 @mcp.tool(title="List document kinds", annotations=READ_ONLY)

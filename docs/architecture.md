@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.6: `structured_query.py` row, now also behind the MCP `money_query` tool; §1.4: the MCP tool summary). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to the §1.6 `structured_query.py` row and the §1.4 MCP bullet, read against `src/library/structured_query.py` and its callers in `ask/engine.py` and `mcp_server.py`. Other sections carry forward their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-05 (§1.4: the MCP tool summary adds fetching files and writing notes). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to the §1.4 MCP bullet and the §1.6 `mcp_server.py` row, read against the registered tools in `src/library/mcp_server.py`. `notes_service.py` is under the 400-line floor, so it is not in §1.6. Other sections carry forward their earlier verifications.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -304,8 +304,9 @@ are stored as SHA-256 digests only:
 - **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens:
   static `library_…` tokens, and OAuth access tokens from Library's own
   authorization server when OAuth is on (see §1.5). Tools for searching (by
-  keyword or by meaning), reading, totalling amounts, ingesting, editing
-  and commenting on documents from LLM clients. See [mcp.md](mcp.md).
+  keyword or by meaning), reading, totalling amounts, fetching files,
+  ingesting, writing notes, editing and commenting on documents from LLM
+  clients. See [mcp.md](mcp.md).
 - **Web app** — Vue 3 SPA using the **Mosaic** (Cruip) theme: violet accent,
   soft rounded-xl cards, dark mode, Inter loaded from Google Fonts. Content-first,
   responsive 320px-up, accessible. (Reskinned from GOV.UK — see
