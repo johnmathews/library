@@ -1,8 +1,8 @@
 # Money facts and payment identity
 
-**Status:** active. **Last updated:** 2026-11-05 (§5: the spending-total paragraph also names `structured_query.sum_amount`, behind Ask's `query_documents` and the MCP `money_query` tool). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to that §5 paragraph. Read `structured_query.sum_amount`: it sums `AMOUNT_SIGN`-signed `spend_facts` rows restricted to `is_canonical`, so an unmerged pair is two canonical payments there as in the chart query. `tests/test_mcp_money.py` passes. The rest carries its earlier verifications forward.
-**Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, src/library/llm/envelope.py
+**Status:** active. **Last updated:** 2026-11-05 (§5.2 new: `structured_query.sum_amount` chooses each payment's counted document within the filtered set; the charts still use the archive-wide `is_canonical`; §5's spending-total paragraph points there). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §5's spending-total paragraph and §5.2. Read `structured_query._counted_per_payment` and `sum_amount` against migration 0035's ranking, and `charts/query.py`, `charts/footer.py` and `api/facets.py`, which still filter `sf.is_canonical`. The within-filter tests in `tests/test_mcp_money.py` pass, seen red first or killed by mutants. The rest carries its earlier verifications forward.
+**Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, src/library/llm/envelope.py, src/library/structured_query.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
 > reference number below is invented.
@@ -359,8 +359,9 @@ trade, and this is the price of it.
 There **is** a spending total now — `library.charts.query` sums
 `AMOUNT_SIGN[kind] * amount` over the canonical row of each payment
 ([charts.md](charts.md)), and so does `structured_query.sum_amount`, the
-money total behind Ask's `query_documents` and the MCP `money_query` tool —
-so what they do with these shapes is settled behaviour rather than a
+money total behind Ask's `query_documents` and the MCP `money_query` tool,
+over one document per payment chosen within its filter (§5.2) — so what
+they do with these shapes is settled behaviour rather than a
 hypothetical. An unmerged invoice and its settling
 receipt are two payments, both summable, and both enter the total
 independently: the underlying spend is **double-counted**, not omitted. The
@@ -399,6 +400,43 @@ says so in the footer of any chart whose window contains it — but nothing list
 the backlog as a whole and nothing lets a person fix one by hand. Closing the
 rest needs an archive-wide review surface and an edit path; both are a later
 layer, and neither is claimed here.
+
+### 5.2 Which document counts: archive-wide for charts, within the filter for totals
+
+The view's `is_canonical` ranks **every** live document of a payment:
+a line-bearing document first, then a `payment_made`, then the lowest id.
+That is right for a query over the whole archive and wrong for a narrower
+one. A water bill (`payment_due`, kind `utility-bill`) merged with its
+receipt (`payment_made`, kind `receipt`) has the receipt as its canonical
+row, so a total filtered to `kind='utility-bill'` that gates on
+`is_canonical` matches the bill, drops it as not canonical, and reports a
+payment it never counted. A tag only the bill carries does the same.
+
+`structured_query.sum_amount` therefore does not read `is_canonical`.
+`_counted_per_payment` ranks, with the view's ordering, only the
+documents that passed the caller's filters and the earlier gates (an
+amount, not a quote, a summable kind, and the group key when grouping),
+and counts the first of each payment. Three consequences:
+
+- When both twins pass, the counted one is the one the view picks, so a
+  total over the whole archive is unchanged.
+- When the view's choice is filtered out, the best-ranked twin that passed
+  carries the payment. An itemised document still wins wherever it is a
+  candidate, and its line rows are what is summed.
+- `duplicate_payment` names only a document whose payment is in the rows.
+  When grouping, a document lacking the key is a duplicate if a twin with
+  the key carries its payment, and `no_sender`/`no_kind` otherwise.
+
+It also changes one case over the whole archive: a payment whose view
+choice has an undecided or non-summable kind (an undecided document with
+the lowest id beats a `payment_due`) used to contribute nothing; its
+summable twin now counts.
+
+**The charts still have the old behaviour.** `charts/query.py`,
+`charts/footer.py` and `api/facets.py` filter `sf.is_canonical`, so a chart
+rule that matches only a payment's non-canonical twin (a label on the bill
+but not the receipt) leaves that payment out. Moving them onto the same
+within-filter choice is a recorded follow-up.
 
 ## 6. `library backfill-amounts`
 

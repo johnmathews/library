@@ -29,12 +29,17 @@ from fastapi import FastAPI
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from procrastinate import PsycopgConnector
+from sqlalchemy import text
 
+from library import structured_query
+from library.ask.engine import _run_query_documents
 from library.jobs import job_app, procrastinate_conninfo
 from library.models import AmountKind, ReviewStatus
+from library.money.payments import add_override
+from library.spend_lines import LineInput, replace_lines
 from tests.conftest import AuthUser, _insert_user
 from tests.test_documents_api import _seed_document
-from tests.test_mcp import MCP_URL, _asgi_client, _insert_token, _label, error_text, payload
+from tests.test_mcp import MCP_URL, _asgi_client, _db, _insert_token, _label, error_text, payload
 
 pytestmark = pytest.mark.integration
 
@@ -396,3 +401,732 @@ async def test_money_query_errors_the_model_can_fix(
         assert "Error calling tool" not in message
     for result in (grouped_list, concept, unknown_kind, backwards, bad_aggregate, bad_group):
         assert "/api/" not in error_text(result) and "REST" not in error_text(result)
+
+
+# --------------------------------------------- dedup within the filtered set
+#
+# W10 review, fix 1: the counted document of a payment is chosen among the
+# documents the caller's filters let through, not archive-wide. Before, a
+# filter that matched only a payment's non-canonical twin dropped the payment
+# and reported it as `duplicate_payment`, "counted once", with a total of 0.
+
+
+@dataclass(frozen=True)
+class SplitPayments:
+    tag: str
+    water: str
+    power: str
+    builder: str
+    bill: int
+    receipt: int
+    refund: int
+    partner_bill: int
+    invoice: int
+    paid: int
+
+
+async def _seed_split_payments(database_url: str, auth_user: AuthUser) -> SplitPayments:
+    """Two merged payments whose archive-wide canonical twin is the one a
+    narrow filter leaves out.
+
+    P1, a water bill (utility-bill, payment_due) and its receipt (receipt,
+    payment_made), one reference: the view counts the RECEIPT (payment_made
+    wins). Only the bill carries the extra tag ``<tag>-bill``. A soft-deleted
+    payment_made copy of the bill, same reference, sits in the trash: if it
+    were ranked, it would take the bill's place and the bill would be dropped.
+
+    P2, an itemised invoice (lines 50.00 + 25.50) and its receipt: the view
+    counts the INVOICE (a line-bearing document wins). Only the receipt
+    carries ``<tag>-paid``.
+
+    Around them: a refund credit note from the water company (its own
+    payment: the sign guard never merges it) on the leap day, and a power
+    bill another household member uploaded, flagged needs_review. The P1
+    receipt is verified, so a review_status filter can remove it.
+    """
+    tag = f"mcp-split-{secrets.token_hex(4)}"
+    water = f"Example Water {tag}"
+    power = f"Example Power {tag}"
+    builder = f"Example Builder {tag}"
+    other_user_id = await _insert_user(database_url, f"{tag}-partner", "pw-partner-1234")
+
+    async def seed(marker: str, *, extra_tags: tuple[str, ...] = (), **fields: Any) -> int:
+        fields.setdefault("currency", "EUR")
+        fields.setdefault("uploader_id", auth_user.id)
+        return await _seed_document(
+            database_url, f"{tag}-{marker}", tag_slugs=[tag, *extra_tags], **fields
+        )
+
+    bill = await seed(
+        "bill",
+        extra_tags=(f"{tag}-bill",),
+        kind_slug="utility-bill",
+        sender_name=water,
+        amount_total=Decimal("84.20"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        reference=f"W-{tag}",
+        document_date=date(2024, 2, 5),
+    )
+    receipt = await seed(
+        "receipt",
+        kind_slug="receipt",
+        sender_name=water,
+        amount_total=Decimal("84.20"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference=f"W-{tag}",
+        document_date=date(2024, 2, 12),
+        review_status=ReviewStatus.VERIFIED,
+    )
+    await seed(
+        "bill-deleted",
+        extra_tags=(f"{tag}-bill",),
+        kind_slug="utility-bill",
+        sender_name=water,
+        amount_total=Decimal("84.20"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference=f"W-{tag}",
+        document_date=date(2024, 2, 5),
+        deleted_at=datetime.now(UTC),
+    )
+    refund = await seed(
+        "credit",
+        kind_slug="utility-bill",
+        sender_name=water,
+        amount_total=Decimal("12.40"),
+        amount_kind=AmountKind.REFUND,
+        reference=f"W-{tag}-CR",
+        document_date=date(2024, 2, 29),
+    )
+    partner_bill = await seed(
+        "partner",
+        kind_slug="utility-bill",
+        sender_name=power,
+        amount_total=Decimal("31.15"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        document_date=date(2024, 2, 20),
+        uploader_id=other_user_id,
+        review_status=ReviewStatus.NEEDS_REVIEW,
+    )
+    invoice = await seed(
+        "invoice",
+        kind_slug="invoice",
+        sender_name=builder,
+        amount_total=Decimal("75.50"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        reference=f"B-{tag}",
+        document_date=date(2024, 2, 8),
+    )
+    paid = await seed(
+        "paid",
+        extra_tags=(f"{tag}-paid",),
+        kind_slug="receipt",
+        sender_name=builder,
+        amount_total=Decimal("75.50"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference=f"B-{tag}",
+        document_date=date(2024, 2, 9),
+    )
+    async with _db(database_url) as session:
+        await replace_lines(
+            session,
+            invoice,
+            [LineInput(amount=Decimal("50.00")), LineInput(amount=Decimal("25.50"))],
+        )
+        await session.commit()
+    # Stated, not assumed: archive-wide, each payment's counted document is
+    # the one the narrow filters below leave out.
+    assert await _view_canonical(database_url, [bill, receipt, invoice, paid]) == {
+        receipt,
+        invoice,
+    }
+    return SplitPayments(
+        tag=tag,
+        water=water,
+        power=power,
+        builder=builder,
+        bill=bill,
+        receipt=receipt,
+        refund=refund,
+        partner_bill=partner_bill,
+        invoice=invoice,
+        paid=paid,
+    )
+
+
+async def _view_canonical(database_url: str, document_ids: list[int]) -> set[int]:
+    """Which of ``document_ids`` the ``spend_facts`` view marks canonical,
+    archive-wide: the choice the within-filter ranking must reproduce when
+    every twin passes."""
+    async with _db(database_url) as session:
+        rows = await session.execute(
+            text(
+                "SELECT DISTINCT document_id FROM spend_facts "
+                "WHERE is_canonical AND document_id = ANY(:ids)"
+            ),
+            {"ids": document_ids},
+        )
+        return set(rows.scalars())
+
+
+def _partitions(coverage: dict[str, Any]) -> bool:
+    """``included + sum(excluded) == matched``: the reasons partition the match."""
+    return bool(coverage["included"] + sum(coverage["excluded"].values()) == coverage["matched"])
+
+
+async def test_money_query_counts_a_payment_whose_canonical_twin_is_filtered_out(
+    connect: Connector, token: str, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """The reviewer's reproduction: kind='utility-bill' matches the bill of a
+    bill+receipt payment whose receipt the view counts. The bill must carry
+    the payment, and nothing may be reported as a duplicate."""
+    money = await _seed_split_payments(api_database_url, auth_user)
+    arguments: dict[str, Any] = {"kind": "utility-bill", "tags": [money.tag], **FEBRUARY}
+    async with connect(token) as session:
+        result = payload(await session.call_tool("money_query", arguments))
+        grouped = payload(
+            await session.call_tool("money_query", {**arguments, "group_by": "sender"})
+        )
+
+    # Hand-computed, EUR, utility bills in February 2024:
+    #   water bill (its receipt is not a utility bill)  +84.20
+    #   water credit note                                -12.40
+    #   the partner's power bill                         +31.15
+    #   the deleted copy of the bill                     not matched
+    #   net                                              = 102.95
+    # Before the fix: 18.75 (31.15 - 12.40), the bill "a duplicate".
+    assert [(row["total"], row["currency"]) for row in result["rows"]] == [("102.95", "EUR")]
+    assert sorted(result["rows"][0]["document_ids"]) == sorted(
+        [money.bill, money.refund, money.partner_bill]
+    )
+    assert result["coverage"] == {
+        "matched": 3,
+        "included": 3,
+        "excluded": {},
+        "needs_review": 1,
+    }
+    # Per sender: water 84.20 - 12.40 = 71.80, power 31.15.
+    assert {row["key"]: row["total"] for row in grouped["rows"]} == {
+        money.water: "71.80",
+        money.power: "31.15",
+    }
+    assert grouped["coverage"]["excluded"] == {}
+
+
+async def test_money_query_counts_a_payment_by_a_tag_only_one_twin_carries(
+    connect: Connector, token: str, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """A tag on one twin only, both ways round: the water bill (its receipt
+    is canonical archive-wide) and the builder's receipt (its invoice is,
+    because the invoice has lines)."""
+    money = await _seed_split_payments(api_database_url, auth_user)
+    async with connect(token) as session:
+        bill_only = payload(
+            await session.call_tool(
+                "money_query", {"tags": [money.tag, f"{money.tag}-bill"], **FEBRUARY}
+            )
+        )
+        paid_only = payload(
+            await session.call_tool(
+                "money_query", {"tags": [money.tag, f"{money.tag}-paid"], **FEBRUARY}
+            )
+        )
+    # The bill alone: 84.20 (the deleted copy also carries the tag: not
+    # matched). Before the fix: no rows, the bill a "duplicate".
+    assert [row["total"] for row in bill_only["rows"]] == ["84.20"]
+    assert bill_only["rows"][0]["document_ids"] == [money.bill]
+    assert bill_only["coverage"] == {"matched": 1, "included": 1, "excluded": {}, "needs_review": 0}
+    # The receipt alone: 75.50 from its own row, not the invoice's lines.
+    assert [row["total"] for row in paid_only["rows"]] == ["75.50"]
+    assert paid_only["rows"][0]["document_ids"] == [money.paid]
+    assert paid_only["coverage"]["excluded"] == {}
+
+
+async def test_money_query_counts_an_itemised_payment_from_either_side(
+    connect: Connector, token: str, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """kind='receipt' keeps both receipts; the builder's is not canonical
+    archive-wide (its invoice has lines). kind='invoice' sums the lines."""
+    money = await _seed_split_payments(api_database_url, auth_user)
+    async with connect(token) as session:
+        receipts = payload(
+            await session.call_tool(
+                "money_query", {"kind": "receipt", "tags": [money.tag], **FEBRUARY}
+            )
+        )
+        invoices = payload(
+            await session.call_tool(
+                "money_query", {"kind": "invoice", "tags": [money.tag], **FEBRUARY}
+            )
+        )
+    # Receipts: water 84.20 + builder 75.50 = 159.70. Before the fix: 84.20.
+    assert [row["total"] for row in receipts["rows"]] == ["159.70"]
+    assert sorted(receipts["rows"][0]["document_ids"]) == sorted([money.receipt, money.paid])
+    assert receipts["coverage"] == {"matched": 2, "included": 2, "excluded": {}, "needs_review": 0}
+    # Invoices: the itemised invoice from its two lines, 50.00 + 25.50, one
+    # document (two view rows, cited once).
+    assert [(row["total"], row["document_count"]) for row in invoices["rows"]] == [("75.50", 1)]
+    assert invoices["rows"][0]["document_ids"] == [money.invoice]
+
+
+async def test_money_query_counts_twins_both_in_the_filter_once(
+    connect: Connector, token: str, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """Both twins of each payment pass: counted once, via the document the
+    view picks, and the other twin is the duplicate."""
+    money = await _seed_split_payments(api_database_url, auth_user)
+    async with connect(token) as session:
+        result = payload(await session.call_tool("money_query", {"tags": [money.tag], **FEBRUARY}))
+        grouped = payload(
+            await session.call_tool(
+                "money_query", {"tags": [money.tag], "group_by": "kind", **FEBRUARY}
+            )
+        )
+
+    # Hand-computed, EUR, February 2024:
+    #   water payment, counted once (receipt)    +84.20
+    #   water credit note                         -12.40
+    #   partner's power bill                      +31.15
+    #   builder payment, counted once (invoice)   +75.50
+    #   net                                       = 178.45
+    # Counting each twin: 338.15.
+    assert [row["total"] for row in result["rows"]] == ["178.45"]
+    ids = set(result["rows"][0]["document_ids"])
+    assert ids == {money.receipt, money.refund, money.partner_bill, money.invoice}
+    assert result["coverage"] == {
+        "matched": 6,
+        "included": 4,
+        "excluded": {"duplicate_payment": 2},
+        "needs_review": 1,
+    }
+    # By kind, the counted document's kind holds the money: utility-bill
+    # 31.15 - 12.40 = 18.75, receipt 84.20, invoice 75.50.
+    assert {row["key"]: row["total"] for row in grouped["rows"]} == {
+        "utility-bill": "18.75",
+        "receipt": "84.20",
+        "invoice": "75.50",
+    }
+    assert grouped["coverage"]["excluded"] == {"duplicate_payment": 2}
+
+
+async def test_money_query_breaks_a_tie_between_twins_as_the_view_does(
+    connect: Connector, token: str, api_database_url: str
+) -> None:
+    """Two receipts of one payment (same sender, amount and day), neither
+    itemised: the ordering's last key, the lower id, decides, as in the view."""
+    tag = f"mcp-split-tie-{secrets.token_hex(4)}"
+    ids = [
+        await _seed_document(
+            api_database_url,
+            f"{tag}-{marker}",
+            tag_slugs=[tag],
+            kind_slug="receipt",
+            sender_name=f"Example Cafe {tag}",
+            amount_total=Decimal("4.80"),
+            currency="EUR",
+            amount_kind=AmountKind.PAYMENT_MADE,
+            document_date=date(2024, 2, 3),
+        )
+        for marker in ("first", "second")
+    ]
+    async with connect(token) as session:
+        result = payload(await session.call_tool("money_query", {"tags": [tag], **FEBRUARY}))
+    assert await _view_canonical(api_database_url, ids) == {min(ids)}
+    # One payment of 4.80, cited by the view's choice.
+    assert [(row["total"], row["document_ids"]) for row in result["rows"]] == [("4.80", [min(ids)])]
+    assert result["coverage"]["excluded"] == {"duplicate_payment": 1}
+
+
+async def test_money_query_counts_a_payment_whose_view_choice_is_undecided(
+    connect: Connector, token: str, api_database_url: str
+) -> None:
+    """Over the whole archive too: an undecided document with the lower id is
+    the view's choice for its payment (NULL is not payment_made, so the id
+    decides), and it is never summed. Its payment_due twin now counts."""
+    tag = f"mcp-split-undecided-{secrets.token_hex(4)}"
+
+    async def seed(marker: str, amount_kind: AmountKind | None) -> int:
+        return await _seed_document(
+            api_database_url,
+            f"{tag}-{marker}",
+            tag_slugs=[tag],
+            kind_slug="invoice",
+            sender_name=f"Example Garage {tag}",
+            amount_total=Decimal("230.00"),
+            currency="EUR",
+            amount_kind=amount_kind,
+            reference=f"G-{tag}",
+            document_date=date(2024, 2, 16),
+        )
+
+    undecided = await seed("undecided", None)
+    due = await seed("due", AmountKind.PAYMENT_DUE)
+    async with connect(token) as session:
+        result = payload(await session.call_tool("money_query", {"tags": [tag], **FEBRUARY}))
+    assert await _view_canonical(api_database_url, [undecided, due]) == {undecided}
+    # The garage invoice, 230.00, once. Before the fix: no rows, the due
+    # invoice a "duplicate" of a document no total ever sums.
+    assert [(row["total"], row["document_ids"]) for row in result["rows"]] == [("230.00", [due])]
+    assert result["coverage"]["excluded"] == {"not_summable_kind": 1}
+
+
+async def test_money_query_review_status_filter_moves_the_count_to_the_other_twin(
+    connect: Connector, token: str, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """review_status is an earlier gate too: filtering out the verified
+    receipt leaves the bill to carry the water payment."""
+    money = await _seed_split_payments(api_database_url, auth_user)
+    async with connect(token) as session:
+        result = payload(
+            await session.call_tool(
+                "money_query", {"tags": [money.tag], "review_status": "unreviewed", **FEBRUARY}
+            )
+        )
+    # Unreviewed only: the verified receipt and the flagged power bill go.
+    #   water bill (now carries the payment)   +84.20
+    #   water credit note                       -12.40
+    #   builder invoice (its receipt the dup)   +75.50
+    #   net                                     = 147.30
+    # Before the fix: 63.10, the bill a "duplicate" of a filtered-out receipt.
+    assert [row["total"] for row in result["rows"]] == ["147.30"]
+    assert result["coverage"] == {
+        "matched": 6,
+        "included": 3,
+        "excluded": {"filtered_review_status": 2, "duplicate_payment": 1},
+        "needs_review": 0,
+    }
+    assert _partitions(result["coverage"])
+
+
+async def test_money_query_group_by_counts_a_payment_via_the_twin_with_the_key(
+    connect: Connector, token: str, api_database_url: str
+) -> None:
+    """With group_by, a document lacking the key is a duplicate when its
+    payment is counted through a twin that has the key, and no_sender only
+    when its payment is not in the rows at all."""
+    tag = f"mcp-split-key-{secrets.token_hex(4)}"
+    shop = f"Example Shop {tag}"
+
+    async def seed(marker: str, **fields: Any) -> int:
+        return await _seed_document(
+            api_database_url,
+            f"{tag}-{marker}",
+            tag_slugs=[tag],
+            currency="EUR",
+            document_date=date(2024, 2, 14),
+            **fields,
+        )
+
+    # A person merged a sender-less receipt with the shop's invoice. The
+    # receipt is payment_made, so the view counts it, and it has no sender.
+    invoice = await seed(
+        "invoice",
+        kind_slug="invoice",
+        sender_name=shop,
+        amount_total=Decimal("19.99"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+    )
+    receipt = await seed(
+        "receipt",
+        kind_slug="receipt",
+        amount_total=Decimal("19.99"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+    # A sender-less payment of its own: genuinely missing from the rows.
+    await seed(
+        "loose", kind_slug="receipt", amount_total=Decimal("2.50"), amount_kind=AmountKind.REFUND
+    )
+    async with _db(api_database_url) as session:
+        await add_override(session, "MERGE", invoice, receipt)
+        await session.commit()
+
+    async with connect(token) as session:
+        result = payload(
+            await session.call_tool(
+                "money_query", {"tags": [tag], "group_by": "sender", **FEBRUARY}
+            )
+        )
+    # The shop's payment, through its invoice: 19.99. The loose refund has no
+    # sender and no twin: no_sender. Before the fix: no rows at all, the
+    # invoice a "duplicate" and the receipt no_sender.
+    assert [(row["key"], row["total"]) for row in result["rows"]] == [(shop, "19.99")]
+    assert result["rows"][0]["document_ids"] == [invoice]
+    assert result["coverage"] == {
+        "matched": 3,
+        "included": 1,
+        "excluded": {"duplicate_payment": 1, "no_sender": 1},
+        "needs_review": 0,
+    }
+
+
+async def _seed_many_senders(database_url: str, auth_user: AuthUser) -> tuple[str, list[str]]:
+    """Five sender-and-currency groups for the row-cap tests, plus a deleted
+    500.00 that would be the largest group if it were counted.
+
+    Returns the tag and the sender names, alphabetical: Alpha (30.00 + 10.00
+    EUR and 12.00 USD), Charlie (a 90.00 refund), Delta (5.00, uploaded by
+    another member), Echo (1.00, flagged needs_review).
+    """
+    tag = f"mcp-cap-{secrets.token_hex(4)}"
+    names = [f"Example {name} {tag}" for name in ("Alpha", "Charlie", "Delta", "Echo")]
+    alpha, charlie, delta, echo = names
+    other_user_id = await _insert_user(database_url, f"{tag}-partner", "pw-partner-1234")
+
+    async def seed(marker: str, sender: str, amount: str, **fields: Any) -> None:
+        fields.setdefault("currency", "EUR")
+        fields.setdefault("amount_kind", AmountKind.PAYMENT_MADE)
+        fields.setdefault("uploader_id", auth_user.id)
+        await _seed_document(
+            database_url,
+            f"{tag}-{marker}",
+            tag_slugs=[tag],
+            kind_slug="receipt",
+            sender_name=sender,
+            amount_total=Decimal(amount),
+            document_date=date(2024, 2, 2 + len(marker)),
+            **fields,
+        )
+
+    await seed("a1", alpha, "30.00")
+    await seed("a22", alpha, "10.00")
+    await seed("a333", alpha, "12.00", currency="USD")
+    await seed("c", charlie, "90.00", amount_kind=AmountKind.REFUND)
+    await seed("d", delta, "5.00", uploader_id=other_user_id)
+    await seed("e", echo, "1.00", review_status=ReviewStatus.NEEDS_REVIEW)
+    await seed("gone", f"Example Foxtrot {tag}", "500.00", deleted_at=datetime.now(UTC))
+    return tag, names
+
+
+async def test_money_query_caps_group_rows_keeping_the_largest(
+    connect: Connector,
+    token: str,
+    api_database_url: str,
+    auth_user: AuthUser,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Grouped sums and sender lists return at most MAX_GROUP_ROWS rows, the
+    largest kept, and what the cut rows held is reported as over_limit."""
+    tag, (alpha, charlie, delta, _echo) = await _seed_many_senders(api_database_url, auth_user)
+    cap = structured_query.MAX_GROUP_ROWS
+    monkeypatch.setattr(structured_query, "MAX_GROUP_ROWS", 3)
+    arguments: dict[str, Any] = {"tags": [tag], **FEBRUARY}
+    async with connect(token) as session:
+        by_sender = payload(
+            await session.call_tool("money_query", {**arguments, "group_by": "sender"})
+        )
+        senders = payload(
+            await session.call_tool("money_query", {**arguments, "aggregate": "distinct_senders"})
+        )
+        monkeypatch.setattr(structured_query, "MAX_GROUP_ROWS", 1)
+        by_currency = payload(await session.call_tool("money_query", arguments))
+        description = {tool.name: tool.description for tool in (await session.list_tools()).tools}
+
+    # Groups by |total|: Charlie EUR 90.00 (a refund, -90.00), Alpha EUR
+    # 40.00, Alpha USD 12.00 | Delta EUR 5.00, Echo EUR 1.00 cut. Rows stay
+    # ordered by total. The deleted 500.00 is not matched, so not kept.
+    assert [(row["key"], row["currency"], row["total"]) for row in by_sender["rows"]] == [
+        (alpha, "EUR", "40.00"),
+        (alpha, "USD", "12.00"),
+        (charlie, "EUR", "-90.00"),
+    ]
+    # Six matched; Delta's and Echo's documents are in no row. Echo's flag
+    # is not reported: it is not among the included.
+    assert by_sender["coverage"] == {
+        "matched": 6,
+        "included": 4,
+        "excluded": {"over_limit": 2},
+        "needs_review": 0,
+    }
+    # Senders by document count, then name: Alpha 3, Charlie 1, Delta 1 | Echo 1.
+    assert [(row["sender"], row["document_count"]) for row in senders["rows"]] == [
+        (alpha, 3),
+        (charlie, 1),
+        (delta, 1),
+    ]
+    assert senders["coverage"] == {
+        "matched": 6,
+        "included": 5,
+        "excluded": {"over_limit": 1},
+        "needs_review": 0,
+    }
+    # Ungrouped, one row: EUR 40.00 - 90.00 + 5.00 + 1.00 = -44.00 outweighs
+    # USD 12.00, whose one document is cut.
+    assert [(row["currency"], row["total"]) for row in by_currency["rows"]] == [("EUR", "-44.00")]
+    assert by_currency["coverage"] == {
+        "matched": 6,
+        "included": 5,
+        "excluded": {"over_limit": 1},
+        "needs_review": 1,
+    }
+    # The real cap, and that it exists, is in what the model reads.
+    assert cap == 50
+    assert f"at most {cap} rows" in (description["money_query"] or "")
+
+
+async def test_money_query_row_cap_keeps_a_group_with_no_currency(
+    connect: Connector, token: str, api_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A document with no currency is a group of its own, and when that group
+    is the one kept, its document is still counted as included."""
+    tag = f"mcp-cap-null-{secrets.token_hex(4)}"
+    for marker, amount, currency in (("eur", "3.00", "EUR"), ("none", "50.00", None)):
+        await _seed_document(
+            api_database_url,
+            f"{tag}-{marker}",
+            tag_slugs=[tag],
+            kind_slug="receipt",
+            amount_total=Decimal(amount),
+            currency=currency,
+            amount_kind=AmountKind.PAYMENT_MADE,
+            document_date=date(2024, 2, 29),
+        )
+    monkeypatch.setattr(structured_query, "MAX_GROUP_ROWS", 1)
+    async with connect(token) as session:
+        result = payload(await session.call_tool("money_query", {"tags": [tag], **FEBRUARY}))
+    # 50.00 with no currency outweighs EUR 3.00, which is cut.
+    assert [(row["currency"], row["total"]) for row in result["rows"]] == [(None, "50.00")]
+    assert result["coverage"] == {
+        "matched": 2,
+        "included": 1,
+        "excluded": {"over_limit": 1},
+        "needs_review": 0,
+    }
+
+
+async def test_ask_query_documents_caps_group_rows_too(
+    api_database_url: str, auth_user: AuthUser, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ask's query_documents feeds the same rows to its model: same cap."""
+    tag, (alpha, charlie, delta, _echo) = await _seed_many_senders(api_database_url, auth_user)
+    monkeypatch.setattr(structured_query, "MAX_GROUP_ROWS", 2)
+    async with _db(api_database_url) as session:
+        result = await _run_query_documents(
+            session, {"aggregate": "distinct_senders", "tags": [tag], **FEBRUARY}, set()
+        )
+    # Alpha 3, Charlie 1 | Delta 1, Echo 1 cut.
+    assert [row["sender"] for row in result["rows"]] == [alpha, charlie]
+    assert result["coverage"]["excluded"] == {"over_limit": 2}
+    assert delta not in {row["sender"] for row in result["rows"]}
+
+
+async def test_ask_query_documents_counts_a_payment_via_its_twin_in_the_filter(
+    api_database_url: str, auth_user: AuthUser
+) -> None:
+    """Ask's query_documents tool runs the same service, and gets the same
+    filtered total as the money_query reproduction."""
+    money = await _seed_split_payments(api_database_url, auth_user)
+    cited: set[int] = set()
+    async with _db(api_database_url) as session:
+        result = await _run_query_documents(
+            session,
+            {"aggregate": "sum_amount", "kind": "utility-bill", "tags": [money.tag], **FEBRUARY},
+            cited,
+        )
+    # 84.20 - 12.40 + 31.15, as in the money_query reproduction above.
+    assert [row["total"] for row in result["rows"]] == ["102.95"]
+    assert result["coverage"]["excluded"] == {}
+    assert money.bill in cited
+
+
+# ------------------------------------------------- blank and unknown filters
+#
+# W10 review, fix 2: a filter value that can match nothing made a silent,
+# plausible total of 0 (`matched: 0`, nothing excluded). The filter types the
+# three filtered tools share refuse blank values; money_query also refuses
+# slugs and facet values the archive does not have.
+
+
+async def test_filtered_tools_refuse_blank_filter_values(
+    connect: Connector, token: str, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """Blank or whitespace-only values are refused, by all three tools that
+    share the filter types; surrounding whitespace is stripped."""
+    money = await _seed_money(api_database_url, auth_user)
+    blank_arguments: list[dict[str, Any]] = [
+        {"tags": [money.tag, ""]},
+        {"tags": [money.tag, "   "]},
+        {"facets": {"category": ""}},
+        {"facets": {" ": "energy"}},
+        {"sender": ""},
+        {"sender": "  "},
+        {"recipient": ""},
+        {"kind": " "},
+        {"projects": [""]},
+        {"matters": ["\t"]},
+    ]
+    async with connect(token) as session:
+        refused = {
+            tool: [
+                await session.call_tool(tool, {**extra, **arguments})
+                for arguments in blank_arguments
+            ]
+            for tool, extra in (
+                ("money_query", {}),
+                ("search_documents", {}),
+                ("semantic_search", {"query": "anything"}),
+            )
+        }
+        padded = payload(
+            await session.call_tool(
+                "money_query", {"tags": [f"  {money.tag} "], "sender": f" {money.sender} "}
+            )
+        )
+    for tool, results in refused.items():
+        for arguments, result in zip(blank_arguments, results, strict=True):
+            message = error_text(result)
+            assert "at least 1 character" in message, (tool, arguments, message)
+            assert "Error calling tool" not in message
+    # Stripped, the values match: the energy sender's one payment, 100.00 -
+    # 15.25 (the March 1000.00 is another sender's).
+    assert [row["total"] for row in padded["rows"]] == ["84.75"]
+
+
+async def test_money_query_refuses_unknown_slugs_and_facet_values(
+    connect: Connector, token: str, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """An unknown tag, project, matter, facet or facet value would make a
+    total of 0; money_query names them all and where the real ones are."""
+    money = await _seed_money(api_database_url, auth_user)
+    facet = f"{money.tag}-f"
+    await _label(api_database_url, money.invoice, facet, "known")
+    async with connect(token) as session:
+        unknown_tag = await session.call_tool(
+            "money_query", {"tags": [money.tag, f"{money.tag}-nope"]}
+        )
+        unknown_value = await session.call_tool(
+            "money_query", {"tags": [money.tag], "facets": {facet: "unknown"}}
+        )
+        unknown_facet = await session.call_tool(
+            "money_query", {"tags": [money.tag], "facets": {f"{facet}-x": "known"}}
+        )
+        unknown_slugs = await session.call_tool(
+            "money_query",
+            {
+                "tags": [money.tag],
+                "projects": [f"{money.tag}-p"],
+                "matters": [f"{money.tag}-m"],
+            },
+        )
+        known = payload(
+            await session.call_tool(
+                "money_query", {"tags": [money.tag], "facets": {facet: "known"}}
+            )
+        )
+        # The search tools keep answering with an empty result: a zero there
+        # is not a total, and their counts already say nothing matched.
+        searched = payload(
+            await session.call_tool("search_documents", {"tags": [f"{money.tag}-nope"]})
+        )
+
+    assert error_text(unknown_tag) == (
+        f"unknown tag '{money.tag}-nope'. get_library_context lists the tags, projects, "
+        "matters and facet values the filters take; list_tags, list_projects and "
+        "list_matters list them with document counts."
+    )
+    assert error_text(unknown_value).startswith(f"unknown facet value {facet}='unknown'.")
+    assert error_text(unknown_facet).startswith(f"unknown facet '{facet}-x'.")
+    assert error_text(unknown_slugs).startswith(
+        f"unknown project '{money.tag}-p'; unknown matter '{money.tag}-m'."
+    )
+    # The labelled invoice's payment: 100.00, one payment.
+    assert [row["total"] for row in known["rows"]] == ["100.00"]
+    assert searched["total"] == 0

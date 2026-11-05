@@ -110,9 +110,14 @@ from library.models import (
     DocumentLanguage,
     DocumentSource,
     DocumentStatus,
+    Facet,
+    FacetValue,
     IngestionEvent,
     Kind,
+    Matter,
+    Project,
     ReviewStatus,
+    Tag,
     User,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
@@ -691,16 +696,25 @@ def _continuation(window: DocumentText, max_chars: int) -> str | None:
 
 # ------------------------------------------------------- shared parameters
 #
-# The filters search_documents and semantic_search both take, defined once so
-# the two tools describe each filter the same way. Each maps onto one field of
-# ``search.DocumentFilters``.
+# The filters search_documents, semantic_search and money_query take, defined
+# once so the tools describe and validate each filter the same way. Each maps
+# onto one field of ``search.DocumentFilters``.
+#
+# Every text value is stripped and must then be non-empty. A blank value is a
+# filter that matches no document (a blank sender is ``ilike '%%'``, which
+# matches every one), so it would answer with a plausible empty or unfiltered
+# result instead of an error. Refused by the schema (``minLength``) rather than
+# dropped, so the model learns its argument was wrong; Ask's tool loop has no
+# schema validation and drops them instead (``ask.engine._text_arg``).
+
+FilterText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 KindFilter = Annotated[
-    str | None,
+    FilterText | None,
     Field(description="Filter by document kind slug (see list_kinds), e.g. 'invoice'."),
 ]
 SenderFilter = Annotated[
-    str | None,
+    FilterText | None,
     Field(
         description=(
             "Filter by sender name, case-insensitive substring match "
@@ -709,7 +723,7 @@ SenderFilter = Annotated[
     ),
 ]
 RecipientFilter = Annotated[
-    str | None,
+    FilterText | None,
     Field(
         description=(
             "Filter by recipient name, case-insensitive substring match "
@@ -718,19 +732,19 @@ RecipientFilter = Annotated[
     ),
 ]
 TagsFilter = Annotated[
-    list[str] | None,
+    list[FilterText] | None,
     Field(description="Tag slugs (see list_tags); a document must have ALL of them."),
 ]
 ProjectsFilter = Annotated[
-    list[str] | None,
+    list[FilterText] | None,
     Field(description="Project slugs (see list_projects); a document in ANY of them matches."),
 ]
 MattersFilter = Annotated[
-    list[str] | None,
+    list[FilterText] | None,
     Field(description="Matter slugs (see list_matters); a document in ANY of them matches."),
 ]
 FacetsFilter = Annotated[
-    dict[str, str] | None,
+    dict[FilterText, FilterText] | None,
     Field(
         description=(
             "Facet labels as {facet_key: value_key}, e.g. {'category': 'energy'}; a "
@@ -1122,6 +1136,42 @@ MONEY_QUERY_DESCRIPTION: str = (
 )
 
 
+async def _unknown_filter_values(session: AsyncSession, filters: DocumentFilters) -> list[str]:
+    """One phrase per tag, project or matter slug and facet key/value pair in
+    ``filters`` that the archive does not have, in argument order.
+
+    Only money_query asks: such a filter matches nothing, and a total over
+    nothing is a 0 that reads like an answer. The search tools return an empty
+    result whose counts already say nothing matched.
+    """
+    unknown: list[str] = []
+    for label, model, slugs in (
+        ("tag", Tag, filters.tag_slugs),
+        ("project", Project, filters.project_slugs),
+        ("matter", Matter, filters.matter_slugs),
+    ):
+        if not slugs:
+            continue
+        known = set((await session.scalars(select(model.slug).where(model.slug.in_(slugs)))).all())
+        unknown.extend(f"unknown {label} '{slug}'" for slug in slugs if slug not in known)
+    if filters.facets:
+        pairs = (
+            await session.execute(
+                select(Facet.key, FacetValue.key)
+                .outerjoin(FacetValue, FacetValue.facet_id == Facet.id)
+                .where(Facet.key.in_(list(filters.facets)))
+            )
+        ).all()
+        facets = {facet for facet, _ in pairs}
+        values = set(pairs)
+        for facet, value in filters.facets.items():
+            if facet not in facets:
+                unknown.append(f"unknown facet '{facet}'")
+            elif (facet, value) not in values:
+                unknown.append(f"unknown facet value {facet}='{value}'")
+    return unknown
+
+
 @mcp.tool(title="Money query", annotations=READ_ONLY, description=MONEY_QUERY_DESCRIPTION)
 async def money_query(
     aggregate: Annotated[
@@ -1183,6 +1233,13 @@ async def money_query(
                 suggestion = CONCEPT_TO_KIND.get(kind.strip().lower())
                 hint = f"; did you mean kind='{suggestion}'?" if suggestion else "."
                 raise ToolError(f"unknown kind '{kind}'{hint} list_kinds lists the kind slugs.")
+        unknown = await _unknown_filter_values(session, filters)
+        if unknown:
+            raise ToolError(
+                "; ".join(unknown) + ". get_library_context lists the tags, projects, "
+                "matters and facet values the filters take; list_tags, list_projects and "
+                "list_matters list them with document counts."
+            )
         result = await query_documents(
             session, filters=filters, aggregate=aggregate, group_by=group_by
         )

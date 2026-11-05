@@ -1,7 +1,7 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.3: `semantic_search` capped at 20 hits and a 24 000-character passage budget, with `passages_truncated`; an embedder reply that cannot be read is an embedding failure; earlier the same day `money_query` and *Money*). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §1.3's `semantic_search` row and *Searching by meaning*. The budget tests in `tests/test_mcp_semantic.py` and the malformed-reply tests in `tests/test_embedding_client.py` pass, each seen red first or killed by a hand-made mutant; the prose was read against `mcp_server.py`.
+**Status:** active. **Last updated:** 2026-11-05 (§1.3 *Money*: `sum_amount` picks each payment's counted document within the filtered set; blank filter values refused by every filtered tool, unknown slugs and facet values by `money_query`; grouped rows capped at 50 with `over_limit`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §1.3's *Errors*, the `money_query` row and *Money*. The fix tests in `tests/test_mcp_money.py` pass, each seen red first or killed by a hand-made mutant; the prose was read against `mcp_server.py` and `structured_query.py`.
 **Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -155,8 +155,9 @@ written for the model and never points at the REST API, which an LLM
 connector cannot call; where the user has to act, the text says to open
 the document in the Library web app. Invalid arguments (a `document_id`
 below 1 or above the Postgres `BIGINT` maximum, a `limit` above 50, a
-`max_chars` outside 1 000–50 000, a tag longer than 64 characters) are
-argument-validation errors naming the bound. Anything unexpected (a bug,
+`max_chars` outside 1 000–50 000, a tag longer than 64 characters, a
+filter value that is blank once stripped) are argument-validation errors
+naming the bound. Anything unexpected (a bug,
 a database failure) is masked to `Error calling tool '<name>'`, so SQL
 and schema details never reach a client; the full error goes to the
 server log.
@@ -179,7 +180,7 @@ user to confirm any tool without it). The three write tools are
 | `semantic_search` | `query` (natural language, any language; blank refused), `kind?`, `sender?`, `recipient?`, `tags?`, `projects?`, `matters?`, `facets?`, `date_from?`, `date_to?` (the same filters as `search_documents`), `limit` (default 10, max 20) | `{results, coverage}`. Each result is a `search_documents` row without `snippet`/`rank`, plus `passages` (the nearest passages, best first, shortened to fit the result; `[]` when only the keyword ranking found the document), `passages_truncated`, `page_number` (of the best passage, or `null`) and `score` (higher is better). `coverage` is `{matched, returned, unembedded}`. See *Searching by meaning* below. |
 | `get_library_context` | — | `{context}`: the connected user's identity and the archive vocabulary as text. See *Searching by meaning* below. |
 | `get_document` | `document_id`, `start_page` (default 1), `max_chars` (default 20 000, 1 000–50 000) | Every field of a search result except `snippet`/`rank` (including `review_status` and, when it is `needs_review`, `review_findings`), plus provenance (`source`, `original_filename`, `sha256`, `ocr_confidence`), `web_url`, the document's `text` with its paging fields (*Reading* below), `comments` `[{id, document_id, author_id, body, created_at}]` newest first, and the audit-trail `events` `[{event, created_at}]`. `topics` are read-only auto-extracted. |
-| `money_query` | `aggregate` (`sum_amount` default, `distinct_senders`, `list`), `group_by?` (`sender`/`kind`, `sum_amount` only), `kind?`, `sender?`, `recipient?`, `tags?`, `projects?`, `matters?`, `facets?`, `date_from?`, `date_to?` (the `semantic_search` filters), `review_status?` | `{result_type, rows, coverage}`, `structured_query.query_documents`' result unchanged. `sum_amount` rows: `{key, total, currency, document_count, document_ids}` (`document_ids` cites at most 25; `document_count` is the true count) per currency (and per sender or kind with `group_by`; `key` is `null` without it), `total` a signed decimal string. `distinct_senders` rows: `{sender, document_count, document_ids}`; `list` rows: `{id, title, sender, recipient, kind, document_date, amount_total, currency, review_status}`, up to 50. `coverage` is `{matched, included, excluded, needs_review}`. See *Money* below. |
+| `money_query` | `aggregate` (`sum_amount` default, `distinct_senders`, `list`), `group_by?` (`sender`/`kind`, `sum_amount` only), `kind?`, `sender?`, `recipient?`, `tags?`, `projects?`, `matters?`, `facets?`, `date_from?`, `date_to?` (the `semantic_search` filters), `review_status?` | `{result_type, rows, coverage}`, `structured_query.query_documents`' result unchanged. `sum_amount` rows: `{key, total, currency, document_count, document_ids}` (`document_ids` cites at most 25; `document_count` is the true count) per currency (and per sender or kind with `group_by`; `key` is `null` without it), `total` a signed decimal string. `distinct_senders` rows: `{sender, document_count, document_ids}`; both at most 50 rows, the largest kept. `list` rows: `{id, title, sender, recipient, kind, document_date, amount_total, currency, review_status}`, up to 50. `coverage` is `{matched, included, excluded, needs_review}`. See *Money* below. |
 | `get_document_file` | `document_id`, `variant` = `"original"` (default) or `"searchable_pdf"` | `{filename, mime_type, size_bytes, content_base64}`. Files over 10 MB are refused with an error telling the user to download the file from the web app. A variant that was never produced is an error. |
 | `ingest_document` | `filename`, `content_base64` (PDF, JPEG, PNG, HEIC/HEIF, TIFF, plain text, Markdown, DOCX), `source_note?` | `{id, sha256, status, duplicate}`. Runs the same ingestion service as uploads (dedup by SHA-256, OCR + extraction queued); `source` is recorded as `mcp` and the calling token's user as uploader. A `source_note` is stored on the audit trail — but only when the ingest was not a duplicate, since a duplicate creates no new document to attach it to. Content matching a document in the trash is refused until it is restored or purged. |
 | `list_kinds` | — | `{kinds: [{slug, name, document_count}]}` |
@@ -198,6 +199,19 @@ every filter mean the same; see [api.md §1.3.3](api.md) for those
 semantics. Two differences: sender and recipient are matched by name
 substring (the web app filters by id), and a call returns at most 50
 results (the web app's list allows 100).
+
+**Filter values.** `search_documents`, `semantic_search` and `money_query`
+share their filter parameter types. Every text value (`kind`, `sender`,
+`recipient`, each tag, project and matter slug, each facet key and value)
+is stripped of surrounding whitespace and refused when nothing is left:
+a blank filter can only match nothing (or, for `sender`, everything), so
+it would answer with a plausible wrong result. The rule is a schema
+constraint (`minLength: 1`), so clients see it in `tools/list`. Ask's
+tool loop has no schema validation and drops blank values instead
+(`ask/engine.py`'s `_text_arg`). A slug or facet value the archive does
+not have is refused only by `money_query` (*Money* below); the search
+tools answer it with an empty result whose `total` or `coverage.matched`
+is 0, which is a count, not a total that reads like an answer.
 
 `search_documents`, `semantic_search`, `get_document`,
 `get_library_context` and `money_query` declare their result type, so
@@ -294,13 +308,26 @@ its result unchanged.
   are left out unless `kind` is `quote`. Totals are per currency;
   `group_by` splits them by sender or kind. `distinct_senders` and `list`
   return the same coverage block.
+- Which document counts for a payment is decided among the documents
+  that passed the filters (the `spend_facts` ordering: a document with
+  spend lines, then a `payment_made`, then the lowest id). So
+  `kind="utility-bill"` counts a bill whose receipt the archive-wide view
+  would have counted, and `duplicate_payment` only names a document whose
+  payment is in the rows ([money-facts.md](money-facts.md) §5.2).
+- `distinct_senders` and `sum_amount` return at most 50 rows
+  (`structured_query.MAX_GROUP_ROWS`): the senders with the most
+  documents, the groups with the largest totals either side of zero. The
+  documents of the rows cut are counted as `over_limit`, so a grouped
+  result never looks complete when it is not; `sum_amount` without
+  `group_by` has one row per currency.
 - `coverage` says what the rows leave out. `matched` documents met the
   filters, `included` are the ones the rows account for, and `excluded`
   maps a reason to how many were dropped for it, so `included` plus the
   excluded counts is `matched`. The reasons: `no_amount`,
   `quote_not_spend`, `not_summable_kind`, `duplicate_payment`,
-  `no_sender`/`no_kind` when grouping, `filtered_review_status` when
-  `review_status` filters, and `over_limit` for `list`. `needs_review`
+  `no_sender`/`no_kind` when grouping (a document lacking the key whose
+  payment no twin with the key carries), `filtered_review_status` when
+  `review_status` filters, and `over_limit` for the rows a cap cut. `needs_review`
   counts included documents whose details validation flagged. The tool
   description and the server instructions tell the model to pass on
   any exclusion and any flag.
@@ -308,9 +335,11 @@ its result unchanged.
   `structured_query.SUM_AMOUNT_GUIDE` and `COVERAGE_GUIDE`, quoted by
   this tool and by Ask's.
 - Tool errors the model can act on: `group_by` with an aggregate other
-  than `sum_amount`, `date_from` after `date_to`, and an unknown `kind`;
-  a concept word Ask's concept-to-kind map knows (`energy`) gets the
-  slug to use instead (`utility-bill`). An `aggregate` or `group_by`
+  than `sum_amount`, `date_from` after `date_to`, an unknown `kind` (a
+  concept word Ask's concept-to-kind map knows, `energy`, gets the slug
+  to use instead, `utility-bill`), and unknown tag, project or matter
+  slugs, facets or facet values, all named in one error that points at
+  `get_library_context` and the `list_*` tools. An `aggregate` or `group_by`
   outside its enum is an argument-validation error.
 - The archive is shared, so every household member gets the same total.
 

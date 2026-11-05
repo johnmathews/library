@@ -14,13 +14,15 @@ two retrieval paths share one filter vocabulary.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date
 from decimal import Decimal
 from typing import Any, Literal, TypedDict
 
-from sqlalchemy import ColumnElement, case, distinct, func, select
+from sqlalchemy import ColumnElement, Select, case, distinct, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from library.models import (
     AMOUNT_SIGN,
@@ -36,6 +38,14 @@ from library.search import DocumentFilters, filter_conditions
 
 # How many contributing document ids to attach to each aggregated row.
 MAX_CITED_IDS: int = 25
+
+#: The most rows ``distinct_senders`` and ``sum_amount`` return: one row per
+#: sender (per currency) would otherwise grow with the archive, each citing up
+#: to ``MAX_CITED_IDS`` ids, into a tool result no model context holds. The
+#: largest groups are kept, and the documents of the rest are reported as
+#: ``over_limit``, as ``list_documents`` reports its own cut. Read at call
+#: time, so a test can lower it.
+MAX_GROUP_ROWS: int = 50
 
 # Maps everyday concepts an LLM might use to the fixed kind slugs (seeded in
 # migration 0001). Surfaced in the tool description so the model can translate
@@ -87,7 +97,10 @@ COVERAGE_GUIDE: str = (
     "total over `included` documents is not a total over `matched` ones. "
     "`matched`/`included`/`excluded` always count DOCUMENTS, even for "
     "distinct_senders — a coverage of 1 excluded out of 12 with 3 sender "
-    "rows means 1 of 12 documents was dropped, not 1 of 3 senders."
+    "rows means 1 of 12 documents was dropped, not 1 of 3 senders. "
+    f"distinct_senders and sum_amount return at most {MAX_GROUP_ROWS} rows, "
+    "the largest groups; `over_limit` counts the documents in the rows that "
+    "were cut (narrow the filters, or drop group_by for the whole total)."
 )
 
 
@@ -329,28 +342,38 @@ async def distinct_senders(
     The join to ``Sender`` is inner, so a document whose sender never extracted
     is absent from the breakdown entirely — reported as ``no_sender`` rather
     than left for the reader to notice the counts do not add up.
+
+    At most ``MAX_GROUP_ROWS`` senders, those with the most documents; the
+    documents of the senders cut are ``over_limit``.
     """
+    # Grouped by id as well as name: names are unique, so the groups are the
+    # same, and the id is what the over-limit predicate below needs.
     statement = (
         select(
+            Sender.id,
             Sender.name,
             func.count(Document.id),
             func.array_agg(Document.id),
         )
         .join(Sender, Document.sender_id == Sender.id)
         .where(*filter_conditions(filters))
-        .group_by(Sender.name)
+        .group_by(Sender.id, Sender.name)
         .order_by(func.count(Document.id).desc(), Sender.name)
     )
     rows = (await session.execute(statement)).all()
+    kept = rows[:MAX_GROUP_ROWS]
     groups = [
         SenderGroup(sender=name, document_count=count, document_ids=sorted(ids)[:MAX_CITED_IDS])
-        for name, count, ids in rows
+        for _, name, count, ids in kept
     ]
+    include: ColumnElement[bool] = Document.sender_id.isnot(None)
+    exclusions: dict[str, ColumnElement[bool]] = {"no_sender": Document.sender_id.is_(None)}
+    if len(kept) < len(rows):
+        shown = Document.sender_id.in_([sender_id for sender_id, *_ in kept])
+        exclusions["over_limit"] = include & ~shown
+        include = include & shown
     coverage = await count_coverage(
-        session,
-        filters=filters,
-        include_condition=Document.sender_id.isnot(None),
-        exclusions={"no_sender": Document.sender_id.is_(None)},
+        session, filters=filters, include_condition=include, exclusions=exclusions
     )
     return Aggregated(rows=groups, coverage=coverage)
 
@@ -408,6 +431,62 @@ def _signed_amount(kinds: frozenset[AmountKind]) -> ColumnElement[Decimal]:
     )
 
 
+def _counted_per_payment(
+    candidates: Sequence[ColumnElement[bool]],
+) -> tuple[Select[tuple[int]], Select[tuple[int]]]:
+    """``(document ids, payment ids)``: the one document counted for each
+    payment among the documents meeting ``candidates``.
+
+    The ordering is the ``spend_facts`` view's own (migration 0035): a
+    line-bearing document first, so an itemised invoice keeps its split; then
+    a ``payment_made``; then the lowest id. What differs is the set it ranks.
+    The view ranks every live document of a payment, archive-wide, so its
+    ``is_canonical`` can name a twin the caller's filters leave out — and a
+    total gated on it then drops the payment while reporting the twin it did
+    match as a ``duplicate_payment``, "counted once". Ranking only the
+    documents this result can count picks the same document as the view
+    whenever that document is a candidate, and the best-ranked candidate
+    otherwise.
+
+    Ranked over ``spend_facts`` rows rather than documents: a document has one
+    row, or one per spend line, and every row of a document shares its
+    payment, its lines-or-not and its kind, so the first row of a payment
+    always belongs to the document the ordering picks.
+
+    A FROM-clause subquery, not a correlated one: it reads ``Document`` itself,
+    and as a WHERE-clause subquery inside a query over ``Document`` SQLAlchemy
+    would correlate that reference away.
+    """
+    ranked = (
+        select(
+            spend_facts.c.document_id,
+            spend_facts.c.payment_id,
+            func.row_number()
+            .over(
+                partition_by=spend_facts.c.payment_id,
+                order_by=(
+                    spend_facts.c.line_id.isnot(None).desc(),
+                    func.coalesce(
+                        spend_facts.c.amount_kind == AmountKind.PAYMENT_MADE.value, False
+                    ).desc(),
+                    spend_facts.c.document_id.asc(),
+                    spend_facts.c.line_id.asc(),
+                ),
+            )
+            .label("payment_rank"),
+        )
+        .select_from(Document)
+        .join(spend_facts, spend_facts.c.document_id == Document.id)
+        .where(*candidates)
+        .subquery("payment_ranks")
+    )
+    first = ranked.c.payment_rank == 1
+    return (
+        select(ranked.c.document_id).where(first),
+        select(ranked.c.payment_id).where(first),
+    )
+
+
 async def sum_amount(
     session: AsyncSession, *, filters: DocumentFilters, group_by: GroupBy | None = None
 ) -> Aggregated[AmountGroup]:
@@ -425,14 +504,18 @@ async def sum_amount(
     * **Kind.** Only ``SUMMABLE_AMOUNT_KINDS`` are expenditure, so a policy's
       cover limit, an account balance, an estimate and an undecided (NULL) kind
       stay out of "what did I spend".
-    * **Payment identity.** ``is_canonical`` picks exactly one document per
-      payment, so one payment documented as an invoice *and* a receipt is
-      totalled once.
+    * **Payment identity.** The view's ``payment_id`` groups the documents of
+      one payment, so one payment documented as an invoice *and* a receipt is
+      totalled once. Which document is counted is decided among the documents
+      this call can count (:func:`_counted_per_payment`), not by the view's
+      archive-wide ``is_canonical``: a filter matching only the invoice still
+      counts the payment. The charts keep the archive-wide flag.
 
     Coverage is still counted over ``documents`` by :func:`count_coverage`, and
-    deliberately: every new exclusion is expressible as a document-level
-    predicate — ``amount_kind`` is a column on ``documents``, and canonicality is
-    an ``EXISTS`` against the view — so only the row-building query moved.
+    deliberately: every exclusion is expressible as a document-level
+    predicate — ``amount_kind`` is a column on ``documents``, and being the
+    counted document is membership of the ranking's first places — so only the
+    row-building query reads the view.
 
     The reasons a document is dropped, each meaning "survived every earlier
     gate, fails this one" so that they partition the matched set:
@@ -445,9 +528,13 @@ async def sum_amount(
     * ``not_summable_kind`` — the amount is real but is not spending: a
       ``coverage_limit``, a ``balance``, an ``estimate``, a ``none``, or an
       ``amount_kind`` nothing has decided yet.
-    * ``duplicate_payment`` — a second document for a payment already counted.
+    * ``duplicate_payment`` — a second document for a payment counted in these
+      rows, never one whose payment the rows leave out.
     * ``no_sender`` / ``no_kind`` — only when grouping by that column, whose
-      INNER JOIN drops documents that lack it.
+      INNER JOIN drops documents that lack it: a document without the key
+      whose payment no twin with the key carries into the rows.
+    * ``over_limit`` — in a group cut by ``MAX_GROUP_ROWS`` (the largest
+      |total|s are kept). Last, so it only ever names counted money.
     """
     # Explicitly correlated to Document: group_by="kind" joins Kind into the
     # outer query too, and without this SQLAlchemy auto-correlates the two
@@ -467,17 +554,11 @@ async def sum_amount(
     # "undecided" a reportable state rather than a hole.
     summable_kind = Document.amount_kind.in_(kind_values)
     unsummable_kind = Document.amount_kind.is_(None) | Document.amount_kind.notin_(kind_values)
-    # `payments` seeds its reachability from every live document, so a document
-    # with an amount always has at least one `spend_facts` row. Having none that
-    # is canonical therefore means exactly one thing: another document holds the
-    # payment's canonical slot.
-    is_canonical = (
-        select(1)
-        .select_from(spend_facts)
-        .where(spend_facts.c.document_id == Document.id, spend_facts.c.is_canonical)
-        .correlate(Document)
-        .exists()
-    )
+    group_key_present: ColumnElement[bool] | None = None
+    if group_by == "sender":
+        group_key_present = Document.sender_id.isnot(None)
+    elif group_by == "kind":
+        group_key_present = Document.kind_id.isnot(None)
 
     # Each exclusion is "survived every earlier gate, but fails this one", so the
     # reasons partition the matched set instead of overlapping. A quote with an
@@ -491,18 +572,41 @@ async def sum_amount(
         include = include & ~is_quote
     exclusions["not_summable_kind"] = include & unsummable_kind
     include = include & summable_kind
-    exclusions["duplicate_payment"] = include & ~is_canonical
-    include = include & is_canonical
-    if group_by == "sender":
-        exclusions["no_sender"] = include & Document.sender_id.is_(None)
-        include = include & Document.sender_id.isnot(None)
-    elif group_by == "kind":
-        exclusions["no_kind"] = include & Document.kind_id.is_(None)
-        include = include & Document.kind_id.isnot(None)
+
+    # Payment identity, decided within THIS result (see `_counted_per_payment`):
+    # the candidates are the documents that passed the caller's filters and
+    # every gate above, plus the group key when there is one, so a payment
+    # whose archive-wide canonical twin is filtered out is still counted.
+    candidates = [*filter_conditions(filters), include]
+    if group_key_present is not None:
+        candidates.append(group_key_present)
+    counted_documents, counted_payments = _counted_per_payment(candidates)
+    counted = Document.id.in_(counted_documents)
+    if group_key_present is None:
+        exclusions["duplicate_payment"] = include & ~counted
+    else:
+        # A document without the group key is still a duplicate when its
+        # payment is counted through a twin that has the key; it is
+        # `no_sender`/`no_kind` only when its payment is in no row at all.
+        payment_counted = (
+            select(1)
+            .select_from(spend_facts)
+            .where(
+                spend_facts.c.document_id == Document.id,
+                spend_facts.c.payment_id.in_(counted_payments),
+            )
+            .correlate(Document)
+            .exists()
+        )
+        exclusions["duplicate_payment"] = include & ~counted & payment_counted
+        exclusions["no_sender" if group_by == "sender" else "no_kind"] = (
+            include & ~counted & ~payment_counted
+        )
+    include = include & counted
 
     conditions = [
         *filter_conditions(filters),
-        spend_facts.c.is_canonical,
+        counted,
         spend_facts.c.amount_kind.in_(kind_values),
     ]
     if filters.kind_slug != "quote":
@@ -527,32 +631,58 @@ async def sum_amount(
 
     # Joined through `Document`, not through the view's own `sender_id`, so the
     # join and `count_coverage`'s `no_sender` predicate read the same column.
+    # `key_id` is the group key's id column on `Document`: names and slugs
+    # are unique, so grouping by it as well changes no group, and it is what
+    # the over-limit predicate below needs.
+    key_id: InstrumentedAttribute[int | None] | None = None
     if group_by == "sender":
-        key_column = Sender.name
+        key_column, key_id = Sender.name, Document.sender_id
         statement = statement.join(Sender, Document.sender_id == Sender.id)
     elif group_by == "kind":
-        key_column = Kind.slug
+        key_column, key_id = Kind.slug, Document.kind_id
         statement = statement.join(Kind, Document.kind_id == Kind.id)
 
-    if key_column is not None:
-        statement = statement.add_columns(key_column).group_by(key_column, spend_facts.c.currency)
+    if key_column is not None and key_id is not None:
+        statement = statement.add_columns(key_column, key_id).group_by(
+            key_column, key_id, spend_facts.c.currency
+        )
     else:
         statement = statement.group_by(spend_facts.c.currency)
     statement = statement.order_by(func.sum(_signed_amount(kinds)).desc())
 
-    groups: list[AmountGroup] = []
-    for row in (await session.execute(statement)).all():
-        total, currency, count, ids = row[0], row[1], row[2], row[3]
-        key = row[4] if key_column is not None else None
-        groups.append(
-            AmountGroup(
-                key=key,
-                total=str(Decimal(total)),
-                currency=currency,
-                document_count=count,
-                document_ids=sorted(ids)[:MAX_CITED_IDS],
-            )
+    rows = (await session.execute(statement)).all()
+    keyed = key_column is not None
+
+    def size(index: int) -> tuple[Decimal, str, str]:
+        """Largest |total| first, either sign: a refund-only sender's -90.00
+        outweighs another's +5.00. Key and currency make ties deterministic."""
+        row = rows[index]
+        return (-abs(Decimal(row[0])), (row[4] or "") if keyed else "", row[1] or "")
+
+    # Shown in the query's order (largest total first), not in size order.
+    kept = sorted(sorted(range(len(rows)), key=size)[:MAX_GROUP_ROWS])
+    groups = [
+        AmountGroup(
+            key=rows[index][4] if keyed else None,
+            total=str(Decimal(rows[index][0])),
+            currency=rows[index][1],
+            document_count=rows[index][2],
+            document_ids=sorted(rows[index][3])[:MAX_CITED_IDS],
         )
+        for index in kept
+    ]
+    if len(kept) < len(rows):
+        # A NULL currency is a group of its own, and NULL never matches IN.
+        currency = func.coalesce(Document.currency, "")
+        shown: ColumnElement[bool]
+        if key_id is None:
+            shown = currency.in_([rows[index][1] or "" for index in kept])
+        else:
+            shown = tuple_(key_id, currency).in_(
+                [(rows[index][5], rows[index][1] or "") for index in kept]
+            )
+        exclusions["over_limit"] = include & ~shown
+        include = include & shown
     coverage = await count_coverage(
         session, filters=filters, include_condition=include, exclusions=exclusions
     )

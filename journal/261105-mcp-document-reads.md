@@ -178,3 +178,71 @@ invoices come to" has to read that block.
 **Not done.** Spending over time and saved charts are still not MCP tools (plan
 non-goal). Unknown tags, projects and matters still match nothing silently;
 only `kind` is checked, because the concept-word mistake is the common one.
+
+## 8. Review fixes
+
+An independent review of W9 and W10 found one critical and five lesser
+defects. Commit `4f77222` fixed the W9 ones; this one fixes W10's three.
+
+**Semantic search output (`4f77222`).** At `limit=50`, `semantic_search` could
+return about 270 000 characters of passages, past the tool-result cap of MCP
+clients (Claude Code's default is 25 000 tokens). `limit` now stops at 20, and
+one call's passages share a 24 000-character budget, split evenly across the
+hits: whole passages while they fit, the next one shortened, and
+`passages_truncated` says so. `embed_texts` now wraps a `ValueError` or
+`TypeError` from a malformed 200 (a proxy's HTML page, a bad vector) into
+`EmbeddingError`, so callers fall back as designed instead of a masked
+error. Doc gaps closed: the `passages` description no longer says an empty
+list means "not indexed" (it also means only the keyword ranking found the
+document), the `get_document` row names `review_findings`, and the
+`money_query` row notes the 25-id citation cap.
+
+**Dedup within the filter (critical).** §7's "things learned" was a bug, not a
+property. `sum_amount` gated on the view's archive-wide `is_canonical`, so a
+filter that matched only a payment's non-canonical twin (`kind='utility-bill'`
+when the receipt holds the slot, or a tag only the bill carries) returned no
+money for that payment and reported the bill as `duplicate_payment`, which the
+tool text explains as "counted once". The lead's decision: choose the counted
+document among the documents that passed the filters and the earlier gates,
+with the view's own ordering. `_counted_per_payment` does that with a window
+over `spend_facts` rows, as a FROM subquery so SQLAlchemy cannot correlate its
+`Document` away. When grouping, the group key is part of the candidate set, and
+a document lacking the key is `duplicate_payment` when a twin with the key
+carries its payment, `no_sender`/`no_kind` only when none does. A side effect
+over the whole archive: a payment whose view choice is an undecided document
+(lower id, NULL kind) now counts through its `payment_due` twin instead of not
+at all. The charts, the facets endpoint and the spending API still read the
+archive-wide flag; moving them is a follow-up (money-facts.md §5.2).
+
+**Blank and unknown filters.** `tags=[tag, ""]`, `facets={"category": ""}`
+and `sender=""` were valid MCP arguments that gave a silent zero (or, for the
+sender, no filter at all). Two options: move Ask's `_text_arg`/`_slug_args`/
+`_facet_args` somewhere shared, or constrain the MCP filter types. Chose the
+constraints: one `FilterText` type (stripped, at least one character) used by
+every shared filter, so one rule covers all three filtered tools; it shows in
+`tools/list` as `minLength`; and a refusal tells the model its argument was
+wrong, where Ask's dropping would quietly widen the filter. Ask keeps its
+helpers because its tool loop has no schema layer. `money_query` alone also
+refuses unknown tag, project and matter slugs and unknown facets or facet
+values, naming each and pointing at `get_library_context`: a zero there is a
+total. The search tools keep answering an unknown slug with `total: 0`, which
+reads as "nothing matched", not as an amount.
+
+**Row cap.** `distinct_senders` and grouped `sum_amount` returned one row per
+sender (and currency), uncapped. Ask feeds the same rows to its model, so the
+cap is in `structured_query` (`MAX_GROUP_ROWS = 50`), not in the MCP tool. The
+largest groups are kept, by |total| for sums (a refund-only sender of −90 beats
++5) and by document count for senders, and the cut groups' documents become an
+`over_limit` reason, so coverage still partitions and `needs_review` counts
+only what the rows show. `COVERAGE_GUIDE`, which both tools quote, says so.
+
+**Evidence.** Every new behavioural test was seen red on the old code, with
+the old number in its comment (the reproduction gave 18.75 for a hand-computed
+102.95; bill-only tag, no rows for 84.20; receipts 84.20 for 159.70; the
+review-status case 63.10 for 147.30), except the two that guard what already
+worked (both twins in the filter, a same-kind tie), which hand-made mutants
+turned red: count every twin (338.15 for 178.45), drop the `payment_made` or
+the has-lines preference, reverse the id tie-break. Twenty mutants across the
+three fixes, all killed in the end (the tie-break one survived until the tie
+test was added). `mcp_server.py` stays at 100% line coverage over the
+MCP test files. No existing test changed.
