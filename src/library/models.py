@@ -813,7 +813,7 @@ class Document(Base):
     # denormalized onto the document so the same-row generated FTS columns can
     # index it — a generated column cannot read the child ``document_pages``
     # table. Kept in sync by the app wherever page rows are (re)written
-    # (markdown/apply.py, api/notes.py); NULL when the document has no pages, in
+    # (markdown/apply.py, notes_service.py); NULL when the document has no pages, in
     # which case FTS falls back to ``ocr_text``. Not the source of truth for
     # page content — ``document_pages`` is; this is a search-only mirror.
     pages_markdown: Mapped[str | None] = mapped_column(Text)

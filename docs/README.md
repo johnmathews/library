@@ -1,7 +1,7 @@
 # Documentation
 
-**Status:** active. **Last updated:** 2026-11-05 (the `mcp.md` row lists the current tool jobs: keyword and meaning search, reading, money totals, ingest, edits and comments).
-**Last verified:** 2026-11-05 — method: partial, scoped to the `mcp.md` row, read against the tools table in `mcp.md` §1.3; `uv run python scripts/check_docs.py --max-violations 0` clean. No row was added or removed, so the gated set is unchanged.
+**Status:** active. **Last updated:** 2026-11-05 (the `mcp.md` row adds writing notes and fetching files to the tool jobs).
+**Last verified:** 2026-11-05 — method: partial, scoped to the `mcp.md` row, read against the tools table in `mcp.md` §1.3; `uv run python scripts/check_docs.py` clean. No row was added or removed, so the gated set is unchanged.
 
 Reference documentation for Library — a self-hosted document archive (FastAPI
 backend + Vue 3 SPA, Postgres/pgvector, OCR ingestion, an MCP server, and an
@@ -24,7 +24,7 @@ New to the codebase? Read in this order:
 | [`api.md`](api.md) | The full REST API: every endpoint, method, request/response shape, and query filters. |
 | [`ingestion.md`](ingestion.md) | How a file becomes a Document: upload → storage → OCR → extraction → markdown → embedding. |
 | [`ask.md`](ask.md) | The "Ask" semantic Q&A feature: hybrid retrieval, the agentic tool loop, citations, metadata writes. |
-| [`mcp.md`](mcp.md) | The MCP server at `/mcp`: the tools LLM clients can call to search by keyword or meaning, read, total amounts, ingest, edit and comment on documents, and OAuth sign-in for claude.ai and ChatGPT connectors (and Claude Code). |
+| [`mcp.md`](mcp.md) | The MCP server at `/mcp`: the tools LLM clients can call to search by keyword or meaning, read, total amounts, fetch files, ingest, write notes, edit and comment on documents, and OAuth sign-in for claude.ai and ChatGPT connectors (and Claude Code). |
 | [`llm-backends.md`](llm-backends.md) | The two ways library reaches Claude: metered API vs Claude subscription, which surfaces may use which, the per-call harness cost, and the credential runbook. |
 | [`observability.md`](observability.md) | What the app measures about itself: OpenTelemetry metrics for Ask (tokens by cache kind, cost, latency, tool-loop depth, errors), the Prometheus and OTLP exporters, and the content-logging guard that keeps document text out of telemetry. |
 | [`frontend.md`](frontend.md) | The Vue 3 SPA: views, components, stores, the Mosaic design language, dark mode, PWA wiring, tests. |

@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-207 entries.
+208 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## November 2026
 
+- **2026-11-05** — [MCP notes and file results](261105-mcp-notes-and-files.md)
 - **2026-11-05** — [MCP document reads, semantic search and money totals](261105-mcp-document-reads.md)
 - **2026-11-04** — [MCP OAuth consent page and rate limits](261104-mcp-oauth-consent-and-rate-limits.md)
 - **2026-11-04** — [MCP OAuth authorization server](261104-mcp-oauth-authorization-server.md)

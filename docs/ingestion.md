@@ -1,7 +1,7 @@
 # Ingestion
 
-**Status:** active. **Last updated:** 2026-09-02 (re-extraction's allocated-amount skip is documented, and widened. The `extra["extraction"]` bullet gains `skipped_fields`, the `extraction_completed` row in the event table gains it too, and a new paragraph states which three fields are withheld on an allocated document and why `currency`/`amount_kind` join `amount_total` — they denominate and interpret that number, and `amount_currency_coupling` is an XOR on presence so it cannot see the disagreement. Also states the fill/change distinction: a blank currency is still filled. This page carries **no `Covers:` line**, so `check_docs` could not have reded for any of it.) Earlier: 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password, corrected the "no per-task retry policy" claim, the markdown grounding limit, the consume extension list and the `GET /api/jobs` contract; documented the email recipient hint and the missing ingestion events).
-**Last verified:** 2026-09-02 — method: partial, scoped to the two extraction bullets and the event-table row. The field list is byte-compared against `_ALLOCATION_LOCKED_FIELDS` and the event payload in `extraction/apply.py`. Both behavioural claims are pinned by tests confirmed to red when the fix is reverted: narrowing `_ALLOCATION_LOCKED_FIELDS` back to `("amount_total",)` reds `test_a_re_extracted_currency_cannot_drift_from_the_allocated_amount`, and removing `skipped_fields` from the event payload (leaving it in `extra`) reds two tests. The fill-versus-change claim is pinned by the pre-existing `test_an_allocated_amount_survives_re_extraction_and_the_skip_is_reported`, whose fixture has a NULL currency and which reds if the guard withholds a fill. The timeline half was confirmed in a **browser** (local stack, a seeded `extraction_completed` event, Chromium): the "Left unchanged" line renders in the curated timeline in both themes. Nothing else on this page was re-checked. Earlier: 2026-08-28 — method: rewrote the photo-path section for the vendored RapidOCR weights (GH #109) and traced every new claim to source — the `models/ocr/` location, the three vendored files and the `Global.model_root_dir` pin against `src/library/ocr/weights.py`; the `COPY models/` against the Dockerfile; the `ocr_models` healthz key against `src/library/app.py`; the `--check` step against `.github/workflows/ci.yml`'s compose-smoke job; and the removal of the RapidOCR skip against `tests/test_ocr_real.py`. Ran the `slow_ocr` suite against the real engine, `scripts/fetch_ocr_models.py --check`, and `scripts/check_docs.py`, all clean. Only the photo-path and real-engine-test prose was re-checked this pass; the rest carries forward the 2026-08-12 verification below unchanged. That verification's method was: method: traced each claim to source — settings and defaults against `config.py` and `.env.example`, pipeline/retry/guard behaviour against `jobs.py`, routing and thresholds against `ocr/`, limits against `extraction/` and `markdown/`, endpoint shapes against `api/` and `schemas.py` — plus a mechanical check that every `LIBRARY_*`, every `library.*` path and every emitted event name resolves.
+**Status:** active. **Last updated:** 2026-11-05 (*Notes*: creating a note is `notes_service.create_note`, shared by `POST /api/notes` and the MCP `create_note` tool; the body helpers moved there from the router). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to the *Notes* section and the `pages_markdown` paragraph, read against `src/library/notes_service.py` and `src/library/api/notes.py`; `tests/test_notes_api.py` passes unchanged. Other sections carry forward their earlier verifications.
 
 How a file becomes a Document: upload → content-addressed storage →
 database row → background job → status lifecycle. This document covers
@@ -1148,7 +1148,7 @@ preferring the markdown, falling back to raw OCR when a document has no pages
 body text OCR never captured, and search snippets (`ts_headline`) are drawn
 from the same source. `pages_markdown` is a search-only mirror kept in sync by
 the app wherever page rows are written — `apply_markdown` (both the vision and
-born-digital passthrough paths) and `api/notes.py` `_apply_body` — via
+born-digital passthrough paths) and `notes_service.apply_body` — via
 `markdown.apply.document_markdown_text`; `document_pages` remains the source of
 truth for page content. Born-digital docs and notes have
 `pages_markdown == ocr_text`, so the `coalesce` indexes the body once.
@@ -1958,7 +1958,7 @@ LIBRARY_EMAIL_ALLOWED_SENDERS=mthwsjc@gmail.com,partner@example.com
 LIBRARY_EMAIL_POLL_MINUTES=10
 ```
 
-## Notes (in-app authoring, `library.api.notes`)
+## Notes (in-app authoring, `library.notes_service`)
 
 A **note** is a born-digital `text/markdown` document composed inside Library
 rather than uploaded — an additional ingestion channel (`source=note`) alongside
@@ -1975,7 +1975,8 @@ mechanics.
 
 ### Dedup bypass via a salted sha
 
-Notes are authored through the `/api/notes` router, **not** `ingest_file`, so the
+Notes are authored through `notes_service.create_note` (behind the `/api/notes`
+router and the MCP `create_note` tool), **not** `ingest_file`, so the
 content-dedup check never runs for them. A note's `sha256` is a **salted digest**
 — `sha256(body + uuid4())` — computed once at creation and fixed for the note's
 life. The body is written **directly** to `path_for(sha256)` (bypassing
@@ -1996,9 +1997,10 @@ is therefore correct the instant the call returns, independent of when (or
 whether) the worker picks up the deferred job. The pipeline still runs
 asynchronously for the *derived* layers only: metadata extraction and embeddings.
 
-- **Create** (`POST /api/notes`): inserts the document
+- **Create** (`POST /api/notes`, or MCP `create_note`): inserts the document
   (`status=received`, `extra.user_edited_fields=["title"]` so the title is locked
-  against re-extraction), materializes the body (file + `ocr_text` + page),
+  against re-extraction), materializes the body (file + `ocr_text` + page +
+  the `pages_markdown` search mirror),
   records a `received` event, and defers `process_document` — the same pipeline a
   new upload runs (re-OCR/markdown are idempotent no-ops over the materialized
   layer; it adds metadata + embeddings and advances to `indexed`).

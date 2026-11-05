@@ -15,7 +15,8 @@ search matched on is the text a reader is shown.
   at ``max_chars``, with what a caller needs to continue.
 - ``list_item_fields`` / ``review_findings``: the ``DocumentFields`` values
   every list row and detail body carries.
-- ``document_web_url``: the document's page in the web app.
+- ``document_web_url`` / ``document_file_url``: the document's page in the
+  web app, and its download link for one of its files.
 
 This module does not speak HTTP or MCP: an impossible ``start_page`` raises
 ``DocumentTextRangeError`` and each caller words it for its own client.
@@ -258,3 +259,29 @@ def document_web_url(public_base_url: str | None, document_id: int) -> str | Non
     if not public_base_url:
         return None
     return f"{public_base_url.rstrip('/')}/documents/{document_id}"
+
+
+#: A document's stored files: the upload as received, and the OCR-produced
+#: PDF with a text layer (only when ``searchable_pdf`` is set).
+FileVariant = Literal["original", "searchable_pdf"]
+
+#: Each variant's last path segment under ``/api/documents/{id}/``: the web
+#: app's own download routes (``download_original``, ``download_searchable_pdf``
+#: in api/documents.py).
+_FILE_ROUTE: dict[FileVariant, str] = {
+    "original": "original",
+    "searchable_pdf": "searchable.pdf",
+}
+
+
+def document_file_url(
+    public_base_url: str | None, document_id: int, variant: FileVariant
+) -> str | None:
+    """The web app's download link for one of the document's files, or
+    ``None`` when the public URL is not configured. The route is behind the
+    web app's sign-in: the link works in the user's browser, not for a
+    client that holds only an MCP token."""
+    if not public_base_url:
+        return None
+    base = public_base_url.rstrip("/")
+    return f"{base}/api/documents/{document_id}/{_FILE_ROUTE[variant]}"

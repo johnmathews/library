@@ -16,67 +16,28 @@ serializer and 404 helper are reused from the documents router so a note's
 detail payload is shaped exactly like any other document's.
 """
 
-import hashlib
-import os
-import tempfile
 from datetime import UTC, datetime
 from typing import Annotated
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from library import notes_service
 from library.api.documents import _detail, _refresh_for_detail
 from library.auth.deps import current_user
 from library.db import get_session
-from library.jobs import embed_document, extract_document, process_document
-from library.markdown.apply import document_markdown_text
+from library.jobs import embed_document, extract_document
 from library.models import (
     Document,
-    DocumentPage,
     DocumentSource,
     IngestionEvent,
     NoteVersion,
     User,
 )
 from library.schemas import DocumentDetail, NoteCreate, NoteUpdate, NoteVersionOut
-from library.storage import path_for
 
 router: APIRouter = APIRouter(tags=["notes"])
-
-
-def _salted_sha256(body_bytes: bytes) -> str:
-    """A per-note salted digest: structurally bypasses content dedup.
-
-    Notes are never looked up by content sha, so salting with a random nonce
-    lets identical (or edited-back-to-identical) bodies coexist as distinct
-    notes. Computed once at creation and fixed for the note's life.
-    """
-    return hashlib.sha256(body_bytes + uuid4().hex.encode()).hexdigest()
-
-
-def _write_body(sha256: str, body_bytes: bytes) -> None:
-    """Write a note's body to its content-addressed original path.
-
-    Bypasses ``storage.store`` deliberately: ``store`` re-hashes the content and
-    would file it under a different name, breaking the fixed salted-sha identity.
-    The born-digital OCR passthrough reads exactly this file.
-
-    The write is atomic (temp file in the target dir + ``os.replace``), mirroring
-    ``storage.store``: an edit/restore overwrites the note's only file in place,
-    so a crash mid-write must never truncate or corrupt the existing content.
-    """
-    path = path_for(sha256)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{sha256}.")
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(body_bytes)
-        os.replace(tmp_name, path)
-    except BaseException:
-        os.unlink(tmp_name)
-        raise
 
 
 async def _get_note_or_404(session: AsyncSession, document_id: int) -> Document:
@@ -114,53 +75,13 @@ async def _snapshot_current(session: AsyncSession, document: Document) -> None:
     )
 
 
-async def _apply_body(session: AsyncSession, document: Document, body_markdown: str) -> None:
-    """Materialize a note's body in place: stored file, ``ocr_text``, and the
-    single born-digital ``DocumentPage`` the reader renders.
-
-    Born-digital text needs no OCR/vision call, so the displayable layer is
-    written **synchronously** here rather than waiting for the async pipeline —
-    the reader is correct the instant the request returns, even if the worker is
-    backed up or down. The deferred pipeline still re-runs extraction (metadata)
-    and embedding (search) idempotently. The sha stays fixed; the file is
-    overwritten atomically.
-    """
-    body_bytes = body_markdown.encode("utf-8")
-    _write_body(document.sha256, body_bytes)
-    document.ocr_text = body_markdown
-    await session.execute(delete(DocumentPage).where(DocumentPage.document_id == document.id))
-    body = body_markdown.strip()
-    if body:
-        session.add(
-            DocumentPage(
-                document_id=document.id,
-                page_number=1,
-                markdown=body,
-                char_count=len(body),
-            )
-        )
-        document.page_count = 1
-        document.pages_markdown = document_markdown_text([body])
-    else:
-        document.page_count = None
-        document.pages_markdown = None
-
-
-def _lock_title(document: Document, title: str) -> None:
-    """Set the title and keep it in ``user_edited_fields`` (auto-extraction off)."""
-    document.title = title
-    edited = list(document.extra.get("user_edited_fields", []))
-    if "title" not in edited:
-        edited.append("title")
-    document.extra = {**document.extra, "user_edited_fields": edited}
-
-
 async def _reprocess_note(document_id: int) -> None:
     """Re-run metadata extraction and embedding after an in-place edit.
 
     The displayable body (``ocr_text`` + the ``DocumentPage``) is already
-    materialized synchronously by ``_apply_body``, so only the derived layers
-    need the worker: extraction (metadata) and embedding (search vectors).
+    materialized synchronously by ``notes_service.apply_body``, so only the
+    derived layers need the worker: extraction (metadata) and embedding
+    (search vectors).
     Deferred after the commit — Procrastinate uses its own connection, so a job
     picked up before the edit committed would read stale content.
     """
@@ -179,40 +100,16 @@ async def create_note(
     session: Annotated[AsyncSession, Depends(get_session)],
     user: Annotated[User, Depends(current_user)],
 ) -> DocumentDetail:
-    """Create a born-digital Markdown note and queue the processing pipeline.
+    """Create a born-digital Markdown note by the signed-in user and queue the
+    processing pipeline (``notes_service.create_note``, shared with MCP).
 
     The title is locked against re-extraction; the body is written under a
     salted sha (dedup bypass). Auto-extraction still fills summary/topics/tags/
     kind from the body.
     """
-    body_bytes = payload.body_markdown.encode("utf-8")
-    sha256 = _salted_sha256(body_bytes)
-
-    document = Document(
-        sha256=sha256,
-        mime_type="text/markdown",
-        source=DocumentSource.NOTE,
-        title=payload.title,
-        original_filename=f"{payload.title}.md",
-        uploader_id=user.id,
-        extra={"user_edited_fields": ["title"]},
+    document = await notes_service.create_note(
+        session, title=payload.title, body_markdown=payload.body_markdown, uploader_id=user.id
     )
-    session.add(document)
-    await session.flush()
-    # Materialize the body synchronously (file + ocr_text + DocumentPage) so the
-    # reader is correct immediately; the deferred pipeline still adds metadata,
-    # markdown re-render, and embeddings.
-    await _apply_body(session, document, payload.body_markdown)
-    session.add(
-        IngestionEvent(
-            document_id=document.id,
-            event="received",
-            detail={"source": DocumentSource.NOTE.value, "size": len(body_bytes)},
-        )
-    )
-    # Commit before deferring: the worker defers over its own connection.
-    await session.commit()
-    await process_document.defer_async(document_id=document.id)
     await _refresh_for_detail(session, document)
     return await _detail(session, document)
 
@@ -244,9 +141,9 @@ async def update_note(
 
     body_changed = False
     if provided.get("title") is not None:
-        _lock_title(document, provided["title"])
+        notes_service.lock_title(document, provided["title"])
     if provided.get("body_markdown") is not None:
-        await _apply_body(session, document, provided["body_markdown"])
+        await notes_service.apply_body(session, document, provided["body_markdown"])
         body_changed = True
 
     session.add(
@@ -326,8 +223,8 @@ async def restore_note_version(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="note version not found")
 
     await _snapshot_current(session, document)
-    _lock_title(document, target.title or "")
-    await _apply_body(session, document, target.body)
+    notes_service.lock_title(document, target.title or "")
+    await notes_service.apply_body(session, document, target.body)
     session.add(
         IngestionEvent(
             document_id=document.id,

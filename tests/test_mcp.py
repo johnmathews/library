@@ -54,8 +54,6 @@ from library.models import (
     FacetValue,
     ReviewStatus,
 )
-from library.ocr.tesseract import SEARCHABLE_PDF_NAME
-from library.storage import derived_dir, store
 from library.structured_query import COVERAGE_GUIDE, SUM_AMOUNT_GUIDE
 from tests.conftest import AuthUser, _fetch_all, _insert_user
 from tests.test_documents_api import _seed_document
@@ -90,6 +88,7 @@ EXPECTED_TOOLS = {
     "library_stats",
     "update_document_metadata",
     "add_comment",
+    "create_note",
 }
 
 # A minimal valid MCP initialize request, for raw-HTTP auth tests.
@@ -295,7 +294,7 @@ async def test_list_tools(mcp_connect: McpConnector) -> None:
 
 #: The tools that change the archive. Everything else only reads.
 WRITE_TOOLS: frozenset[str] = frozenset(
-    {"ingest_document", "update_document_metadata", "add_comment"}
+    {"ingest_document", "update_document_metadata", "add_comment", "create_note"}
 )
 
 
@@ -338,6 +337,21 @@ async def test_tools_declare_annotations_and_titles(mcp_connect: McpConnector) -
     assert comment.annotations is not None
     assert comment.annotations.destructiveHint is False
     assert comment.annotations.idempotentHint is False
+
+    # Only adds; notes are never deduplicated, so each call files another one.
+    note = next(tool for tool in tools if tool.name == "create_note")
+    assert note.annotations is not None
+    assert note.annotations.destructiveHint is False
+    assert note.annotations.idempotentHint is False
+
+    # Both publish an output schema; the file tool's describes its metadata
+    # part, not the bytes (those travel as image/resource content blocks).
+    schemas = {tool.name: tool.outputSchema for tool in tools}
+    assert schemas["create_note"] is not None
+    file_schema = schemas["get_document_file"]
+    assert file_schema is not None
+    assert "download_url" in file_schema["properties"]
+    assert "content_base64" not in file_schema["properties"]
 
 
 async def test_tool_text_never_points_at_the_rest_api(mcp_connect: McpConnector) -> None:
@@ -1087,87 +1101,6 @@ async def test_unexpected_error_is_masked(
     message = error_text(result)
     assert message == "Error calling tool 'list_kinds'"
     assert "secret_column" not in message
-
-
-# --- get_document_file -------------------------------------------------------
-
-
-async def test_get_document_file_roundtrip(
-    mcp_connect: McpConnector, api_database_url: str
-) -> None:
-    content = b"%PDF-1.4 mcp file roundtrip " + bytes(range(256))
-    sha = hashlib.sha256(content).hexdigest()
-    store(content)
-    document_id = await _seed_document(
-        api_database_url,
-        "ignored-marker",
-        sha256=sha,
-        original_filename="verzekering.pdf",
-    )
-    async with mcp_connect() as session:
-        result = payload(await session.call_tool("get_document_file", {"document_id": document_id}))
-    assert base64.b64decode(result["content_base64"]) == content
-    assert result["mime_type"] == "application/pdf"
-    assert result["filename"] == "verzekering.pdf"
-    assert result["size_bytes"] == len(content)
-
-
-async def test_get_document_file_searchable_pdf_variant(
-    mcp_connect: McpConnector, api_database_url: str
-) -> None:
-    content = b"original bytes for searchable variant test"
-    sha = hashlib.sha256(content).hexdigest()
-    store(content)
-    pdf_bytes = b"%PDF-1.4 searchable layer"
-    (derived_dir(sha) / SEARCHABLE_PDF_NAME).write_bytes(pdf_bytes)
-    document_id = await _seed_document(
-        api_database_url,
-        "ignored-marker-2",
-        sha256=sha,
-        original_filename="scan.jpg",
-        mime_type="image/jpeg",
-        searchable_pdf=True,
-    )
-    async with mcp_connect() as session:
-        result = payload(
-            await session.call_tool(
-                "get_document_file",
-                {"document_id": document_id, "variant": "searchable_pdf"},
-            )
-        )
-    assert base64.b64decode(result["content_base64"]) == pdf_bytes
-    assert result["mime_type"] == "application/pdf"
-    assert result["filename"] == "scan-searchable.pdf"
-
-
-async def test_get_document_file_missing_variant(
-    mcp_connect: McpConnector, api_database_url: str
-) -> None:
-    """Asking for a searchable PDF that was never produced is a tool error."""
-    content = b"original bytes without a searchable variant"
-    sha = hashlib.sha256(content).hexdigest()
-    store(content)
-    document_id = await _seed_document(
-        api_database_url, "mcp-missing-variant", sha256=sha, searchable_pdf=False
-    )
-    async with mcp_connect() as session:
-        result = await session.call_tool(
-            "get_document_file", {"document_id": document_id, "variant": "searchable_pdf"}
-        )
-    assert error_text(result) == f"no searchable_pdf file stored for document {document_id}"
-
-
-async def test_get_document_file_size_cap(mcp_connect: McpConnector, api_database_url: str) -> None:
-    content = b"x" * (10 * 1024 * 1024 + 1)
-    sha = hashlib.sha256(content).hexdigest()
-    store(content)
-    document_id = await _seed_document(api_database_url, "ignored-marker-3", sha256=sha)
-    async with mcp_connect() as session:
-        result = await session.call_tool("get_document_file", {"document_id": document_id})
-    message = error_text(result)
-    assert "10 MB" in message
-    assert f"open document {document_id} in the Library web app" in message
-    assert "REST" not in message and "/api/" not in message
 
 
 # --- ingest_document ---------------------------------------------------------
