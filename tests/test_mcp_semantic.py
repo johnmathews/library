@@ -189,6 +189,70 @@ async def test_semantic_search_limit_caps_results_not_coverage(
     assert result["coverage"] == {"matched": 3, "returned": 2, "unembedded": 0}
 
 
+async def test_semantic_search_output_fits_a_client_budget(
+    connect: Connector, token: str, api_database_url: str, embeds_to_e0: list[str]
+) -> None:
+    """At the largest ``limit``, with every document carrying three full-size
+    passages, the passages together stay inside ``SEMANTIC_PASSAGE_BUDGET``
+    (MCP clients cap a tool result; Claude Code's default is 25k tokens).
+    Every result keeps the start of its best passage, and the cut is flagged.
+    ``limit`` above ``SEMANTIC_LIMIT_MAX`` is refused."""
+    tag = f"mcp-semantic-budget-{secrets.token_hex(4)}"
+    limit = mcp_server.SEMANTIC_LIMIT_MAX
+    passage = "x" * 1800
+    for index in range(limit):
+        document_id = await _seed_document(
+            api_database_url, f"{tag}-{index}", tag_slugs=[tag], ocr_text="nothing"
+        )
+        similarity = 0.9 - index * 0.01
+        await _add_chunks(
+            api_database_url,
+            document_id,
+            [(f"best {index} {passage}", graded_vector(similarity), 1)]
+            + [(passage, graded_vector(similarity - 0.001 * n), 1) for n in (1, 2)],
+        )
+
+    async with connect(token) as session:
+        result = payload(
+            await session.call_tool(
+                "semantic_search", {"query": "zzzq", "tags": [tag], "limit": limit}
+            )
+        )
+        too_many = await session.call_tool(
+            "semantic_search", {"query": "zzzq", "tags": [tag], "limit": limit + 1}
+        )
+
+    assert len(result["results"]) == limit
+    total = sum(len(text) for hit in result["results"] for text in hit["passages"])
+    assert total <= mcp_server.SEMANTIC_PASSAGE_BUDGET
+    for index, hit in enumerate(result["results"]):
+        assert hit["passages"][0].startswith(f"best {index} ")
+        assert hit["passages_truncated"] is True
+    assert too_many.isError
+
+
+async def test_semantic_search_short_passages_are_not_cut(
+    connect: Connector, token: str, api_database_url: str, embeds_to_e0: list[str]
+) -> None:
+    """Passages that fit the budget come back whole and unflagged."""
+    tag = f"mcp-semantic-whole-{secrets.token_hex(4)}"
+    document_id = await _seed_document(
+        api_database_url, f"{tag}-doc", tag_slugs=[tag], ocr_text="nothing"
+    )
+    await _add_chunks(
+        api_database_url,
+        document_id,
+        [("first passage", graded_vector(0.9), 1), ("second passage", graded_vector(0.8), 1)],
+    )
+    async with connect(token) as session:
+        result = payload(
+            await session.call_tool("semantic_search", {"query": "zzzq", "tags": [tag]})
+        )
+    (hit,) = result["results"]
+    assert hit["passages"] == ["first passage", "second passage"]
+    assert hit["passages_truncated"] is False
+
+
 async def test_semantic_search_filters_reach_the_retriever(
     connect: Connector, token: str, api_database_url: str, embeds_to_e0: list[str]
 ) -> None:

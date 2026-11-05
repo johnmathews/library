@@ -157,6 +157,12 @@ DOCUMENT_TEXT_MIN_CHARS: int = 1_000
 DOCUMENT_TEXT_MAX_CHARS: int = 50_000
 MAX_FILE_BYTES: int = 10 * 1024 * 1024
 SEARCH_LIMIT_MAX: int = 50
+#: semantic_search returns passage text with every hit, so its result grows
+#: with ``limit`` far faster than search_documents'. MCP clients cap a tool
+#: result (Claude Code's default is 25k tokens), so both the hit count and
+#: the passage characters per call are bounded.
+SEMANTIC_LIMIT_MAX: int = 20
+SEMANTIC_PASSAGE_BUDGET: int = 24_000
 #: The largest value a Postgres BIGINT (``documents.id``) holds. Bounding the
 #: argument makes an out-of-range id a validation error, not a SQL error.
 MAX_DOCUMENT_ID: int = 2**63 - 1
@@ -573,9 +579,14 @@ class SemanticSearchHit(DocumentFields):
     )
     passages: list[str] = Field(
         description=(
-            "The document's passages nearest the query, best first. Empty when the "
-            "document matched on keywords only (it is not indexed for meaning yet)."
+            "The document's passages nearest the query, best first, shortened to fit "
+            "the result. Empty when only the keyword ranking found the document; "
+            "coverage.unembedded says whether documents are missing from the meaning "
+            "index. Read the full text with get_document."
         )
+    )
+    passages_truncated: bool = Field(
+        description="True when passages were dropped or shortened to fit the result."
     )
     page_number: int | None = Field(
         description="The page of the best passage, when the document has pages."
@@ -900,7 +911,7 @@ async def semantic_search(
     date_to: DateToFilter = None,
     limit: Annotated[
         int,
-        Field(ge=1, le=SEARCH_LIMIT_MAX, description="Maximum number of documents."),
+        Field(ge=1, le=SEMANTIC_LIMIT_MAX, description="Maximum number of documents."),
     ] = 10,
 ) -> SemanticSearchResults:
     """Find documents by what they say: meaning and keywords together.
@@ -952,16 +963,41 @@ async def semantic_search(
             top_k=limit,
             chunks_per_doc=settings.retrieve_chunks_per_doc,
         )
-        results = [
-            SemanticSearchHit(
-                **list_item_fields(hit.document),
-                score=hit.score,
-                passages=list(hit.chunk_texts),
-                page_number=hit.page_number,
+        per_hit = SEMANTIC_PASSAGE_BUDGET // max(1, len(search.hits))
+        results = []
+        for hit in search.hits:
+            passages, truncated = _fit_passages(hit.chunk_texts, per_hit)
+            results.append(
+                SemanticSearchHit(
+                    **list_item_fields(hit.document),
+                    score=hit.score,
+                    passages=passages,
+                    passages_truncated=truncated,
+                    page_number=hit.page_number,
+                )
             )
-            for hit in search.hits
-        ]
     return SemanticSearchResults(results=results, coverage=search.coverage)
+
+
+def _fit_passages(passages: Sequence[str], budget: int) -> tuple[list[str], bool]:
+    """``passages`` best first, cut to at most ``budget`` characters in total.
+
+    Whole passages are kept while they fit; the first one that does not is
+    shortened to the space left (ending in an ellipsis) and the rest are
+    dropped, so the best passage always keeps its start.
+    """
+    kept: list[str] = []
+    used = 0
+    for passage in passages:
+        room = budget - used
+        if len(passage) <= room:
+            kept.append(passage)
+            used += len(passage)
+            continue
+        if room > 1:
+            kept.append(passage[: room - 1] + "…")
+        return kept, True
+    return kept, False
 
 
 @mcp.tool(title="Get library context", annotations=READ_ONLY)

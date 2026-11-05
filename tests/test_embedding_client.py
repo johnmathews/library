@@ -82,3 +82,24 @@ async def test_embed_texts_raises_on_dimension_mismatch() -> None:
 
     with pytest.raises(EmbeddingError):
         await embed_texts(["a"], settings=_settings(), client=_client(handler))
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, text="<html>proxy login</html>"),
+        httpx.Response(200, json=[5]),
+        httpx.Response(200, json=[["not-a-number"] * EMBEDDING_DIM]),
+    ],
+    ids=["non-json-200", "vector-not-a-list", "value-not-a-number"],
+)
+async def test_embed_texts_malformed_200_is_embedding_error(response: httpx.Response) -> None:
+    """A 200 the client cannot read (a proxy's HTML page, a malformed payload)
+    is an ``EmbeddingError`` like any other unusable answer, so callers that
+    degrade on it (MCP semantic_search, Ask) still do."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return response
+
+    with pytest.raises(EmbeddingError):
+        await embed_texts(["a"], settings=_settings(), client=_client(handler))
