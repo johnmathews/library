@@ -1,7 +1,7 @@
 # Observability
 
-**Status:** active. **Last updated:** 2026-11-05 (MCP tool calls: new `library.mcp.calls` and `library.mcp.duration` metrics and the `mcp_call` log line, §3.1; the API process now has a log handler). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §3.1 and the MCP rows of §3. Metric names, labels and buckets asserted from a Prometheus scrape in `tests/test_telemetry.py`; outcomes and the log line asserted through an MCP client in `tests/test_mcp.py`, each seen red under a hand-made mutant; the log line seen in a locally built image's `docker compose logs api`.
+**Status:** active. **Last updated:** 2026-11-05 (§3.1: the `mcp_rejected` log line for refused `/mcp` requests; MCP tool-call metrics and the `mcp_call` line before it). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §3.1 and the MCP rows of §3. Metric names, labels and buckets asserted from a Prometheus scrape in `tests/test_telemetry.py`; outcomes and the log line asserted through an MCP client in `tests/test_mcp.py`, each seen red under a hand-made mutant; the log line seen in a locally built image's `docker compose logs api`. The `mcp_rejected` line asserted in `tests/test_mcp.py` and `tests/test_mcp_rejected_log.py`.
 
 > Purpose
 >
@@ -116,6 +116,20 @@ is separate and less careful: it logs a traceback for an unexpected error, the
 validation detail (which includes the offending value) for a call with invalid
 arguments, and at DEBUG every call's arguments, so leave `FASTMCP_LOG_LEVEL` at
 its default (`INFO`) in production.
+
+A request the `/mcp` transport refuses before any tool runs (a 4xx other than
+the 401 sign-in challenge) logs one line on `library.mcp_rejected_log`, also at
+INFO:
+
+```text
+2026-11-05 13:45:12,345 INFO library.mcp_rejected_log mcp_rejected status=400 method=tools/list protocol_version=2026-07-28 reason=Bad Request: Unsupported protocol version: 2026-07-28. Supported versions: …
+```
+
+`method` is the JSON-RPC method (`-` when the body is not a single JSON
+object), `reason` is the error message the transport gave, cut to 200
+characters. Params, arguments and bodies are never logged. The usual cause
+is a client on a newer MCP revision probing before it falls back to
+`initialize` ([mcp.md §1.2](mcp.md)).
 
 ```promql
 # Error rate per tool over the last hour

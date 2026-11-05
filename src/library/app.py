@@ -40,6 +40,7 @@ from library.config import Settings, get_settings
 from library.events_broker import EventsBroker
 from library.jobs import job_app, procrastinate_conninfo
 from library.llm import oauth as llm_oauth
+from library.mcp_rejected_log import McpRejectedLog
 from library.mcp_server import build_mcp_auth, create_mcp_http_app, oauth_provider_of
 
 logger = logging.getLogger(__name__)
@@ -509,7 +510,9 @@ def create_app() -> FastAPI:
     # /mcp/authorize, /mcp/token, /mcp/register and /mcp/revoke live in the
     # mount too. /mcp without the slash is rewritten onto the mount before
     # routing.
-    app.mount(MCP_MOUNT_PATH, mcp_http)
+    # McpRejectedLog logs why a 4xx (not 401) was answered: the 400 a client on a
+    # newer MCP revision gets on its first request (docs/mcp.md 1.2).
+    app.mount(MCP_MOUNT_PATH, McpRejectedLog(mcp_http))
     # Added first = innermost: the slash rewrite (added next, outer) runs
     # before it, and it sees the path the mount will route on.
     app.add_middleware(OAuthRateLimit)
