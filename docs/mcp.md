@@ -1,7 +1,7 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.3: new `create_note` tool and the *Notes* paragraph; `get_document_file` returns content blocks, inline up to 2 MB, and a `download_url` above that; §1.4 size caps). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to the `create_note` and `get_document_file` rows, the *Notes* and *Files* paragraphs and the size-cap bullet. The tests in `tests/test_mcp_notes_files.py` pass, each seen red first or killed by a hand-made mutant; the wire shape was read from an in-process MCP client call.
+**Status:** active. **Last updated:** 2026-11-05 (§1.4: new *Monitoring* bullet, per-tool metrics and a call log line). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to the *Monitoring* bullet, read against `ToolCallMetrics` in `src/library/mcp_server.py`, whose tests in `tests/test_mcp.py` were each seen red under a hand-made mutant.
 **Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -520,6 +520,12 @@ description tells the model to give it to the user and not fetch it.
   from the process-wide pool the REST API uses (5 connections plus 10
   overflow). A client fanning out many parallel calls queues on that
   pool instead of exhausting Postgres connections.
+- **Monitoring:** every tool call is counted and timed by tool and
+  outcome (`library_mcp_calls_total`, `library_mcp_duration_seconds`) and
+  logged as one `mcp_call` line with the caller's user id, never with
+  arguments or results ([observability.md §3.1](observability.md)). CI's
+  `compose-smoke` job calls `library_stats` on the built image the way
+  the reverse proxy forwards it ([deployment.md §1.4](deployment.md)).
 
 ## 1.5 OAuth endpoints
 

@@ -1,4 +1,4 @@
-"""OpenTelemetry metrics for the LLM surface.
+"""OpenTelemetry metrics for the LLM surface: Ask turns and MCP tool calls.
 
 WHAT THIS IS FOR
 ----------------
@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
 
@@ -154,11 +154,11 @@ def _parse_otlp_headers(raw: str | None) -> dict[str, str]:
     return out
 
 
-def _meter() -> metrics.Meter:
+def _meter(name: str = _METER_NAME) -> metrics.Meter:
     """Our provider when we have one, else the global (a no-op if unconfigured)."""
     if _provider is not None:
-        return _provider.get_meter(_METER_NAME)
-    return metrics.get_meter(_METER_NAME)
+        return _provider.get_meter(name)
+    return metrics.get_meter(name)
 
 
 # --- Instruments ------------------------------------------------------------
@@ -171,15 +171,27 @@ def _meter() -> metrics.Meter:
 _instruments: dict[str, Any] = {}
 
 
-def _counter(name: str, unit: str, description: str) -> Any:
+def _counter(name: str, unit: str, description: str, *, meter: str = _METER_NAME) -> Any:
     if name not in _instruments:
-        _instruments[name] = _meter().create_counter(name, unit=unit, description=description)
+        _instruments[name] = _meter(meter).create_counter(name, unit=unit, description=description)
     return _instruments[name]
 
 
-def _histogram(name: str, unit: str, description: str) -> Any:
+def _histogram(
+    name: str,
+    unit: str,
+    description: str,
+    *,
+    meter: str = _METER_NAME,
+    buckets: Sequence[float] | None = None,
+) -> Any:
     if name not in _instruments:
-        _instruments[name] = _meter().create_histogram(name, unit=unit, description=description)
+        _instruments[name] = _meter(meter).create_histogram(
+            name,
+            unit=unit,
+            description=description,
+            explicit_bucket_boundaries_advisory=buckets,
+        )
     return _instruments[name]
 
 
@@ -258,6 +270,37 @@ def record_error(*, backend: str, kind: str) -> None:
     _counter("library.ask.errors", "{error}", "Failed Ask turns by category").add(
         1, {"backend": backend, "kind": kind}
     )
+
+
+#: The MCP tool server's meter scope (OTLP only; Prometheus names ignore it).
+_MCP_METER_NAME = "library.mcp"
+
+#: Seconds. The SDK's default boundaries (0, 5, 10, 25 … 10000) are sized for
+#: milliseconds, which would put every tool call — tens of milliseconds to a
+#: few seconds — into the first bucket and make latency unreadable.
+_MCP_DURATION_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
+
+
+def record_mcp_call(tool: str, outcome: str, duration_s: float) -> None:
+    """One MCP ``tools/call``: a count and a duration, by tool and outcome.
+
+    ``outcome`` is ``ok``, ``tool_error`` (refused with a message written for
+    the model: not found, bad arguments, a stale preview) or ``error`` (an
+    unexpected exception, masked before it reached the client). ``tool`` must
+    be one of the server's own tool names, never a client-supplied string:
+    the caller maps unknown names to one placeholder, since a client can send
+    anything and each distinct value is a new series. No user, argument or
+    result is recorded.
+    """
+    attrs = {"tool": tool, "outcome": outcome}
+    _counter("library.mcp.calls", "{call}", "MCP tool calls", meter=_MCP_METER_NAME).add(1, attrs)
+    _histogram(
+        "library.mcp.duration",
+        "s",
+        "Wall-clock time of an MCP tool call",
+        meter=_MCP_METER_NAME,
+        buckets=_MCP_DURATION_BUCKETS,
+    ).record(duration_s, attrs)
 
 
 def observe_claude_credentials(read_status: Callable[[], str | None]) -> None:

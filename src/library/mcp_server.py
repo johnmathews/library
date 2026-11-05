@@ -45,6 +45,14 @@ Anything else a tool raises is masked (``mask_error_details=True``) to a
 generic "Error calling tool …", so database errors never leak SQL or
 schema to a client. Error text never points at Library's REST API: an
 LLM connector cannot call it.
+
+Metrics
+-------
+``ToolCallMetrics`` (an ``on_call_tool`` middleware) counts and times every
+call through ``telemetry.record_mcp_call`` and logs one ``mcp_call`` line
+on ``call_logger`` (tool, user id, outcome, duration), never arguments or
+results. It re-raises everything, so it changes no result. See
+docs/observability.md.
 """
 
 import base64
@@ -53,6 +61,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
@@ -63,10 +72,11 @@ from urllib.parse import quote, urlsplit
 
 import fastmcp
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import FastMCPError, NotFoundError, ToolError
 from fastmcp.server.auth import AccessToken, AuthProvider, MultiAuth, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.http import StarletteWithLifespan, create_streamable_http_app
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import ToolResult
 from mcp.server.auth.handlers.metadata import ProtectedResourceMetadataHandler
 from mcp.server.auth.routes import build_metadata, build_resource_metadata_url, cors_middleware
@@ -74,6 +84,7 @@ from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOption
 from mcp.shared.auth import ProtectedResourceMetadata
 from mcp.types import (
     BlobResourceContents,
+    CallToolRequestParams,
     ContentBlock,
     EmbeddedResource,
     ImageContent,
@@ -91,7 +102,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp
 
 import library
-from library import comments_service, matters, notes_service, projects, taxonomy
+from library import comments_service, matters, notes_service, projects, taxonomy, telemetry
 from library.ask.context import load_archive_context, render_archive_context
 from library.auth.oauth_provider import LibraryOAuthProvider
 from library.auth.service import validate_api_token
@@ -530,6 +541,82 @@ def _current_user_id() -> int | None:
     claims = getattr(token, "claims", None) or {}
     user_id = claims.get("user_id")
     return user_id if isinstance(user_id, int) else None
+
+
+# ------------------------------------------------------------------ metrics
+
+#: One INFO line per tool call. Its own logger so the API process can turn
+#: on exactly this at INFO (main.py) without every other ``library`` logger.
+call_logger = logging.getLogger(f"{__name__}.calls")
+
+#: The ``tool`` label for a name the server does not have. A client can send
+#: any string, and every distinct label value is a new time series.
+UNKNOWN_TOOL = "unknown"
+
+
+def _is_masked(exc: ToolError, tool: str) -> bool:
+    """Whether FastMCP produced ``exc`` by masking an unexpected exception.
+
+    FastMCP masks inside ``call_tool``, so a middleware only ever sees the
+    ``ToolError`` it made. Its text is the one fixed marker
+    (``server.py``: ``f"Error calling tool {name!r}"``); a tool's own
+    ``ToolError`` is written for the model and never starts that way.
+    ``test_tool_call_metrics_recorded`` pins this against the installed
+    FastMCP.
+    """
+    return str(exc).startswith(f"Error calling tool {tool!r}")
+
+
+class ToolCallMetrics(Middleware):
+    """Counts, times and logs every ``tools/call``, without changing it.
+
+    Records ``telemetry.record_mcp_call`` and logs the tool name, the
+    caller's user id, the outcome and the duration. It never reads the
+    arguments or the result: both can hold document text. Every exception is
+    re-raised untouched, so errors reach the client exactly as before
+    (``ToolError`` text verbatim, anything else masked).
+    """
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[CallToolRequestParams],
+        call_next: CallNext[CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
+        tool = context.message.name
+        started = time.perf_counter()
+        # Anything not classified below (a BaseException such as a
+        # cancellation) counts as an error.
+        outcome = "error"
+        try:
+            result = await call_next(context)
+        except NotFoundError:
+            # The only path for a name the server does not have: FastMCP
+            # resolves the tool before anything else can fail.
+            tool, outcome = UNKNOWN_TOOL, "tool_error"
+            raise
+        except ToolError as exc:
+            outcome = "error" if _is_masked(exc, tool) else "tool_error"
+            raise
+        except FastMCPError:
+            # Argument validation and the like: refused with a message.
+            outcome = "tool_error"
+            raise
+        else:
+            outcome = "ok"
+            return result
+        finally:
+            duration_s = time.perf_counter() - started
+            telemetry.record_mcp_call(tool, outcome, duration_s)
+            call_logger.info(
+                "mcp_call tool=%s user_id=%s outcome=%s duration_ms=%.0f",
+                tool,
+                _current_user_id(),
+                outcome,
+                duration_s * 1000,
+            )
+
+
+mcp.add_middleware(ToolCallMetrics())
 
 
 async def _get_document(

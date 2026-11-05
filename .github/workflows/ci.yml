@@ -561,6 +561,15 @@ jobs:
           load: true
           set: |
             *.cache-from=type=gha,scope=library-image
+      # As production runs it: with a public origin set, /mcp is also an
+      # OAuth authorization server and its 401 names the discovery document;
+      # with metrics on, /metrics serves the MCP series. Compose hands .env to
+      # the api container (env_file); written after the build, so the image
+      # is unchanged.
+      - name: Turn on MCP OAuth and metrics, as production runs them
+        run: |
+          printf '%s\n' 'LIBRARY_PUBLIC_BASE_URL=https://library.example.com' \
+            'LIBRARY_OTEL_METRICS_ENABLED=true' > .env
       - name: Start the full stack
         run: docker compose up -d
       - name: Wait for the API
@@ -609,6 +618,28 @@ jobs:
             -d '{"username": "smoke", "password": "smoke-password-123"}' \
             http://localhost:8000/api/auth/login
           curl -fsS -b cookies.txt http://localhost:8000/api/documents | grep -q '"items"'
+      # Every other MCP test runs in-process with Host: testserver. This one
+      # sends what production's tunnel and proxy send (a public Host and
+      # X-Forwarded-Proto: https) to the built image, where a FastMCP
+      # Host/Origin regression would show (3.4.3 once broke exactly that).
+      # It creates a token, checks the no-token 401, then runs initialize,
+      # notifications/initialized and tools/call library_stats.
+      - name: MCP over production's Host and scheme
+        run: |
+          python3 scripts/mcp_smoke.py --base-url http://localhost:8000 \
+            --host library.example.com --username smoke --password smoke-password-123 \
+            --resource-metadata https://library.example.com/.well-known/oauth-protected-resource/mcp
+      # The call log has to reach the container's output, not merely be
+      # written: uvicorn configures no handler for `library` loggers, and an
+      # INFO record without one is dropped (main.py adds it).
+      - name: The MCP call is in the API log
+        run: |
+          docker compose logs api \
+            | grep -E 'mcp_call tool=library_stats user_id=[0-9]+ outcome=ok duration_ms=[0-9]+'
+      - name: /metrics counts the MCP call
+        run: |
+          curl -fsS http://localhost:8000/metrics \
+            | grep -E '^library_mcp_calls_total\{outcome="ok",tool="library_stats"\} 1\.0$'
       - name: Logs on failure
         if: failure()
         run: docker compose logs

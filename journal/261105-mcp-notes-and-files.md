@@ -1,10 +1,12 @@
-# MCP notes and file results
+# MCP notes, file results, CI smoke test and tool metrics
 
 > Purpose
 >
 > Why the MCP server gained `create_note` and why `get_document_file` now
 > returns content blocks with a 2 MB inline cap (work unit W11, finding
-> F14), and what is left for live client verification.
+> F14), and what is left for live client verification. Then (W12, findings
+> F11 and F16) how CI came to make a real MCP call against the built image,
+> and how tool calls became measurable.
 
 **Date:** 2026-11-05
 **Branch:** `eng-mcp-files`
@@ -90,3 +92,77 @@ in W13.
   `StringDataRightTruncationError`, so it is an unhandled 500). Not changed
   here, because REST behaviour is out of scope; the MCP tool caps titles at
   200.
+
+## 6. W12: CI smoke test and tool metrics
+
+### 6.1 Context
+
+F11: no CI gate sent an MCP request to the built image. Every MCP test runs
+in-process with `Host: testserver`, and the one regression of this kind
+already seen (fastmcp 3.4.3's Host/Origin guard behind a proxy) only shows
+under a real server and a real `Host`. F16: after launch nothing showed
+which tools were used, slow or failing; uvicorn's `POST /mcp/ 200` was the
+only trace.
+
+### 6.2 What changed
+
+- **`scripts/mcp_smoke.py`** (stdlib only) runs in `compose-smoke` with a
+  public `Host` and `X-Forwarded-Proto: https`. It checks the no-token `401`
+  and its `resource_metadata`, logs in, creates a token, runs `initialize`,
+  `notifications/initialized` and `tools/call library_stats`, and requires
+  `isError: false`. The job now writes a `.env` that turns MCP OAuth and
+  metrics on, as production has them. Two more steps then grep the call's
+  log line from `docker compose logs api` and its counter from `/metrics`.
+- **`telemetry.record_mcp_call(tool, outcome, duration_s)`** adds
+  `library.mcp.calls` and `library.mcp.duration` (seconds, with explicit
+  buckets from 10 ms to 30 s). Prometheus renders them as
+  `library_mcp_calls_total` and `library_mcp_duration_seconds`.
+- **`ToolCallMetrics`**, an `on_call_tool` middleware, records the metric and
+  logs `mcp_call tool=… user_id=… outcome=… duration_ms=…`, and re-raises
+  everything untouched.
+- **`main.py` gives the API process a log handler.** See 6.4.
+
+### 6.3 Evidence
+
+- Red proofs, each run locally against a `docker compose` build of this
+  tree (no `act` installed): the MCP mount moved to `/mcp-broken` gave
+  `mcp-smoke: FAIL no token: expected 401, got 405`; the strict Host guard
+  switched on (the 3.4.3 failure) gave `got 421: Misdirected Request`; and
+  without `main.py`'s handler the smoke passed but the log grep found nothing.
+  The final tree went green on all three steps.
+- Nine hand-made mutants each turned a metrics or log test red, among them
+  the middleware not registered (the pre-W12 state), masked errors counted as
+  `tool_error`, an unknown tool name kept as the label, arguments in the log
+  line, and the SDK's default buckets. Three more turned the script's own
+  tests red.
+- `mcp_server.py` stays at 100% line coverage over `tests/test_mcp*.py`.
+
+### 6.4 Things learned
+
+- **An INFO log in the API process went nowhere.** uvicorn configures only
+  its own loggers, so a `library` record below WARNING had no handler and was
+  dropped. That held for every INFO line the API ever wrote, not only the new
+  one. `main.py` now adds a root handler at WARNING (the worker's format) and
+  turns on just the call logger at INFO. The compose-smoke log step proves it
+  in the image, and the red run above shows why it is needed.
+- **FastMCP masks inside `call_tool`**, so a middleware never sees the
+  original exception, only the `ToolError("Error calling tool '…'")` it
+  became. The middleware tells `error` from `tool_error` by that fixed text.
+  `test_tool_call_metrics_recorded` pins the text against the installed
+  FastMCP, so an upgrade that changes it goes red.
+- **A client picks the tool name.** An unknown name raises FastMCP's
+  `NotFoundError` before any tool runs, and is counted as `unknown`. Without
+  that, every distinct string a client sent would become a new time series.
+
+### 6.5 What is deliberately not done
+
+- No token CLI. The plan assumed one (`library token create`), but none
+  exists, so the smoke uses the documented login-then-`POST /api/auth/tokens`
+  path.
+- The user is not a metric label (cardinality); it is in the log line only.
+- FastMCP's own logger still prints argument values for a call that fails
+  validation, and every call's arguments at DEBUG. That is upstream; the
+  observability doc says to leave `FASTMCP_LOG_LEVEL` at `INFO`.
+- The red proof ran on a local arm64 build, not on the CI runner. The CI run
+  of this branch is the first time the steps run on amd64 with the full
+  stack, embedder included.

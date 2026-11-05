@@ -13,7 +13,7 @@ CI checks it is current.
 
 ## November 2026
 
-- **2026-11-05** — [MCP notes and file results](261105-mcp-notes-and-files.md)
+- **2026-11-05** — [MCP notes, file results, CI smoke test and tool metrics](261105-mcp-notes-and-files.md)
 - **2026-11-05** — [MCP document reads, semantic search and money totals](261105-mcp-document-reads.md)
 - **2026-11-04** — [MCP OAuth consent page and rate limits](261104-mcp-oauth-consent-and-rate-limits.md)
 - **2026-11-04** — [MCP OAuth authorization server](261104-mcp-oauth-authorization-server.md)

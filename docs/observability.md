@@ -1,13 +1,14 @@
 # Observability
 
-**Status:** active. **Last updated:** 2026-10-22 (new `library.claude_credentials.healthy` gauge, and §7 now records the two login alerts and drops "no verified scrape": Prometheus scrapes the deployed host as `job="library"`). Earlier: 2026-08-21 (new: OpenTelemetry metrics for the Ask surface, a Prometheus scrape endpoint, an optional OTLP exporter, and Claude Code's own CLI telemetry for the subscription backend).
-**Last verified:** 2026-10-22 — method: partial, scoped to the gauge row and §7. The gauge's exposition (`1`, `0`, absent) is asserted by scraping in `tests/test_telemetry.py` and through the app in `tests/test_llm_backend_config.py`; the scrape claim by querying `library_ask_errors_total` from the production Prometheus, which returned the series with `job="library"`. Earlier: 2026-08-21 — method: every metric name, attribute and setting below resolved against `src/library/telemetry.py`, `src/library/api/ask.py` and `src/library/config.py`; the exposition format checked by scraping `GET /metrics` in a test that records first and asserts the series appear; the content-logging guard checked by 8 tests including one per forbidden variable. **Not verified:** no dashboard has been built and no scrape has run against the deployed host — the Prometheus config below is written from the endpoint's actual output, not from an observed scrape.
+**Status:** active. **Last updated:** 2026-11-05 (MCP tool calls: new `library.mcp.calls` and `library.mcp.duration` metrics and the `mcp_call` log line, §3.1; the API process now has a log handler). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §3.1 and the MCP rows of §3. Metric names, labels and buckets asserted from a Prometheus scrape in `tests/test_telemetry.py`; outcomes and the log line asserted through an MCP client in `tests/test_mcp.py`, each seen red under a hand-made mutant; the log line seen in a locally built image's `docker compose logs api`.
 
 > Purpose
 >
 > What the application measures about itself, how those measurements leave the
 > process, and the two rules — cardinality and privacy — that keep the system
-> from hurting you. Ask is the only instrumented surface today.
+> from hurting you. Ask and the MCP server's tool calls are the instrumented
+> surfaces today.
 
 ## 1. Why this exists
 
@@ -40,14 +41,16 @@ Prometheus can pull from `/metrics` while an OTLP exporter simultaneously pushes
 to a collector — same instruments, same measurements, two destinations, no
 double counting. Each reader gets its own view of the stream.
 
-**Metrics only, no traces or logs.** The questions above are aggregate; traces
-answer per-request questions and cost far more to store. That is a decision to
-revisit, not a limitation to work around.
+**Metrics, no traces.** The questions above are aggregate; traces answer
+per-request questions and cost far more to store. That is a decision to
+revisit, not a limitation to work around. The one structured log stream is
+the MCP call line (§3.1).
 
 ## 3. What is measured
 
-All emitted by `library.ask`; Prometheus renders `.` as `_` and appends `_total`
-to counters.
+Emitted under the meters `library.ask` and `library.mcp`; Prometheus renders
+`.` as `_`, appends `_total` to counters and `_seconds` to second-valued
+histograms.
 
 | Metric | Type | Attributes | The question it answers |
 | --- | --- | --- | --- |
@@ -58,6 +61,8 @@ to counters.
 | `library.ask.tool_calls` | histogram | `backend`, `model`, `outcome` | Whether raising the loop ceiling from 4 to 8 is being used |
 | `library.ask.citations` | histogram | `backend`, `model`, `outcome` | Whether answers are grounded — a quality proxy |
 | `library.ask.errors` | counter | `backend`, `kind` | Failures by category, previously only greppable in logs |
+| `library.mcp.calls` (`library_mcp_calls_total`) | counter | `tool`, `outcome` | Which MCP tools are used, and how often they fail. §3.1 |
+| `library.mcp.duration` (`library_mcp_duration_seconds`) | histogram (s) | `tool`, `outcome` | Which tools are slow. Buckets 10 ms to 30 s. §3.1 |
 | `library.claude_credentials.healthy` | gauge | none | Whether Ask's subscription login works: `1` usable, `0` a human must log in again, absent where OAuth is not in use. Read on each scrape; see [llm-backends.md §5.3](llm-backends.md) |
 
 `backend` is `api` or `subscription`, and it changes what `cost` *means*: the
@@ -74,6 +79,47 @@ comparable.
 sum(rate(library_ask_tokens_total{kind="cache_read"}[1h]))
 /
 sum(rate(library_ask_tokens_total{kind=~"cache_read|fresh|cache_write"}[1h]))
+```
+
+### 3.1 MCP tool calls
+
+`ToolCallMetrics`, a FastMCP `on_call_tool` middleware in
+`src/library/mcp_server.py`, sees every `tools/call` from every client. It
+calls `telemetry.record_mcp_call(tool, outcome, duration_s)` and re-raises any
+exception untouched, so results and error masking are unchanged.
+
+- `tool` is the tool's name. A name the server does not have is recorded as
+  `unknown`, because a client can send any string.
+- `outcome` is `ok`; `tool_error`, a refusal written for the model (not found,
+  bad arguments, a stale edit preview); or `error`, an unexpected exception,
+  which the client sees only as the masked `Error calling tool '…'`.
+
+17 tools plus `unknown`, x 3 outcomes, is a fixed ceiling. The user is deliberately **not** a
+label (§4).
+
+Each call also logs one line at INFO on the `library.mcp_server.calls` logger,
+which `main.py` turns on in the API process (uvicorn sets up no handler for
+application loggers, so without it an INFO line is dropped):
+
+```text
+2026-11-05 13:45:12,345 INFO library.mcp_server.calls mcp_call tool=get_document user_id=2 outcome=ok duration_ms=41
+```
+
+`user_id` is the Library user the token belongs to (`None` only if a token
+carries none). The line **never** contains arguments or results: both can
+hold document text, a search query or a note. FastMCP's own `fastmcp` logger
+is separate and less careful: it logs a traceback for an unexpected error, the
+validation detail (which includes the offending value) for a call with invalid
+arguments, and at DEBUG every call's arguments, so leave `FASTMCP_LOG_LEVEL` at
+its default (`INFO`) in production.
+
+```promql
+# Error rate per tool over the last hour
+sum by (tool) (rate(library_mcp_calls_total{outcome="error"}[1h]))
+/ sum by (tool) (rate(library_mcp_calls_total[1h]))
+
+# p95 latency per tool
+histogram_quantile(0.95, sum by (tool, le) (rate(library_mcp_duration_seconds_bucket[1h])))
 ```
 
 ## 4. Two rules
@@ -170,7 +216,8 @@ but it is worth knowing before pointing this at a shared collector.
 
 ## 7. What is not covered
 
-1. **Ask only.** Ingestion, OCR, extraction and the job queue are uninstrumented.
+1. **Ask and MCP only.** Ingestion, OCR, extraction, the REST API and the job
+   queue are uninstrumented.
 2. **No traces.** Per-request timing breakdowns are not available.
 3. **No dashboard.** The metrics exist; nothing renders them yet.
 4. **Alerting covers the login only.** Two Grafana rules page on the

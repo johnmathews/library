@@ -129,6 +129,28 @@ def test_recording_without_a_configured_provider_is_a_no_op() -> None:
         backend="api", model="m", duration_s=1.0, tool_calls=2, citations=3, outcome="ok"
     )
     telemetry.record_error(backend="api", kind="upstream")
+    telemetry.record_mcp_call("library_stats", "ok", 0.01)
+
+
+def test_mcp_call_metrics_reach_the_prometheus_scrape(fresh_prometheus: None) -> None:
+    """``/metrics`` shows ``library_mcp_*`` under the names docs/observability.md
+    gives, labelled by tool and outcome and nothing else, with second-sized
+    buckets: the SDK's default boundaries start at 0, 5, 10, which would put
+    every tool call in one bucket."""
+    from prometheus_client import generate_latest
+
+    telemetry.record_mcp_call("get_document", "ok", 0.04)
+    telemetry.record_mcp_call("get_document", "ok", 0.3)
+    telemetry.record_mcp_call("list_kinds", "error", 0.02)
+
+    body = generate_latest().decode()
+    assert 'library_mcp_calls_total{outcome="ok",tool="get_document"} 2.0' in body
+    assert 'library_mcp_calls_total{outcome="error",tool="list_kinds"} 1.0' in body
+    assert 'library_mcp_duration_seconds_count{outcome="ok",tool="get_document"} 2.0' in body
+    assert (
+        'library_mcp_duration_seconds_bucket{le="0.05",outcome="ok",tool="get_document"} 1.0'
+        in (body)
+    )
 
 
 def test_timed_reports_elapsed_even_when_the_body_raises() -> None:
