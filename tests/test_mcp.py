@@ -1189,7 +1189,10 @@ async def test_tool_call_log_line_carries_no_arguments_or_results(
     nothing a model sent or received: arguments and results can hold
     document text. Markers go in an argument on a successful call, in an
     argument on a refused call, and in the result (a document's title); none
-    may appear in ANY log record at INFO or above."""
+    may appear in any record caplog sees at INFO or above. That excludes the
+    ``fastmcp`` logger (its own handlers, ``propagate=False``), whose
+    "Invalid arguments" warning can carry argument values; docs/observability.md
+    says so."""
     arg_marker = f"w12argmarker{secrets.token_hex(4)}"
     error_marker = f"w12errmarker{secrets.token_hex(4)}"
     result_marker = f"w12resultmarker{secrets.token_hex(4)}"

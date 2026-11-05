@@ -100,6 +100,19 @@ def lock_title(document: Document, title: str) -> None:
     document.extra = {**document.extra, "user_edited_fields": edited}
 
 
+class NoteNotQueued(RuntimeError):
+    """The note was committed, but queueing its processing pipeline failed.
+
+    Carries the saved ``document``: a caller that can still answer (MCP)
+    reports the note with a warning, because a bare error invites a retry
+    and every retry files another note. The REST route lets it propagate.
+    """
+
+    def __init__(self, document: Document) -> None:
+        super().__init__(f"note {document.id} was saved but its processing was not queued")
+        self.document = document
+
+
 async def create_note(
     session: AsyncSession, *, title: str, body_markdown: str, uploader_id: int | None
 ) -> Document:
@@ -109,7 +122,8 @@ async def create_note(
     The title is locked against re-extraction; the body is written under a
     salted sha (dedup bypass), so every call makes a new note. Auto-extraction
     still fills summary/topics/tags/kind from the body, and the pipeline embeds
-    it. Returns the committed document.
+    it. Returns the committed document; raises ``NoteNotQueued`` (carrying
+    it) when the note was committed but the pipeline could not be queued.
     """
     body_bytes = body_markdown.encode("utf-8")
     document = Document(
@@ -136,5 +150,8 @@ async def create_note(
     )
     # Commit before deferring: the worker defers over its own connection.
     await session.commit()
-    await process_document.defer_async(document_id=document.id)
+    try:
+        await process_document.defer_async(document_id=document.id)
+    except Exception as exc:
+        raise NoteNotQueued(document) from exc
     return document

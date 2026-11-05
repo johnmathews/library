@@ -144,6 +144,7 @@ from library.models import (
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.schemas import (
+    NOTE_TITLE_MAX_CHARS,
     CommentOut,
     CurrencyCode,
     DocumentFields,
@@ -192,8 +193,6 @@ MAX_FILE_BYTES: int = 2 * 1024 * 1024
 INLINE_IMAGE_MIME_TYPES: frozenset[str] = frozenset(
     {"image/jpeg", "image/png", "image/gif", "image/webp"}
 )
-#: The longest note title: the web app's note editor caps it the same.
-NOTE_TITLE_MAX_CHARS: int = 200
 SEARCH_LIMIT_MAX: int = 50
 #: semantic_search returns passage text with every hit, so its result grows
 #: with ``limit`` far faster than search_documents'. MCP clients cap a tool
@@ -819,6 +818,13 @@ class CreatedNote(BaseModel):
             "server has no public URL configured."
         )
     )
+    warning: str | None = Field(
+        default=None,
+        description=(
+            "Set when the note was saved but something after saving failed; tell the "
+            "user, and do not create the note again."
+        ),
+    )
 
 
 def _continuation(window: DocumentText, max_chars: int) -> str | None:
@@ -1406,17 +1412,25 @@ async def money_query(
     return MoneyQueryResult.model_validate(result)
 
 
+def _utf8_or_none(data: bytes) -> str | None:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 def _file_block(data: bytes, mime_type: str, uri: AnyUrl) -> ImageContent | EmbeddedResource:
     """The content block that carries a file: an image block for the types
     clients render, a text resource for text, a blob resource otherwise."""
     if mime_type in INLINE_IMAGE_MIME_TYPES:
         return ImageContent(type="image", data=base64.b64encode(data).decode(), mimeType=mime_type)
     resource: TextResourceContents | BlobResourceContents
-    if mime_type.startswith("text/"):
-        resource = TextResourceContents(
-            uri=uri, mimeType=mime_type, text=data.decode("utf-8", errors="replace")
-        )
+    text = _utf8_or_none(data) if mime_type.startswith("text/") else None
+    if text is not None:
+        resource = TextResourceContents(uri=uri, mimeType=mime_type, text=text)
     else:
+        # Not text, or text in another encoding: the exact bytes, so a
+        # Latin-1 file is not handed on with replacement characters.
         resource = BlobResourceContents(
             uri=uri, mimeType=mime_type, blob=base64.b64encode(data).decode()
         )
@@ -1508,7 +1522,7 @@ async def get_document_file(
     # still see it (and the structured content repeats it for the rest).
     content: list[ContentBlock] = [TextContent(type="text", text=meta.model_dump_json())]
     if included:
-        uri = AnyUrl(f"library://documents/{document_id}/{variant}/{quote(filename)}")
+        uri = AnyUrl(f"library://documents/{document_id}/{variant}/{quote(filename, safe='')}")
         content.append(_file_block(path.read_bytes(), mime, uri))
     return ToolResult(content=content, structured_content=meta.model_dump(mode="json"))
 
@@ -1945,16 +1959,30 @@ async def create_note(
     """
     if not body_markdown.strip():
         raise ToolError("body_markdown must not be blank")
+    warning: str | None = None
     async with _session() as session:
-        document = await notes_service.create_note(
-            session, title=title, body_markdown=body_markdown, uploader_id=_current_user_id()
-        )
+        try:
+            document = await notes_service.create_note(
+                session, title=title, body_markdown=body_markdown, uploader_id=_current_user_id()
+            )
+        except notes_service.NoteNotQueued as exc:
+            logger.exception(
+                "mcp create_note: note %s saved, processing not queued", exc.document.id
+            )
+            document = exc.document
+            warning = (
+                "The note is saved and readable, and keyword search finds it, but its "
+                "processing could not be queued, so its kind, summary, tags and meaning "
+                "search will be missing until it is reprocessed. Tell the user; do not "
+                "create it again."
+            )
         return CreatedNote(
             id=document.id,
             title=title,
             status=document.status,
             page_count=document.page_count,
             web_url=document_web_url(get_settings().public_base_url, document.id),
+            warning=warning,
         )
 
 

@@ -200,8 +200,10 @@ CI's `compose-smoke` job boots this exact file and asserts healthy +
 login on every push to `main`, and on branches when backend, frontend or
 CI paths changed. It runs with MCP OAuth and metrics on, as production
 does, and then makes one MCP call the way the tunnel and reverse proxy
-forward it (`scripts/mcp_smoke.py`): a public `Host` header and
-`X-Forwarded-Proto: https`. It checks that a request with no token gets
+forward it (`scripts/mcp_smoke.py`), with a public `Host` header. (It
+also sends `X-Forwarded-Proto: https`, which uvicorn ignores in CI because
+it trusts proxy headers only from `127.0.0.1`, so the scheme is not under
+test there.) It checks that a request with no token gets
 `401` naming the OAuth discovery document, then creates a token and runs
 `initialize`, `notifications/initialized` and `tools/call library_stats`,
 which must answer `isError: false`. The two steps after it check that the

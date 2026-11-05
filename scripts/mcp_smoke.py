@@ -2,10 +2,13 @@
 """MCP smoke test against a running Library: the compose-smoke CI step.
 
 Every in-repo MCP test runs in-process with ``Host: testserver``. This one
-talks HTTP to the built image with the headers production sees behind the
-tunnel and reverse proxy (a public ``Host``, ``X-Forwarded-Proto: https``),
-which is where a FastMCP Host/Origin regression shows (fastmcp 3.4.3 once
-broke exactly that; see pyproject.toml). It:
+talks HTTP to the built image with the public ``Host`` production sees
+behind the tunnel and reverse proxy, which is where a FastMCP Host/Origin
+regression shows (fastmcp 3.4.3 once broke exactly that; see
+pyproject.toml). It also sends ``X-Forwarded-Proto: https``, but in CI
+uvicorn ignores it (it trusts forwarded headers only from 127.0.0.1, and the
+request arrives from the Docker bridge), so the scheme is not under test:
+the https URLs in the 401 come from ``LIBRARY_PUBLIC_BASE_URL``. It:
 
 1. logs in with a password and creates an API token (the documented path,
    docs/mcp.md §1.1; there is no token CLI);

@@ -166,3 +166,26 @@ only trace.
 - The red proof ran on a local arm64 build, not on the CI runner. The CI run
   of this branch is the first time the steps run on amd64 with the full
   stack, embedder included.
+
+## 7. Review fixes
+
+An independent review of W11 found four low-severity defects, fixed in the
+PR that ships W11 and W12. Each new test was seen red on the previous code.
+
+- **Filename in the resource URI.** `quote()` left `/` unescaped and
+  `AnyUrl` collapsed dot segments, so a note titled "Call 4/3" got a URI
+  ending `.../Call%204/3.md`, and `../../x` dropped the document id and
+  variant. Now `quote(filename, safe="")`.
+- **Queue failure after commit.** `create_note` committed the note and then
+  raised a masked error when `process_document` could not be queued, which
+  invites a retry and a duplicate note. `notes_service.NoteNotQueued` carries
+  the saved document; the MCP tool returns it with a `warning`, and the REST
+  route still lets it propagate.
+- **Non-UTF-8 text.** A Latin-1 `text/plain` file came back as text with
+  replacement characters. Text is now decoded strictly, with the exact bytes
+  as a blob resource on failure.
+- **Note title length.** W11's own find: `NoteCreate.title` had no maximum,
+  so a title over about 1,000 characters overflowed the 1,024-character
+  `original_filename` column and was a 500. Create and edit now cap it at
+  200 characters, the web editor's limit, as one constant in `schemas.py`
+  that the MCP tool imports.

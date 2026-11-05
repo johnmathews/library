@@ -39,6 +39,7 @@ from mcp.types import (
 )
 from procrastinate import PsycopgConnector
 
+from library import notes_service
 from library.config import get_settings
 from library.jobs import job_app, procrastinate_conninfo
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
@@ -159,6 +160,7 @@ async def test_create_note_materialises_page_and_pages_markdown(
         "status": "received",
         "page_count": 1,
         "web_url": f"{BASE_URL}/documents/{note_id}",
+        "warning": None,
     }
     assert [item["id"] for item in found["results"]] == [note_id]
     assert found["total"] == 1
@@ -229,6 +231,88 @@ async def test_create_note_rejects_blank_title_and_body(
 
 
 # --- get_document_file ----------------------------------------------------------
+
+
+async def test_create_note_reports_a_queue_failure_after_saving(
+    connect: Connector,
+    api_database_url: str,
+    owner_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the job queue fails after the note is committed, the note exists,
+    so the tool returns it with a warning instead of a masked error: a
+    masked error invites a retry, and every retry files another note."""
+
+    class _QueueDown:
+        async def defer_async(self, **_: Any) -> None:
+            raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(notes_service, "process_document", _QueueDown())
+    title = f"Queue down {secrets.token_hex(4)}"
+    async with connect(owner_token) as session:
+        result = await session.call_tool(
+            "create_note", {"title": title, "body_markdown": "Saved anyway."}
+        )
+    assert not result.isError
+    created = payload(result)
+    assert created["title"] == title
+    assert "do not create it again" in created["warning"]
+    rows = await _fetch_all(
+        api_database_url, "SELECT count(*) FROM documents WHERE title = :title", title=title
+    )
+    assert rows == [(1,)]
+
+
+async def test_create_note_without_a_queue_failure_has_no_warning(
+    connect: Connector, owner_token: str
+) -> None:
+    async with connect(owner_token) as session:
+        created = payload(
+            await session.call_tool(
+                "create_note", {"title": "Queue fine", "body_markdown": "Queued."}
+            )
+        )
+    assert created["warning"] is None
+
+
+async def test_get_document_file_uri_keeps_slashes_in_the_filename(
+    connect: Connector, owner_token: str
+) -> None:
+    """A title such as "Call 4/3" or "../x" stays one URI segment: the
+    document id and variant are not moved or dropped."""
+    async with connect(owner_token) as session:
+        dated = payload(
+            await session.call_tool("create_note", {"title": "Call 4/3", "body_markdown": "a"})
+        )
+        dotted = payload(
+            await session.call_tool("create_note", {"title": "../../x", "body_markdown": "b"})
+        )
+        dated_result = await session.call_tool("get_document_file", {"document_id": dated["id"]})
+        dotted_result = await session.call_tool("get_document_file", {"document_id": dotted["id"]})
+    assert str(_the_resource(dated_result).resource.uri) == (
+        f"library://documents/{dated['id']}/original/Call%204%2F3.md"
+    )
+    assert str(_the_resource(dotted_result).resource.uri) == (
+        f"library://documents/{dotted['id']}/original/..%2F..%2Fx.md"
+    )
+
+
+async def test_get_document_file_non_utf8_text_is_a_blob(
+    connect: Connector, api_database_url: str, owner_token: str
+) -> None:
+    """A ``text/*`` file that is not UTF-8 (Latin-1 here) comes back as its
+    exact bytes in a blob resource, not as text with replacement characters."""
+    content = "Caf\u00e9 cr\u00e8me, r\u00e9sum\u00e9\n".encode("latin-1")
+    sha = hashlib.sha256(content).hexdigest()
+    store(content)
+    document_id = await _seed_document(
+        api_database_url, "mcp-file-latin1", sha256=sha, mime_type="text/plain"
+    )
+    async with connect(owner_token) as session:
+        result = await session.call_tool("get_document_file", {"document_id": document_id})
+    resource = _the_resource(result).resource
+    assert isinstance(resource, BlobResourceContents)
+    assert base64.b64decode(resource.blob) == content
 
 
 async def test_get_document_file_roundtrip(

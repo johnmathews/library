@@ -93,6 +93,10 @@ exception untouched, so results and error masking are unchanged.
 - `outcome` is `ok`; `tool_error`, a refusal written for the model (not found,
   bad arguments, a stale edit preview); or `error`, an unexpected exception,
   which the client sees only as the masked `Error calling tool '…'`.
+  `tool_error` also counts a dependency outage a tool turns into advice for
+  the model: `semantic_search` with the embedding service down, and
+  FastMCP's own errors for an upstream timeout or 429. So an embedder outage
+  shows as a rise in `tool_error` for `semantic_search`, not in `error`.
 
 17 tools plus `unknown`, x 3 outcomes, is a fixed ceiling. The user is deliberately **not** a
 label (§4).

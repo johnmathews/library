@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.3.2: list items carry `amount_kind`; §1.5: a tag slug is at most 64 characters). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to those two changes. `tests/test_documents_api.py::test_list_item_carries_amount_kind` and `::test_patch_tag_longer_than_the_slug_column_is_422` pass (the second seen red first: the long tag reached Postgres and raised a database error). The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-05 (§1.17: a note title is at most 200 characters on create and edit; earlier the same day, §1.3.2 `amount_kind` and §1.5's 64-character tag slug). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §1.17's title limit. `tests/test_notes_api.py::test_create_and_patch_reject_an_overlong_title` passes, seen red first (a 1,100-character title raised a database error, a 500 over HTTP). The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -1335,7 +1335,7 @@ CSRF apply exactly as elsewhere (§1.9).
 
 | Method | Path | Notes |
 |--------|------|-------|
-| POST | `/api/notes` | Body `{title, body_markdown}`. Creates the note and queues processing; `201` with the full document detail (same shape as `GET /api/documents/{id}`, §1.4). |
+| POST | `/api/notes` | Body `{title, body_markdown}`; `title` is 1–200 characters (`422` otherwise, as on PATCH). Creates the note and queues processing; `201` with the full document detail (same shape as `GET /api/documents/{id}`, §1.4). |
 | PATCH | `/api/notes/{id}` | Body `{title?, body_markdown?}`; only present fields change. Snapshots the prior (title, body) into history, applies the edit, and (on a body change) re-runs extraction and embedding — no markdown pass. Returns the updated detail. `404` for unknown, deleted, or **non-note** documents. |
 | GET | `/api/notes/{id}/versions` | The note's version history, **newest first**: `[{version_no, title, body, created_at}, …]`. `404` for non-note documents. |
 | POST | `/api/notes/{id}/versions/{version_no}/restore` | Snapshots the current state, then re-applies the chosen version's title + body (a restore is itself an edit, so it can be undone). Returns the updated detail. `404` for an unknown note **or** unknown version number. |

@@ -1,7 +1,7 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.4: new *Monitoring* bullet, per-tool metrics and a call log line). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to the *Monitoring* bullet, read against `ToolCallMetrics` in `src/library/mcp_server.py`, whose tests in `tests/test_mcp.py` were each seen red under a hand-made mutant.
+**Status:** active. **Last updated:** 2026-11-05 (§1.3: `create_note` returns a `warning` instead of an error when the note was saved but not queued; *Files*: non-UTF-8 text comes back as a blob, and the filename is one URI segment; earlier the same day, *Monitoring*). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to the `create_note` row, *Notes* and *Files* changes. The new tests in `tests/test_mcp_notes_files.py` (queue failure, URI slashes, Latin-1 text) pass, each seen red first on the previous code; the prose was read against `mcp_server.py` and `notes_service.py`.
 **Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -193,7 +193,7 @@ user to confirm any tool without it). The four write tools are
 | `list_matters` | — | `{matters: [{id, slug, name, hint, document_count}]}` — archived matters are omitted. Use the slugs in the `matters` filter of `search_documents` and `semantic_search`. |
 | `update_document_metadata` | `document_id`; any of `title?`, `summary?`, `document_date?`, `kind_slug?` (an existing kind), `sender?`, `recipient?` (names, matched case-insensitively, created if new), `tags?`, `projects?`, `matters?` (complete replacement lists; `[]` empties), `language?`, `amount_total?`, `currency?` (ISO 4217), `due_date?`, `expiry_date?`; `clear_fields?` (list of the nullable scalar fields above to empty); `apply` (default `false`); `preview_token?` | Preview (`apply` false): `{document_id, applied: false, changes: {field: {current, proposed}}, preview_token}`, nothing written. Apply: `{document_id, applied: true, updated_fields, current: {field: value}, review_status}`. See *Editing* below. |
 | `add_comment` | `document_id`, `body` (stripped; blank refused) | `{id, document_id, author_id, body, created_at}` — the comment, authored by the token's user. Writes a `comment_added` audit event and queues a re-embed so the comment becomes searchable (the same service as the web app's *Add comment*). Unknown or deleted document: error. |
-| `create_note` | `title` (stripped, 1–200 characters), `body_markdown` (Markdown; blank refused) | `{id, title, status, page_count, web_url}` — the new note. See *Notes* below. |
+| `create_note` | `title` (stripped, 1–200 characters), `body_markdown` (Markdown; blank refused) | `{id, title, status, page_count, web_url, warning}` — the new note; `warning` is set when it was saved but its processing could not be queued. See *Notes* below. |
 | `library_stats` | — | `{total_documents, by_status, by_kind, ingested_last_7_days, oldest_document_date, newest_document_date}`. `by_status` counts the lifecycle states that have documents (`received`, `ocr`, `extract`, `markdown`, `embed`, `indexed`, `failed`); soft-deleted documents are excluded from every figure. |
 
 `search_documents` shares its query builder (`src/library/search.py`)
@@ -411,7 +411,10 @@ queued for the kind, summary, tags and embeddings. Notes skip content
 dedup (a salted SHA-256), so the same call twice makes two notes. That is
 why the tool is not idempotent, and why its description and the server
 instructions tell the model to call it once per note and not to retry
-blindly. Editing a note stays in the web app ([ingestion.md *Notes*](ingestion.md)).
+blindly. For the same reason, a job-queue failure after the note is
+committed is not an error: the tool returns the saved note with a
+`warning` telling the model to report it and not to create it again
+(`notes_service.NoteNotQueued`). Editing a note stays in the web app ([ingestion.md *Notes*](ingestion.md)).
 
 **Files: `get_document_file`.** The result is MCP content, not a base64
 string in JSON:
@@ -421,10 +424,12 @@ string in JSON:
 - the second, when the file is 2 MB or less, carries the file. JPEG,
   PNG, GIF and WebP are an `image` block the model can look at. A PDF
   and anything else is an embedded `resource` with a base64 `blob`;
-  `text/*` (plain text, Markdown) is a `resource` with `text`. TIFF and
+  `text/*` (plain text, Markdown) is a `resource` with `text` when it
+  is UTF-8, and a `blob` of the exact bytes otherwise. TIFF and
   HEIC are resources too, since LLM clients do not render them as
   images. The resource URI is
-  `library://documents/{id}/{variant}/{filename}`: it names the file
+  `library://documents/{id}/{variant}/{filename}`, the filename
+  percent-encoded as one segment (a `/` in a title becomes `%2F`): it names the file
   and is not readable through MCP `resources/read`.
 
 The bytes appear once: before this, FastMCP sent a dict result twice (as

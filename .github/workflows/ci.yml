@@ -564,8 +564,8 @@ jobs:
       # As production runs it: with a public origin set, /mcp is also an
       # OAuth authorization server and its 401 names the discovery document;
       # with metrics on, /metrics serves the MCP series. Compose hands .env to
-      # the api container (env_file); written after the build, so the image
-      # is unchanged.
+      # every app container that reads env_file (api, migrate, worker);
+      # written after the build, so the image is unchanged.
       - name: Turn on MCP OAuth and metrics, as production runs them
         run: |
           printf '%s\n' 'LIBRARY_PUBLIC_BASE_URL=https://library.example.com' \
@@ -619,12 +619,13 @@ jobs:
             http://localhost:8000/api/auth/login
           curl -fsS -b cookies.txt http://localhost:8000/api/documents | grep -q '"items"'
       # Every other MCP test runs in-process with Host: testserver. This one
-      # sends what production's tunnel and proxy send (a public Host and
-      # X-Forwarded-Proto: https) to the built image, where a FastMCP
+      # sends production's public Host to the built image, where a FastMCP
       # Host/Origin regression would show (3.4.3 once broke exactly that).
+      # The scheme is not under test: uvicorn here ignores X-Forwarded-Proto
+      # (it trusts proxy headers only from 127.0.0.1).
       # It creates a token, checks the no-token 401, then runs initialize,
       # notifications/initialized and tools/call library_stats.
-      - name: MCP over production's Host and scheme
+      - name: MCP over production's Host header
         run: |
           python3 scripts/mcp_smoke.py --base-url http://localhost:8000 \
             --host library.example.com --username smoke --password smoke-password-123 \
