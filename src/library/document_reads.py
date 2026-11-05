@@ -54,6 +54,15 @@ class DocumentTextRangeError(ValueError):
     """``start_page`` names a page the document's text does not have."""
 
 
+def _more_text_after(full: str, end: int) -> bool:
+    """Whether ``full`` has anything but whitespace past ``end``.
+
+    A blank last page or trailing spaces are not more to read; counting them
+    would send a caller back for a window of nothing.
+    """
+    return bool(full[end:].strip())
+
+
 @dataclass(frozen=True, slots=True)
 class DocumentText:
     """One window onto a document's text (see ``document_text``).
@@ -61,7 +70,8 @@ class DocumentText:
     ``start_page``/``end_page`` are the first and last markdown page with any
     text in the window (``None`` without pages); ``end_page_complete`` says
     whether ``end_page`` is in it whole. ``truncated`` is true when text
-    follows the window, and ``next_start_page`` is the page to ask for next:
+    other than whitespace follows the window, and ``next_start_page`` is the
+    page to ask for next:
     the cut page itself when the window holds only its start (it is then read
     whole), the following page when the cut page is the window's first (it is
     longer than ``max_chars``, and only a larger ``max_chars`` returns the
@@ -127,7 +137,7 @@ async def document_text(
             start_page=None,
             end_page=None,
             end_page_complete=True,
-            truncated=len(full) > max_chars,
+            truncated=_more_text_after(full, max_chars),
             next_start_page=None,
             total_chars=len(full),
         )
@@ -153,7 +163,7 @@ async def document_text(
         index for index, (start, _) in enumerate(spans) if start < len(text) or index == 0
     )
     end_complete = spans[last_index][1] <= len(text)
-    truncated = len(joined) > max_chars
+    truncated = _more_text_after(joined, len(text))
 
     next_index: int | None = None
     if truncated:

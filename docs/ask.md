@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.2 step 2: retrieval and its coverage counts are `search.hybrid_search`, shared with the MCP `semantic_search` tool). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §1.2 step 2's *Scoping the search* paragraph. Read `_run_semantic_search` and `search.hybrid_search` against the prose; `tests/test_ask_search_filters.py` passes unchanged and `tests/test_api_ask.py` passes with its retrieval fakes patched on `library.search`. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-05 (§1.2 step 3: the `query_documents` tool's sign, dedup and coverage sentences live in `structured_query`, shared with the MCP `money_query` tool). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §1.2 step 3's new paragraph. Dumped `ask.engine.TOOLS` as JSON before and after moving the wording into `structured_query` and compared: byte-identical. `tests/test_api_ask.py` passes. The rest carries its earlier verifications forward.
 **Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, .github/workflows/e2e-nightly.yml
 
 Ask lets you put a natural-language question to the archive and get a prose
@@ -140,6 +140,11 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    the concept→kind hints `quote`/`estimate` → `quote`). The exclusion lives in
    `structured_query.sum_amount`, not the prompt, so it holds regardless of how
    the question is phrased.
+
+   The tool's sentences on sign, payment dedup and the coverage block are
+   `structured_query.SUM_AMOUNT_GUIDE` and `COVERAGE_GUIDE`. The MCP
+   `money_query` tool, which calls the same `query_documents`, quotes them
+   too ([mcp.md §1.3](mcp.md)), so both explain a total the same way.
 4. **Full-document read** (`get_document`). Once another tool has located a
    document, this reads it in full: structured fields, its **comments** (see
    §1.9), and its text (joined per-page markdown, falling back to `ocr_text`),

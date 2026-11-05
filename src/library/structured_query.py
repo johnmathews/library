@@ -60,6 +60,36 @@ CONCEPT_TO_KIND: dict[str, str] = {
 Aggregate = Literal["list", "distinct_senders", "sum_amount"]
 GroupBy = Literal["sender", "kind"]
 
+# How to read a result, worded for a model. Ask's `query_documents` tool and
+# the MCP `money_query` tool both quote these, so the two LLM surfaces over
+# this module explain sign, dedup and coverage in the same words; a change
+# here changes both.
+
+#: What ``sum_amount`` totals: signed by ``amount_kind``, real expenditure
+#: only, one document per payment, and where the rest is reported.
+SUM_AMOUNT_GUIDE: str = (
+    "sum_amount: total real expenditure. It reads what each "
+    "amount MEANS, so a refund reduces the total, a policy's "
+    "cover limit or an account balance is left out, and one "
+    "payment documented as both an invoice and a receipt is "
+    "counted once — each reported in `coverage.excluded` as "
+    "not_summable_kind, duplicate_payment or quote_not_spend. "
+    "Pass kind='quote' to total quotes instead."
+)
+
+#: How to read the ``coverage`` block every result carries (``Coverage``).
+COVERAGE_GUIDE: str = (
+    "Every result carries a `coverage` block — `matched` documents met "
+    "your filters, `included` are the ones the rows account for, "
+    "`excluded` maps a reason to how many were dropped for it, and "
+    "`needs_review` counts included documents whose extracted metadata "
+    "the archive flagged as untrustworthy. Read it before you answer: a "
+    "total over `included` documents is not a total over `matched` ones. "
+    "`matched`/`included`/`excluded` always count DOCUMENTS, even for "
+    "distinct_senders — a coverage of 1 excluded out of 12 with 3 sender "
+    "rows means 1 of 12 documents was dropped, not 1 of 3 senders."
+)
+
 
 @dataclass(frozen=True, slots=True)
 class DocumentRef:

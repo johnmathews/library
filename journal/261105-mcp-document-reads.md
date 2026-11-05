@@ -1,4 +1,4 @@
-# MCP document reads and search parity
+# MCP document reads, semantic search and money totals
 
 **Date:** 2026-11-05
 **Branch:** `eng-mcp-reads`
@@ -119,3 +119,62 @@ passes unchanged.
 **Not done.** A keyword-only hit has no passage; a `ts_headline` snippet
 for it would be one more query per call. `semantic_search` has no
 `offset`, by design (a fused ranking has no stable pages).
+
+## 7. W10: money totals, and three W8 review fixes
+
+Finding F4: the only MCP route to "how much did we spend on X" was the model
+adding up `amount_total` itself, which adds refunds, counts cover limits and
+counts an invoice and its receipt twice.
+
+- **`money_query`** calls `structured_query.query_documents`, the service behind
+  Ask's `query_documents`: `aggregate` (`sum_amount` default, `distinct_senders`,
+  `list`), `group_by` (sender or kind), the `semantic_search` filters plus
+  `review_status`. The result is that function's, field for field, typed with its
+  own `AmountGroup`/`SenderGroup`/`DocumentRef` rows and `Coverage`, so the
+  `outputSchema` is the service's shape and there is no second copy of it.
+- **One wording.** The sign/dedup sentence and the coverage paragraph of Ask's
+  tool text are now `SUM_AMOUNT_GUIDE` and `COVERAGE_GUIDE` in
+  `structured_query.py`. Ask's tool text quotes them, and so does the MCP
+  description. Ask's `TOOLS`, dumped as JSON before and after, is byte-identical.
+- `get_document`, `search_documents` and the server instructions point at
+  `money_query` for totals.
+- **Errors the model can act on** are `ToolError`s: `group_by` without
+  `sum_amount` (the service would ignore it), `date_from` after `date_to`, and an
+  unknown `kind`, with the slug to use when it is a concept word from
+  `CONCEPT_TO_KIND` (`energy` → `utility-bill`). The last two would otherwise give
+  a total of 0 that reads like an answer. A bad `aggregate` or `group_by` is
+  stopped by the enum in the schema.
+- W8 review fixes: the `search_documents` description said every filter
+  AND-combines, but `projects` and `matters` match any of their values (now said,
+  with a `projects` union test). A blank tail after the text window (an empty
+  last page, trailing spaces) no longer counts as more text. `docs/mcp.md` says a
+  page over 50 000 characters cannot be read whole through `get_document`.
+
+**Evidence.** The fixture is adversarial: a refund from the same sender quoting
+the invoice's reference, an invoice and a receipt for one payment on the same
+day, a cover limit, a trashed payment, a payment on 1 March just past a February
+window that ends on the leap day, and a payment uploaded by a second household
+member and flagged `needs_review`. The hand-computed net is 91.85; summing
+`amount_total` gives 5222.35, an added refund 122.35, a double-counted payment
+191.85, a dropped second member 84.75, so each mistake shows as its own number.
+The tool returned 91.85, and the same answer to the second member. The money
+tests were red before the tool existed (only "unknown tool"), so 20 hand-made
+mutants were run (aggregate or `group_by` not passed on, each of the ten filters
+dropped, each of the four error checks removed, the coverage emptied, the shared
+wording and the `money_query` pointers removed): all 20 turned a test red. The
+blank-tail test was red on the old code for both the page and the OCR branch. The
+new window test (cut exactly after a page separator) passed on the old code; the
+`start < len(text)` → `<=` mutant turns it red, and none of the three existing
+window tests notice that mutant. `mcp_server.py` and `document_reads.py` stay at
+100% line coverage over the MCP test files.
+
+**Things learned.** A `kind` filter does not move a payment's canonical
+document. On the fixture the receipt holds the slot, so `kind='invoice'` matches
+the invoice alone and returns no rows, with `excluded: {duplicate_payment: 1}`:
+the payment is real but counted under its receipt. Run once by hand; coverage
+discloses it and this tool does not change it, but an answer to "what did our
+invoices come to" has to read that block.
+
+**Not done.** Spending over time and saved charts are still not MCP tools (plan
+non-goal). Unknown tags, projects and matters still match nothing silently;
+only `kind` is checked, because the concept-word mistake is the common one.

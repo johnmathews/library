@@ -1522,6 +1522,17 @@ def test_query_documents_tool_description_explains_coverage() -> None:
     assert "excluded" in tool["description"]
 
 
+def test_query_documents_tool_quotes_the_shared_money_wording() -> None:
+    """Sign, dedup and coverage are explained once, in structured_query, and
+    quoted by both Ask's tool and MCP's money_query (tests/test_mcp.py)."""
+    from library.ask.engine import TOOLS
+    from library.structured_query import COVERAGE_GUIDE, SUM_AMOUNT_GUIDE
+
+    tool = next(tool for tool in TOOLS if tool["name"] == "query_documents")
+    assert COVERAGE_GUIDE in tool["description"]
+    assert SUM_AMOUNT_GUIDE in tool["input_schema"]["properties"]["aggregate"]["description"]
+
+
 def test_ask_system_prompt_names_semantic_search_as_a_coverage_tool() -> None:
     """Task 4 gave semantic_search its own `coverage` block (`unembedded`), but
     the prompt used to name only the structured tool(s) as coverage-carrying

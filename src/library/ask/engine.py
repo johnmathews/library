@@ -35,7 +35,12 @@ from library.models import Document, ReviewStatus
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, hybrid_search
 from library.spend_lines import AllocationError
-from library.structured_query import CONCEPT_TO_KIND, query_documents
+from library.structured_query import (
+    CONCEPT_TO_KIND,
+    COVERAGE_GUIDE,
+    SUM_AMOUNT_GUIDE,
+    query_documents,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -253,15 +258,9 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Aggregate over structured metadata (sender, kind, document_date, "
             "amount_total). Use for who/how-many/how-much/over-time questions. "
-            "Every result carries a `coverage` block — `matched` documents met "
-            "your filters, `included` are the ones the rows account for, "
-            "`excluded` maps a reason to how many were dropped for it, and "
-            "`needs_review` counts included documents whose extracted metadata "
-            "the archive flagged as untrustworthy. Read it before you answer: a "
-            "total over `included` documents is not a total over `matched` ones. "
-            "`matched`/`included`/`excluded` always count DOCUMENTS, even for "
-            "distinct_senders — a coverage of 1 excluded out of 12 with 3 sender "
-            "rows means 1 of 12 documents was dropped, not 1 of 3 senders. " + _kind_hint()
+            + COVERAGE_GUIDE
+            + " "
+            + _kind_hint()
         ),
         "input_schema": {
             "type": "object",
@@ -271,14 +270,8 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": ["list", "distinct_senders", "sum_amount"],
                     "description": (
                         "distinct_senders: unique senders (e.g. providers). "
-                        "sum_amount: total real expenditure. It reads what each "
-                        "amount MEANS, so a refund reduces the total, a policy's "
-                        "cover limit or an account balance is left out, and one "
-                        "payment documented as both an invoice and a receipt is "
-                        "counted once — each reported in `coverage.excluded` as "
-                        "not_summable_kind, duplicate_payment or quote_not_spend. "
-                        "Pass kind='quote' to total quotes instead. "
-                        "list: matching documents."
+                        + SUM_AMOUNT_GUIDE
+                        + " list: matching documents."
                     ),
                 },
                 **_FILTER_PROPERTIES,

@@ -56,6 +56,7 @@ from library.models import (
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.storage import derived_dir, store
+from library.structured_query import COVERAGE_GUIDE, SUM_AMOUNT_GUIDE
 from tests.conftest import AuthUser, _fetch_all, _insert_user
 from tests.test_documents_api import _seed_document
 
@@ -77,6 +78,7 @@ EXPECTED_TOOLS = {
     "semantic_search",
     "get_library_context",
     "get_document",
+    "money_query",
     "get_document_file",
     "ingest_document",
     "list_kinds",
@@ -581,6 +583,32 @@ async def test_search_multi_tag_and_facet_filters(
         assert await search(session, tags=[tag_a], facets={facet: "nope"}) == set()
 
 
+async def test_search_projects_match_any(mcp_connect: McpConnector, api_database_url: str) -> None:
+    """Projects OR-compose like matters: `projects=[a, b]` is the union, not
+    the documents filed under both, and a deleted document stays out."""
+    prefix = f"mcp-projects-{secrets.token_hex(4)}"
+    project_a, project_b = f"{prefix}-a", f"{prefix}-b"
+    in_a = await _seed_document(api_database_url, f"{prefix}-in-a", project_slugs=[project_a])
+    in_b = await _seed_document(api_database_url, f"{prefix}-in-b", project_slugs=[project_b])
+    in_both = await _seed_document(
+        api_database_url, f"{prefix}-in-both", project_slugs=[project_a, project_b]
+    )
+    await _seed_document(
+        api_database_url,
+        f"{prefix}-deleted",
+        project_slugs=[project_a],
+        deleted_at=datetime.now(UTC),
+    )
+    async with mcp_connect() as session:
+        union = payload(
+            await session.call_tool("search_documents", {"projects": [project_a, project_b]})
+        )
+        only_b = payload(await session.call_tool("search_documents", {"projects": [project_b]}))
+    assert set(_ids(union)) == {in_a, in_b, in_both}
+    assert union["total"] == 3
+    assert set(_ids(only_b)) == {in_b, in_both}
+
+
 async def test_search_results_carry_amount_kind(
     mcp_connect: McpConnector, api_database_url: str
 ) -> None:
@@ -669,8 +697,23 @@ async def test_read_tools_publish_output_schemas(mcp_connect: McpConnector) -> N
     assert context_schema is not None
     assert "context" in context_schema["properties"]
 
+    money_schema = tools["money_query"].outputSchema
+    assert money_schema is not None
+    assert {"result_type", "rows", "coverage"} <= set(money_schema["properties"])
+    money_coverage = _properties(money_schema, money_schema["properties"]["coverage"])
+    assert set(money_coverage) == {"matched", "included", "excluded", "needs_review"}
+    row_types = money_schema["properties"]["rows"]["items"]["anyOf"]
+    row_fields = [set(_properties(money_schema, row)) for row in row_types]
+    assert {"key", "total", "currency", "document_count", "document_ids"} in row_fields
+
     description = tools["get_document"].description or ""
     assert "Do not add up amount_total" in description
+    assert "money_query" in description
+    assert "money_query" in (tools["search_documents"].description or "")
+    # One wording for sign, dedup and coverage, shared with Ask's tool.
+    money_description = tools["money_query"].description or ""
+    assert SUM_AMOUNT_GUIDE in money_description
+    assert COVERAGE_GUIDE in money_description
 
     # The facet vocabulary lives in get_library_context, so the parameter
     # that needs it says where to find it.
@@ -816,6 +859,55 @@ async def test_get_document_text_window_edges(
     assert (oversize["text_end_page"], oversize["next_start_page"]) == (2, None)
     assert "larger max_chars" in oversize["continuation"]
     assert "next page" not in oversize["continuation"]
+
+
+async def test_get_document_window_cut_at_separator_end(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    """A window that ends exactly after the blank line between two pages holds
+    page 1 whole and none of page 2, so page 1 is its last page and page 2 is
+    next. (Page 2 starts at the window's length: it is not in the window.)"""
+    document_id = await _seed_document(api_database_url, "mcp-window-separator")
+    await _add_pages(api_database_url, document_id, ["s" * 998, "[second]"])
+    async with mcp_connect() as session:
+        result = payload(
+            await session.call_tool(
+                "get_document", {"document_id": document_id, "max_chars": 1_000}
+            )
+        )
+    assert result["text"] == "s" * 998 + "\n\n"
+    assert (result["text_end_page"], result["next_start_page"]) == (1, 2)
+    assert result["text_truncated"] is True
+    assert result["continuation"] == (
+        "The text stops after page 1 of 2. Call get_document again with start_page=2 to continue."
+    )
+
+
+async def test_get_document_trailing_whitespace_is_not_more_text(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    """Only blank text after the window (an empty last page, trailing spaces
+    in OCR text) is not more to read: no continuation, so the model does not
+    spend a call fetching nothing."""
+    paged_id = await _seed_document(api_database_url, "mcp-window-blank-tail")
+    await _add_pages(api_database_url, paged_id, ["b" * 1_000, " \n "])
+    ocr_id = await _seed_document(
+        api_database_url, "mcp-ocr-blank-tail", ocr_text="o" * 1_000 + "  \n\n  "
+    )
+    async with mcp_connect() as session:
+        paged = payload(
+            await session.call_tool("get_document", {"document_id": paged_id, "max_chars": 1_000})
+        )
+        ocr = payload(
+            await session.call_tool("get_document", {"document_id": ocr_id, "max_chars": 1_000})
+        )
+    assert paged["text"] == "b" * 1_000
+    assert paged["text_truncated"] is False
+    assert paged["next_start_page"] is None
+    assert paged["continuation"] is None
+    assert ocr["text"] == "o" * 1_000
+    assert ocr["text_truncated"] is False
+    assert ocr["continuation"] is None
 
 
 async def test_get_document_falls_back_to_ocr_text_without_pages(

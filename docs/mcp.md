@@ -1,14 +1,14 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.3: new `semantic_search` (hybrid search with passages and a `coverage` block, shared with Ask) and `get_library_context` (the caller's identity and the archive vocabulary); the server instructions say to call the latter first). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §1.3's `semantic_search`, `get_library_context` and list-tool rows and *Searching by meaning*. The new tests in `tests/test_mcp_semantic.py` pass, each seen red first or killed by a hand-made mutant; the prose was read against `mcp_server.py`, `search.hybrid_search` and `ask/context.py`.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py
+**Status:** active. **Last updated:** 2026-11-05 (§1.3: new `money_query` tool and a *Money* section; the money notes in *Reading* point at it; `search_documents`' filter combination stated exactly; a blank tail after the text window is no longer more text; a page over 50 000 characters cannot be read whole). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §1.3's `money_query` row, *Money* and the *Reading* bullets changed here. The new tests in `tests/test_mcp_money.py` and `tests/test_mcp.py` pass, each seen red first or killed by a hand-made mutant; the prose was read against `mcp_server.py`, `structured_query.py` and `document_reads.py`.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,
 the Anthropic API MCP connector, or any MCP-capable agent) can search the
-archive by keyword or by meaning, read documents, fetch files, ingest new documents, correct
-document details and add comments.
+archive by keyword or by meaning, read documents, total amounts, fetch
+files, ingest new documents, correct document details and add comments.
 
 - **Endpoint:** `https://<your-host>/mcp` (Streamable HTTP transport,
   stateless, JSON responses). `/mcp/` with a trailing slash is the same
@@ -179,6 +179,7 @@ user to confirm any tool without it). The three write tools are
 | `semantic_search` | `query` (natural language, any language; blank refused), `kind?`, `sender?`, `recipient?`, `tags?`, `projects?`, `matters?`, `facets?`, `date_from?`, `date_to?` (the same filters as `search_documents`), `limit` (default 10, max 50) | `{results, coverage}`. Each result is a `search_documents` row without `snippet`/`rank`, plus `passages` (the nearest passages, best first; `[]` for a keyword-only match), `page_number` (of the best passage, or `null`) and `score` (higher is better). `coverage` is `{matched, returned, unembedded}`. See *Searching by meaning* below. |
 | `get_library_context` | — | `{context}`: the connected user's identity and the archive vocabulary as text. See *Searching by meaning* below. |
 | `get_document` | `document_id`, `start_page` (default 1), `max_chars` (default 20 000, 1 000–50 000) | Every field of a search result except `snippet`/`rank`, plus provenance (`source`, `original_filename`, `sha256`, `ocr_confidence`), `web_url`, the document's `text` with its paging fields (*Reading* below), `comments` `[{id, document_id, author_id, body, created_at}]` newest first, and the audit-trail `events` `[{event, created_at}]`. `topics` are read-only auto-extracted. |
+| `money_query` | `aggregate` (`sum_amount` default, `distinct_senders`, `list`), `group_by?` (`sender`/`kind`, `sum_amount` only), `kind?`, `sender?`, `recipient?`, `tags?`, `projects?`, `matters?`, `facets?`, `date_from?`, `date_to?` (the `semantic_search` filters), `review_status?` | `{result_type, rows, coverage}`, `structured_query.query_documents`' result unchanged. `sum_amount` rows: `{key, total, currency, document_count, document_ids}` per currency (and per sender or kind with `group_by`; `key` is `null` without it), `total` a signed decimal string. `distinct_senders` rows: `{sender, document_count, document_ids}`; `list` rows: `{id, title, sender, recipient, kind, document_date, amount_total, currency, review_status}`, up to 50. `coverage` is `{matched, included, excluded, needs_review}`. See *Money* below. |
 | `get_document_file` | `document_id`, `variant` = `"original"` (default) or `"searchable_pdf"` | `{filename, mime_type, size_bytes, content_base64}`. Files over 10 MB are refused with an error telling the user to download the file from the web app. A variant that was never produced is an error. |
 | `ingest_document` | `filename`, `content_base64` (PDF, JPEG, PNG, HEIC/HEIF, TIFF, plain text, Markdown, DOCX), `source_note?` | `{id, sha256, status, duplicate}`. Runs the same ingestion service as uploads (dedup by SHA-256, OCR + extraction queued); `source` is recorded as `mcp` and the calling token's user as uploader. A `source_note` is stored on the audit trail — but only when the ingest was not a duplicate, since a duplicate creates no new document to attach it to. Content matching a document in the trash is refused until it is restored or purged. |
 | `list_kinds` | — | `{kinds: [{slug, name, document_count}]}` |
@@ -198,9 +199,9 @@ semantics. Two differences: sender and recipient are matched by name
 substring (the web app filters by id), and a call returns at most 50
 results (the web app's list allows 100).
 
-`search_documents`, `semantic_search`, `get_document` and
-`get_library_context` declare their result type, so `tools/list` carries
-an `outputSchema` for each. The three document tools build their fields
+`search_documents`, `semantic_search`, `get_document`,
+`get_library_context` and `money_query` declare their result type, so
+`tools/list` carries an `outputSchema` for each. The three document tools build their fields
 with `document_reads.list_item_fields`, the same function as the web
 app's list and detail views (`src/library/document_reads.py`).
 
@@ -252,12 +253,16 @@ reads through the same `document_reads.document_text`.
   in it, `text_page_count` the pages the document has, `text_total_chars`
   the whole text's length.
 - When more follows (`text_truncated: true`), `next_start_page` is where
-  to continue and `continuation` says so in words. If the window holds
+  to continue and `continuation` says so in words. Only whitespace after
+  the window (a blank last page, trailing spaces) is not more text. If the window holds
   only the start of a page, that page is next and is read whole. If the
   cut page is the window's first (it is longer than `max_chars`),
   `next_start_page` is the following page and `continuation` says to ask
   again with a larger `max_chars` (up to 50 000) to read the cut page
   whole, or to use `get_document_file`.
+- A single page longer than 50 000 characters cannot be read whole
+  through `get_document`: single-page HTML emails and notes are stored
+  as one page, and for those only `get_document_file` has the rest.
 - OCR text has no pages: `start_page` above 1 is an error, and the only
   ways to more text are a larger `max_chars` or `get_document_file`. A
   `start_page` past the last page is an error naming the page count.
@@ -267,7 +272,41 @@ reads through the same `document_reads.document_text`.
   it is (a `refund` is money back). The tool descriptions and the server
   instructions tell the model not to add amounts up across documents
   itself: the sign depends on `amount_kind`, and one payment often has
-  several documents (an invoice and its receipt).
+  several documents (an invoice and its receipt). They point it at
+  `money_query` for totals (*Money* below).
+
+**Money: `money_query`.** The only correct way to total amounts across
+documents. It calls `structured_query.query_documents`, the service
+behind Ask's `query_documents` tool ([ask.md §1.2](ask.md)), and returns
+its result unchanged.
+
+- `sum_amount` (the default) totals the `spend_facts` view
+  ([money-facts.md](money-facts.md)): each amount is signed by its
+  `amount_kind` (a refund subtracts), only real expenditure counts (a
+  cover limit, a balance, an estimate or an undecided kind is left out),
+  each payment counts once however many documents show it, and quotes
+  are left out unless `kind` is `quote`. Totals are per currency;
+  `group_by` splits them by sender or kind. `distinct_senders` and `list`
+  return the same coverage block.
+- `coverage` says what the rows leave out. `matched` documents met the
+  filters, `included` are the ones the rows account for, and `excluded`
+  maps a reason to how many were dropped for it, so `included` plus the
+  excluded counts is `matched`. The reasons: `no_amount`,
+  `quote_not_spend`, `not_summable_kind`, `duplicate_payment`,
+  `no_sender`/`no_kind` when grouping, `filtered_review_status` when
+  `review_status` filters, and `over_limit` for `list`. `needs_review`
+  counts included documents whose details validation flagged. The tool
+  description and the server instructions tell the model to pass on
+  any exclusion and any flag.
+- The sentences that explain sign, dedup and coverage to the model are
+  `structured_query.SUM_AMOUNT_GUIDE` and `COVERAGE_GUIDE`, quoted by
+  this tool and by Ask's.
+- Tool errors the model can act on: `group_by` with an aggregate other
+  than `sum_amount`, `date_from` after `date_to`, and an unknown `kind`;
+  a concept word Ask's concept-to-kind map knows (`energy`) gets the
+  slug to use instead (`utility-bill`). An `aggregate` or `group_by`
+  outside its enum is an argument-validation error.
+- The archive is shared, so every household member gets the same total.
 
 **Editing: preview, then apply.** `update_document_metadata` never
 writes on the first call. Without `apply` it returns the current value

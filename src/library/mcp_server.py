@@ -136,6 +136,18 @@ from library.search import (
 )
 from library.spend_lines import AllocationError
 from library.storage import derived_path, path_for
+from library.structured_query import (
+    CONCEPT_TO_KIND,
+    COVERAGE_GUIDE,
+    SUM_AMOUNT_GUIDE,
+    Aggregate,
+    AmountGroup,
+    Coverage,
+    DocumentRef,
+    GroupBy,
+    SenderGroup,
+    query_documents,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +208,11 @@ actual file, and `ingest_document` adds a new document to the archive.
 Amounts: `amount_total` is always a magnitude and `amount_kind` says what
 it is (paid, due, refunded, a coverage limit, ...). Do not add amounts up
 across documents yourself: the sign depends on `amount_kind`, and one
-payment often appears on several documents.
+payment often appears on several documents. For any total ("how much did
+we spend on ...") use `money_query`: it nets refunds, leaves out cover
+limits and balances, counts each payment once, and says in `coverage`
+what it left out and why. Pass on what `coverage` says when `excluded`
+is not empty or `needs_review` is above 0.
 
 To correct a document's details (title, kind, sender, dates, amount,
 tags, ...) use `update_document_metadata` in two steps: call it without
@@ -606,6 +622,29 @@ class SearchResults(BaseModel):
     )
 
 
+class MoneyQueryResult(BaseModel):
+    """The result of money_query: ``structured_query.query_documents``'s,
+    field for field, with its row and coverage types."""
+
+    result_type: Aggregate = Field(description="The aggregate the rows answer.")
+    rows: list[AmountGroup | SenderGroup | DocumentRef] = Field(
+        description=(
+            "sum_amount: one {key, total, currency, document_count, document_ids} per "
+            "currency (and per sender or kind with group_by; key is null without it), "
+            "total a signed decimal string. distinct_senders: {sender, document_count, "
+            "document_ids}. list: document rows. document_ids cite at most 25."
+        )
+    )
+    coverage: Coverage = Field(
+        description=(
+            "matched: documents your filters let through; included: those the rows "
+            "account for; excluded: reason -> documents dropped for it (empty when "
+            "the rows are the whole story); needs_review: included documents whose "
+            "extracted details validation flagged."
+        )
+    )
+
+
 def _continuation(window: DocumentText, max_chars: int) -> str | None:
     """How to read past ``window``, worded for the model; ``None`` when the
     window reaches the end of the text."""
@@ -785,11 +824,14 @@ async def search_documents(
     processing status. With `query`, results are ranked by relevance and
     each carries a `snippet` (matching text fragments, matches wrapped in
     <b>...</b>) and a `rank` score; without it, newest documents come first.
-    All filters AND-combine. Page with `offset` (next_offset is the next
-    page's offset, null on the last). Follow up with get_document for a
-    result's full text. amount_total is always a magnitude: amount_kind says
-    whether it is money paid, due or refunded, so do not add amounts up
-    across results yourself.
+    Different filters AND-combine with each other and with `query`. Within
+    one filter, `tags` and `facets` need ALL their values, while `projects`
+    and `matters` match a document in ANY of theirs. Page with `offset`
+    (next_offset is the next page's offset, null on the last). Follow up with
+    get_document for a result's full text. amount_total is always a
+    magnitude: amount_kind says whether it is money paid, due or refunded,
+    so do not add amounts up across results yourself; money_query totals
+    them correctly.
     """
     document_query = build_document_query(
         query,
@@ -985,7 +1027,8 @@ async def get_document(
     is (payment_due, payment_made, refund = money back, coverage_limit,
     ...). Do not add up amount_total across documents yourself: the sign
     depends on amount_kind and one payment often appears on several
-    documents (an invoice and its receipt).
+    documents (an invoice and its receipt). money_query totals amounts
+    correctly.
 
     Errors if the document id is unknown or deleted, or `start_page` is past
     the document's last page of text.
@@ -1021,6 +1064,93 @@ async def get_document(
                 for event in sorted(document.events, key=lambda event: event.id)
             ],
         )
+
+
+#: money_query's description. The sign/dedup and coverage sentences are
+#: ``structured_query``'s, the same ones Ask's ``query_documents`` tool quotes.
+MONEY_QUERY_DESCRIPTION: str = (
+    "Add up, count or list documents' money: the only correct way to total "
+    "amounts across documents. Returns {result_type, rows, coverage}. "
+    + SUM_AMOUNT_GUIDE
+    + " Totals are per currency; group_by (sum_amount only) also splits them by "
+    "sender or kind. distinct_senders: the senders among matching documents, "
+    "with document counts. list: matching documents, newest first, up to 50. "
+    "The filters mean what they mean in search_documents. "
+    + COVERAGE_GUIDE
+    + " When `excluded` is not empty, say in your answer what was left out, with "
+    "the reason and the count; when `needs_review` is above 0, say that many "
+    "included documents have flagged details. Never present a partial total as "
+    "complete. review_status filters by trust, and what it removes is reported "
+    "as `filtered_review_status`: prefer reporting needs_review over filtering it "
+    "out of a total."
+)
+
+
+@mcp.tool(title="Money query", annotations=READ_ONLY, description=MONEY_QUERY_DESCRIPTION)
+async def money_query(
+    aggregate: Annotated[
+        Aggregate,
+        Field(
+            description=(
+                "'sum_amount' (default) totals the money; 'distinct_senders' lists the "
+                "senders; 'list' lists the documents."
+            )
+        ),
+    ] = "sum_amount",
+    group_by: Annotated[
+        GroupBy | None,
+        Field(description="Split a sum_amount total by 'sender' or 'kind'."),
+    ] = None,
+    kind: KindFilter = None,
+    sender: SenderFilter = None,
+    recipient: RecipientFilter = None,
+    tags: TagsFilter = None,
+    projects: ProjectsFilter = None,
+    matters: MattersFilter = None,
+    facets: FacetsFilter = None,
+    date_from: DateFromFilter = None,
+    date_to: DateToFilter = None,
+    review_status: Annotated[
+        ReviewStatus | None,
+        Field(
+            description=(
+                "Only documents whose extracted details are 'verified', 'needs_review' "
+                "or 'unreviewed'. Omit (usually right) to include everything."
+            )
+        ),
+    ] = None,
+) -> MoneyQueryResult:
+    if group_by is not None and aggregate != "sum_amount":
+        raise ToolError(
+            "group_by applies only to aggregate='sum_amount'; omit it, or use sum_amount."
+        )
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise ToolError(f"date_from {date_from} is after date_to {date_to}.")
+    filters = DocumentFilters(
+        kind_slug=kind,
+        sender_contains=sender,
+        recipient_contains=recipient,
+        tag_slugs=tuple(tags or ()),
+        project_slugs=tuple(projects or ()),
+        matter_slugs=tuple(matters or ()),
+        facets=dict(facets or {}),
+        date_from=date_from,
+        date_to=date_to,
+        review_status=review_status,
+    )
+    async with _session() as session:
+        if kind is not None:
+            known = await session.scalar(select(Kind.id).where(Kind.slug == kind))
+            if known is None:
+                # A kind that matches nothing makes a total of 0 that reads
+                # like a real answer; a concept word is the usual cause.
+                suggestion = CONCEPT_TO_KIND.get(kind.strip().lower())
+                hint = f"; did you mean kind='{suggestion}'?" if suggestion else "."
+                raise ToolError(f"unknown kind '{kind}'{hint} list_kinds lists the kind slugs.")
+        result = await query_documents(
+            session, filters=filters, aggregate=aggregate, group_by=group_by
+        )
+    return MoneyQueryResult.model_validate(result)
 
 
 @mcp.tool(title="Get document file", annotations=READ_ONLY)
