@@ -131,7 +131,7 @@ async def test_reason_shapes(body: str, reason: str, caplog: pytest.LogCaptureFi
     with caplog.at_level(logging.INFO, logger=LOGGER):
         await _run(_responder(404, body.encode()), [b"{}"])
     (line,) = _lines(caplog)
-    assert line.endswith(f"reason={reason}")
+    assert line.endswith(f"reason={json.dumps(reason)}")
     assert line.startswith("mcp_rejected status=404 method=- ")
 
 
@@ -144,7 +144,7 @@ async def test_reason_is_cut_and_response_capture_is_capped(
     (line,) = _lines(caplog)
     # Cut at the 4 KB capture, the JSON no longer parses, so the reason is the
     # start of the raw text, at most 200 characters.
-    reason = line.split("reason=", 1)[1]
+    reason = json.loads(line.split("reason=", 1)[1])
     assert len(reason) == 200
     assert reason.startswith('{"error": {"message": "xxx')
     # Every byte still reached the client.
@@ -180,8 +180,12 @@ async def test_header_value_is_cleaned_and_params_never_logged(
     (line,) = _lines(caplog)
     assert "\n" not in line and "\r" not in line
     assert "s3cret-value" not in line
-    assert " protocol_version=2026-07-28 forged=1 " in line
-    assert " method=tools/call forged=1 " in line
+    # Client-sent values cannot split into extra fields: before the quoted
+    # reason there are exactly four space-separated fields.
+    head = line.split(" reason=", 1)[0]
+    assert len(head.split(" ")) == 4, head
+    assert " protocol_version=2026-07-28_forged=1_v" in line
+    assert " method=tools/call_forged=1 " in line
 
 
 async def test_logged_even_when_the_app_raises_after_responding(

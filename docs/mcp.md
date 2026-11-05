@@ -158,7 +158,7 @@ clients are not supported.
   `initialize`, as the spec's backward-compatibility section describes.
   The user sees nothing. Each refused request logs one line, such as
   `mcp_rejected status=400 method=tools/list protocol_version=2026-07-28
-  reason=…` (no params or arguments; 401 challenges are not logged), and
+  reason="…"` (no params or arguments; 401 challenges are not logged), and
   a test pins the `400` so an SDK upgrade that changes it prompts a
   re-read of this paragraph.
 - **Images:** claude.ai shows an `image` block from `get_document_file`

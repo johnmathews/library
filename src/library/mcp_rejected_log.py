@@ -6,7 +6,7 @@ fall back to ``initialize`` (docs/mcp.md 1.2). Without a log line those 400s
 look like unexplained failures. :class:`McpRejectedLog` writes one line per
 refused request::
 
-    mcp_rejected status=400 method=tools/list protocol_version=2026-07-28 reason=...
+    mcp_rejected status=400 method=tools/list protocol_version=2026-07-28 reason="..."
 
 It is a plain ASGI wrapper, not ``BaseHTTPMiddleware``, which buffers the
 response and breaks streaming. Request chunks are copied as they pass to the
@@ -44,6 +44,15 @@ def _clean(text: str, limit: int) -> str:
     return flat[:limit] or "-"
 
 
+def _token(text: str, limit: int) -> str:
+    """Like :func:`_clean`, but with no spaces left: whitespace becomes ``_``.
+
+    ``method`` and ``protocol_version`` are bare ``key=value`` fields, so a
+    space in a client-sent value would let it pose as an extra field.
+    """
+    return "_".join(text.split())[:limit] or "-"
+
+
 def _jsonrpc_method(body: bytes) -> str:
     """The ``method`` of a single JSON-RPC request object, else ``-``."""
     try:
@@ -51,7 +60,7 @@ def _jsonrpc_method(body: bytes) -> str:
     except ValueError:
         return "-"
     if isinstance(data, dict) and isinstance(data.get("method"), str):
-        return _clean(data["method"], _FIELD_MAX_CHARS)
+        return _token(data["method"], _FIELD_MAX_CHARS)
     return "-"
 
 
@@ -133,12 +142,14 @@ class McpRejectedLog:
         version = "-"
         for name, value in scope.get("headers", []):
             if name == b"mcp-protocol-version":
-                version = _clean(value.decode("latin-1"), _FIELD_MAX_CHARS)
+                version = _token(value.decode("latin-1"), _FIELD_MAX_CHARS)
                 break
+        # reason is free text, so it is JSON-quoted: its spaces and any
+        # "key=value" inside it stay one field.
         logger.info(
             "mcp_rejected status=%d method=%s protocol_version=%s reason=%s",
             status,
             method,
             version,
-            _reason(b"".join(response_chunks)),
+            json.dumps(_reason(b"".join(response_chunks))),
         )

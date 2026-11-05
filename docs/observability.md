@@ -122,12 +122,13 @@ the 401 sign-in challenge) logs one line on `library.mcp_rejected_log`, also at
 INFO:
 
 ```text
-2026-11-05 13:45:12,345 INFO library.mcp_rejected_log mcp_rejected status=400 method=tools/list protocol_version=2026-07-28 reason=Bad Request: Unsupported protocol version: 2026-07-28. Supported versions: …
+2026-11-05 13:45:12,345 INFO library.mcp_rejected_log mcp_rejected status=400 method=tools/list protocol_version=2026-07-28 reason="Bad Request: Unsupported protocol version: 2026-07-28. Supported versions: …"
 ```
 
 `method` is the JSON-RPC method (`-` when the body is not a single JSON
 object), `reason` is the error message the transport gave, cut to 200
-characters. Params, arguments and bodies are never logged. The usual cause
+characters and JSON-quoted. Whitespace in `method` and `protocol_version`,
+both client-sent, becomes `_`, so no value can pose as an extra field. Params, arguments and bodies are never logged. The usual cause
 is a client on a newer MCP revision probing before it falls back to
 `initialize` ([mcp.md §1.2](mcp.md)).
 
