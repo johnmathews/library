@@ -1,7 +1,7 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.3: `create_note` returns a `warning` instead of an error when the note was saved but not queued; *Files*: non-UTF-8 text comes back as a blob, and the filename is one URI segment; earlier the same day, *Monitoring*). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to the `create_note` row, *Notes* and *Files* changes. The new tests in `tests/test_mcp_notes_files.py` (queue failure, URI slashes, Latin-1 text) pass, each seen red first on the previous code; the prose was read against `mcp_server.py` and `notes_service.py`.
+**Status:** active. **Last updated:** 2026-11-05 (§1.6: the four-path bypass, the Cloudflare Browser Integrity Check rule and the outside checks; §1.2: what claude.ai, ChatGPT and Claude Code were seen doing). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: live, scoped to §1.2 and §1.6. claude.ai, ChatGPT and Claude Code each connected through the bypass and called tools as their approver (server log, `/metrics` and the audit trail); the §1.6 `curl` checks were run from outside.
 **Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -145,6 +145,26 @@ Any client supporting **Streamable HTTP** works: point it at
 send the `Authorization: Bearer library_…` header on every request. The server is stateless (no session affinity
 required) and responds with plain JSON. SSE-only (deprecated transport)
 clients are not supported.
+
+### What the clients do (seen 2026-11-05)
+
+- **All three connect by URL alone** and every call is attributed to the
+  user who approved them. A client's first `POST /mcp` in a new session
+  can get a `400`; the next request succeeds, and the user sees nothing.
+- **Images:** claude.ai shows an `image` block from `get_document_file`
+  to the user too, who can download it, even though the model may say
+  it cannot show it.
+- **PDFs:** asked to "show" a PDF, claude.ai's model offered the text
+  without calling `get_document_file`. The `download_url` is the way to
+  open it.
+- **Chat attachments cannot be ingested from claude.ai.** The file never
+  reaches the tool: the model would have to copy it out as base64 in
+  the call (a 68 KB PDF is about 91,000 characters), and it rightly
+  declines. Upload in the web app or by mail instead; `ingest_document`
+  suits clients that read files from disk, such as Claude Code.
+- **Edit confirmation is the model's call.** Library makes every applied
+  edit match a fresh preview, but cannot tell whether a person saw it:
+  an explicit "remove that tag" was applied straight after its preview.
 
 ## 1.3 Tools
 
@@ -556,15 +576,41 @@ approving user); a client that asks for no scope gets the same access.
 
 ## 1.6 Behind Cloudflare Access or another auth proxy
 
-The vendors' servers and the user's browser must reach the machine-facing
-paths without a proxy login. Bypass exactly these and keep everything else
-— including `/oauth/consent` and `/api/*` — behind the proxy, so signing
-in to approve a client still passes through it:
+The vendors' servers must reach the machine-facing paths without a
+proxy login. Bypass these four and keep everything else — including
+`/oauth/consent` and `/api/*` — behind the proxy, so signing in to
+approve a client still passes through it:
 
 - `/mcp` and `/mcp/*`
-- `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/*`
-- `/.well-known/oauth-authorization-server` and `/.well-known/oauth-authorization-server/*`
-- `/.well-known/openid-configuration` and `/.well-known/openid-configuration/*`
+- `/.well-known` and `/.well-known/*`
 
-Library's own auth guards all of them: every `/mcp` tool call needs a
-token, and registration only accepts allow-listed redirect URIs.
+Library serves only the OAuth discovery documents under `/.well-known`
+(anything else there is a JSON `404`), so the folder exposes nothing
+more than naming each document would. Library's own auth guards the
+rest: every `/mcp` tool call needs a token, and registration only
+accepts allow-listed redirect URIs.
+
+**Cloudflare Access.** Add a second self-hosted application on the
+public hostname with those four paths as its destinations and one
+policy whose action is **Bypass** for Everyone. An *Allow* policy for
+Everyone still sends the request to the Access login. Access applies
+the more specific application, so a wildcard application on the rest
+of the zone stays as it is.
+
+**Cloudflare Browser Integrity Check** can challenge claude.ai's
+servers. A custom WAF rule with the action *Skip → Browser Integrity
+Check* for Anthropic's outbound ranges on those paths prevents it:
+
+```text
+(http.host eq "library.example.org") and (ip.src in {160.79.104.0/21 153.61.208.0/20}) and (starts_with(http.request.uri.path, "/mcp") or starts_with(http.request.uri.path, "/.well-known/"))
+```
+
+ChatGPT connected without a rule of its own.
+
+**Check from outside**, with no Access cookie:
+
+```console
+curl -s https://library.example.org/.well-known/oauth-protected-resource/mcp   # JSON, public https URLs
+curl -si -X POST https://library.example.org/mcp | grep -i www-authenticate      # 401 + resource_metadata
+curl -s -o /dev/null -w '%{http_code}\n' https://library.example.org/api/auth/login  # 302 to the proxy login
+```
