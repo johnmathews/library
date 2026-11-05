@@ -1,7 +1,7 @@
 # Money facts and payment identity
 
-**Status:** active. **Last updated:** 2026-11-05 (§5.2 new: `structured_query.sum_amount` chooses each payment's counted document within the filtered set; the charts still use the archive-wide `is_canonical`; §5's spending-total paragraph points there). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §5's spending-total paragraph and §5.2. Read `structured_query._counted_per_payment` and `sum_amount` against migration 0035's ranking, and `charts/query.py`, `charts/footer.py` and `api/facets.py`, which still filter `sf.is_canonical`. The within-filter tests in `tests/test_mcp_money.py` pass, seen red first or killed by mutants. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-05 (§5.2: the date window no longer chooses which twin carries a payment, so month totals add up; new reason `payment_dated_elsewhere`; a facet filter on an itemised document recorded as a follow-up). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §5's spending-total paragraph and §5.2. Read `structured_query._payment_choices` and `sum_amount` against migration 0035's ranking, and `charts/query.py`, `charts/footer.py` and `api/facets.py`, which still filter `sf.is_canonical`. The month-window and within-filter tests in `tests/test_mcp_money.py` pass, seen red first or killed by mutants. The rest carries its earlier verifications forward.
 **Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, src/library/llm/envelope.py, src/library/structured_query.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
@@ -413,19 +413,37 @@ row, so a total filtered to `kind='utility-bill'` that gates on
 payment it never counted. A tag only the bill carries does the same.
 
 `structured_query.sum_amount` therefore does not read `is_canonical`.
-`_counted_per_payment` ranks, with the view's ordering, only the
-documents that passed the caller's filters and the earlier gates (an
-amount, not a quote, a summable kind, and the group key when grouping),
-and counts the first of each payment. Three consequences:
+`_payment_choices` ranks, with the view's ordering (and, when grouping,
+having the group key first), the documents that pass **every filter
+except the date window** and the earlier gates (an amount, not a quote, a
+summable kind). The first of each payment carries it. **The rule:** the
+filters other than dates decide which document carries a payment; the
+date window then decides whether that document, and so the payment, is in
+the total. Consequences:
 
-- When both twins pass, the counted one is the one the view picks, so a
+- When both twins pass, the carrying one is the one the view picks, so a
   total over the whole archive is unchanged.
-- When the view's choice is filtered out, the best-ranked twin that passed
-  carries the payment. An itemised document still wins wherever it is a
-  candidate, and its line rows are what is summed.
+- When the view's choice is filtered out by kind, tag, project, matter,
+  facet, sender, recipient or review status, the best-ranked twin that
+  passed carries the payment. An itemised document still wins wherever it
+  is a candidate, and its line rows are what is summed.
+- A date window never picks the twin. A water bill dated 28 September and
+  its receipt dated 3 October are one payment carried by the receipt: a
+  September total reports the bill as `payment_dated_elsewhere` and an
+  October total counts the payment, so September plus October equals the
+  two months together. With `kind='utility-bill'` the bill is the only
+  candidate, so it carries the payment, in September.
+- An undated carrying document is in no date window: its payment counts
+  only in a total without one, and its dated twins are
+  `payment_dated_elsewhere`.
 - `duplicate_payment` names only a document whose payment is in the rows.
   When grouping, a document lacking the key is a duplicate if a twin with
-  the key carries its payment, and `no_sender`/`no_kind` otherwise.
+  the key carries its payment, and `no_sender`/`no_kind` otherwise. A
+  document whose payment lands in a row the 50-row cap cut is `over_limit`.
+
+Totals under different non-date filters can share payments and must not be
+added: `kind='utility-bill'` counts the water payment through the bill,
+`kind='receipt'` through the receipt. The tool text says so.
 
 It also changes one case over the whole archive: a payment whose view
 choice has an undecided or non-summable kind (an undecided document with
@@ -437,6 +455,13 @@ summable twin now counts.
 rule that matches only a payment's non-canonical twin (a label on the bill
 but not the receipt) leaves that payment out. Moving them onto the same
 within-filter choice is a recorded follow-up.
+
+**Follow-up: a facet filter on an itemised document.** The `facets` filter
+checks the document's own labels, but `sum_amount` then sums every line
+row of the carrying document. A `category=energy` filter that matches an
+itemised invoice split into an energy line and a water line also sums the
+water line. This predates the within-filter choice; summing only the
+lines whose (inherited) labels match the filter is the fix.
 
 ## 6. `library backfill-amounts`
 

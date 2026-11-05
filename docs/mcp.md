@@ -1,7 +1,7 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.3 *Money*: `sum_amount` picks each payment's counted document within the filtered set; blank filter values refused by every filtered tool, unknown slugs and facet values by `money_query`; grouped rows capped at 50 with `over_limit`). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §1.3's *Errors*, the `money_query` row and *Money*. The fix tests in `tests/test_mcp_money.py` pass, each seen red first or killed by a hand-made mutant; the prose was read against `mcp_server.py` and `structured_query.py`.
+**Status:** active. **Last updated:** 2026-11-05 (§1.3 *Money*: the date window applies to the document that carries a payment, chosen over the other filters, with the new reason `payment_dated_elsewhere`; a twin of a cut row is `over_limit`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §1.3 *Money*. The month-window and row-cap tests in `tests/test_mcp_money.py` pass, each seen red first or killed by a hand-made mutant; the prose was read against `structured_query.py`.
 **Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -308,23 +308,32 @@ its result unchanged.
   are left out unless `kind` is `quote`. Totals are per currency;
   `group_by` splits them by sender or kind. `distinct_senders` and `list`
   return the same coverage block.
-- Which document counts for a payment is decided among the documents
-  that passed the filters (the `spend_facts` ordering: a document with
-  spend lines, then a `payment_made`, then the lowest id). So
+- Which document carries a payment is decided among the documents that
+  pass every filter **except the date window** (the `spend_facts`
+  ordering: a document with spend lines, then a `payment_made`, then the
+  lowest id). The window then applies to that document. So
   `kind="utility-bill"` counts a bill whose receipt the archive-wide view
-  would have counted, and `duplicate_payment` only names a document whose
-  payment is in the rows ([money-facts.md](money-facts.md) §5.2).
+  would have counted, and a bill dated 28 September whose receipt is dated
+  3 October counts in October only: a September total reports the bill as
+  `payment_dated_elsewhere`, and adjacent windows add up. Totals under
+  different non-date filters (`kind="utility-bill"` and `kind="receipt"`)
+  can count the same payment and must not be added; `COVERAGE_GUIDE` tells
+  the model so. `duplicate_payment` only names a document whose payment
+  is in the rows ([money-facts.md](money-facts.md) §5.2).
 - `distinct_senders` and `sum_amount` return at most 50 rows
   (`structured_query.MAX_GROUP_ROWS`): the senders with the most
   documents, the groups with the largest totals either side of zero. The
   documents of the rows cut are counted as `over_limit`, so a grouped
-  result never looks complete when it is not; `sum_amount` without
+  result never looks complete when it is not, and a twin whose payment
+  lands in a cut row is `over_limit` too; `sum_amount` without
   `group_by` has one row per currency.
 - `coverage` says what the rows leave out. `matched` documents met the
   filters, `included` are the ones the rows account for, and `excluded`
   maps a reason to how many were dropped for it, so `included` plus the
   excluded counts is `matched`. The reasons: `no_amount`,
   `quote_not_spend`, `not_summable_kind`, `duplicate_payment`,
+  `payment_dated_elsewhere` (the twin carrying the payment is dated
+  outside the window, or undated),
   `no_sender`/`no_kind` when grouping (a document lacking the key whose
   payment no twin with the key carries), `filtered_review_status` when
   `review_status` filters, and `over_limit` for the rows a cap cut. `needs_review`

@@ -1027,6 +1027,297 @@ async def test_ask_query_documents_counts_a_payment_via_its_twin_in_the_filter(
     assert money.bill in cited
 
 
+# ------------------------------------------- a date window does not choose
+#
+# Second review of fix 1: ranking only the documents inside the date window
+# let a window pick the twin, so a payment whose bill is dated 28 September
+# and whose receipt is dated 3 October counted in both months. The date
+# window now applies to the chosen document instead of to the ranking.
+
+SEPTEMBER: dict[str, str] = {"date_from": "2024-09-01", "date_to": "2024-09-30"}
+OCTOBER: dict[str, str] = {"date_from": "2024-10-01", "date_to": "2024-10-31"}
+AUTUMN: dict[str, str] = {"date_from": "2024-09-01", "date_to": "2024-10-31"}
+
+
+@dataclass(frozen=True)
+class MonthPayments:
+    tag: str
+    water: str
+    bill: int
+    receipt: int
+    prepaid: int
+    invoiced_after: int
+    refund: int
+
+
+async def _seed_month_payments(database_url: str, auth_user: AuthUser) -> MonthPayments:
+    """Payments whose twins fall in different months.
+
+    P1 (water, 100.00): a utility bill dated 28 Sep and its receipt dated
+    3 Oct. The receipt is payment_made, so it carries the payment: October.
+    A soft-deleted payment_made copy of the bill, created BEFORE the receipt
+    (lower id) and dated 28 Sep, would carry it in September if it were
+    ranked. P2 (shop, 40.00, uploaded by another household member): paid on
+    30 Sep, invoiced on 2 Oct; the receipt carries it: September. P3 (garage,
+    20.00): an undated receipt and its invoice dated 20 Oct; the undated
+    receipt carries it, so no date window holds it. A water credit note of
+    15.00 on 15 Oct, and a café receipt of 7.00 on 29 Feb 2024.
+    """
+    tag = f"mcp-month-{secrets.token_hex(4)}"
+    water = f"Example Water {tag}"
+    shop = f"Example Shop {tag}"
+    garage = f"Example Garage {tag}"
+    other_user_id = await _insert_user(database_url, f"{tag}-partner", "pw-partner-1234")
+
+    async def seed(marker: str, **fields: Any) -> int:
+        fields.setdefault("currency", "EUR")
+        fields.setdefault("uploader_id", auth_user.id)
+        return await _seed_document(database_url, f"{tag}-{marker}", tag_slugs=[tag], **fields)
+
+    bill = await seed(
+        "bill",
+        kind_slug="utility-bill",
+        sender_name=water,
+        amount_total=Decimal("100.00"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        reference=f"W-{tag}",
+        document_date=date(2024, 9, 28),
+    )
+    await seed(
+        "bill-deleted",
+        kind_slug="utility-bill",
+        sender_name=water,
+        amount_total=Decimal("100.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference=f"W-{tag}",
+        document_date=date(2024, 9, 28),
+        deleted_at=datetime.now(UTC),
+    )
+    receipt = await seed(
+        "receipt",
+        kind_slug="receipt",
+        sender_name=water,
+        amount_total=Decimal("100.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference=f"W-{tag}",
+        document_date=date(2024, 10, 3),
+    )
+    prepaid = await seed(
+        "prepaid",
+        kind_slug="receipt",
+        sender_name=shop,
+        amount_total=Decimal("40.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference=f"S-{tag}",
+        document_date=date(2024, 9, 30),
+        uploader_id=other_user_id,
+    )
+    invoiced_after = await seed(
+        "invoiced-after",
+        kind_slug="invoice",
+        sender_name=shop,
+        amount_total=Decimal("40.00"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        reference=f"S-{tag}",
+        document_date=date(2024, 10, 2),
+        uploader_id=other_user_id,
+    )
+    await seed(
+        "garage-receipt",
+        kind_slug="receipt",
+        sender_name=garage,
+        amount_total=Decimal("20.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference=f"G-{tag}",
+    )
+    await seed(
+        "garage-invoice",
+        kind_slug="invoice",
+        sender_name=garage,
+        amount_total=Decimal("20.00"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        reference=f"G-{tag}",
+        document_date=date(2024, 10, 20),
+    )
+    refund = await seed(
+        "credit",
+        kind_slug="utility-bill",
+        sender_name=water,
+        amount_total=Decimal("15.00"),
+        amount_kind=AmountKind.REFUND,
+        reference=f"W-{tag}-CR",
+        document_date=date(2024, 10, 15),
+    )
+    await seed(
+        "cafe",
+        kind_slug="receipt",
+        sender_name=f"Example Cafe {tag}",
+        amount_total=Decimal("7.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        document_date=date(2024, 2, 29),
+    )
+    assert await _view_canonical(database_url, [bill, receipt, prepaid, invoiced_after]) == {
+        receipt,
+        prepaid,
+    }
+    return MonthPayments(
+        tag=tag,
+        water=water,
+        bill=bill,
+        receipt=receipt,
+        prepaid=prepaid,
+        invoiced_after=invoiced_after,
+        refund=refund,
+    )
+
+
+async def test_money_query_monthly_totals_add_up_to_the_period(
+    connect: Connector, token: str, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """September + October == September-October: each payment counts in
+    the window holding the document that carries it, whichever month the
+    window's other twin is in."""
+    money = await _seed_month_payments(api_database_url, auth_user)
+    totals: dict[str, dict[str, Any]] = {}
+    async with connect(token) as session:
+        for name, window in (
+            ("sep", SEPTEMBER),
+            ("oct", OCTOBER),
+            ("autumn", AUTUMN),
+            ("year", {"date_from": "2024-01-01", "date_to": "2024-12-31"}),
+            ("all", {}),
+        ):
+            totals[name] = payload(
+                await session.call_tool("money_query", {"tags": [money.tag], **window})
+            )
+
+    def total(name: str) -> str:
+        return str([row["total"] for row in totals[name]["rows"]])
+
+    # September: the shop's prepayment (carried by its 30 Sep receipt) 40.00.
+    # The water bill of 28 Sep is carried by its October receipt.
+    # Before the fix: 140.00, the bill counting the water payment here too.
+    assert total("sep") == "['40.00']"
+    assert totals["sep"]["rows"][0]["document_ids"] == [money.prepaid]
+    assert totals["sep"]["coverage"] == {
+        "matched": 2,
+        "included": 1,
+        "excluded": {"payment_dated_elsewhere": 1},
+        "needs_review": 0,
+    }
+    # October: water receipt 100.00 - credit 15.00 = 85.00. The shop's invoice
+    # (its payment is September's) and the garage invoice (its payment is
+    # carried by an undated receipt) are dated elsewhere. Before: 125.00.
+    assert total("oct") == "['85.00']"
+    assert sorted(totals["oct"]["rows"][0]["document_ids"]) == sorted([money.receipt, money.refund])
+    assert totals["oct"]["coverage"] == {
+        "matched": 4,
+        "included": 2,
+        "excluded": {"payment_dated_elsewhere": 2},
+        "needs_review": 0,
+    }
+    # Both months: 100.00 + 40.00 - 15.00 = 125.00 = 40.00 + 85.00.
+    assert total("autumn") == "['125.00']"
+    assert totals["autumn"]["coverage"] == {
+        "matched": 6,
+        "included": 3,
+        "excluded": {"duplicate_payment": 2, "payment_dated_elsewhere": 1},
+        "needs_review": 0,
+    }
+    # The year adds February's 7.00: 132.00. Only a total with no date window
+    # holds the garage payment (its receipt is undated): 152.00.
+    assert total("year") == "['132.00']"
+    assert total("all") == "['152.00']"
+    assert totals["all"]["coverage"]["excluded"] == {"duplicate_payment": 3}
+    for result in totals.values():
+        assert _partitions(result["coverage"])
+
+
+async def test_money_query_kind_filter_still_chooses_within_the_kind(
+    connect: Connector, token: str, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """Non-date filters still select the candidates: with kind='utility-bill'
+    the bill is the only candidate of the water payment, so it carries it, in
+    September, its own date."""
+    money = await _seed_month_payments(api_database_url, auth_user)
+    totals: dict[str, list[str]] = {}
+    async with connect(token) as session:
+        for name, window in (("sep", SEPTEMBER), ("oct", OCTOBER), ("autumn", AUTUMN)):
+            result = payload(
+                await session.call_tool(
+                    "money_query", {"kind": "utility-bill", "tags": [money.tag], **window}
+                )
+            )
+            assert result["coverage"]["excluded"] == {}, name
+            totals[name] = [row["total"] for row in result["rows"]]
+    # Utility bills: the water bill 100.00 in September, the credit note
+    # -15.00 in October; together 85.00.
+    assert totals == {"sep": ["100.00"], "oct": ["-15.00"], "autumn": ["85.00"]}
+
+
+async def test_money_query_groups_by_month_window_without_double_counting(
+    connect: Connector, token: str, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """The same rule holds per sender, with the other member's shop payment."""
+    money = await _seed_month_payments(api_database_url, auth_user)
+    async with connect(token) as session:
+        sep = payload(
+            await session.call_tool(
+                "money_query", {"tags": [money.tag], "group_by": "sender", **SEPTEMBER}
+            )
+        )
+        oct_ = payload(
+            await session.call_tool(
+                "money_query", {"tags": [money.tag], "group_by": "sender", **OCTOBER}
+            )
+        )
+    # September: shop 40.00 only. October: water 100.00 - 15.00 = 85.00.
+    assert {row["key"]: row["total"] for row in sep["rows"]} == {
+        f"Example Shop {money.tag}": "40.00"
+    }
+    assert {row["key"]: row["total"] for row in oct_["rows"]} == {money.water: "85.00"}
+    assert sep["coverage"]["excluded"] == {"payment_dated_elsewhere": 1}
+    assert oct_["coverage"]["excluded"] == {"payment_dated_elsewhere": 2}
+
+
+async def test_money_query_twin_of_a_cut_group_is_over_limit(
+    connect: Connector, token: str, api_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A twin whose payment's row was cut by the row cap is over_limit, not
+    a duplicate: its payment is in no row."""
+    tag = f"mcp-cap-twin-{secrets.token_hex(4)}"
+
+    async def seed(marker: str, amount: str, currency: str, amount_kind: AmountKind) -> int:
+        return await _seed_document(
+            api_database_url,
+            f"{tag}-{marker}",
+            tag_slugs=[tag],
+            kind_slug="receipt",
+            sender_name=f"Example Hotel {tag}" if currency == "USD" else f"Example Bakery {tag}",
+            amount_total=Decimal(amount),
+            currency=currency,
+            amount_kind=amount_kind,
+            reference=f"H-{tag}" if currency == "USD" else None,
+            document_date=date(2024, 2, 29),
+        )
+
+    await seed("bakery", "50.00", "EUR", AmountKind.PAYMENT_MADE)
+    await seed("hotel-invoice", "30.00", "USD", AmountKind.PAYMENT_DUE)
+    await seed("hotel-receipt", "30.00", "USD", AmountKind.PAYMENT_MADE)
+    monkeypatch.setattr(structured_query, "MAX_GROUP_ROWS", 1)
+    async with connect(token) as session:
+        result = payload(await session.call_tool("money_query", {"tags": [tag], **FEBRUARY}))
+    # EUR 50.00 outweighs USD 30.00 (one payment, two documents): both hotel
+    # documents are over_limit. Before: one over_limit, one "duplicate".
+    assert [(row["currency"], row["total"]) for row in result["rows"]] == [("EUR", "50.00")]
+    assert result["coverage"] == {
+        "matched": 3,
+        "included": 1,
+        "excluded": {"over_limit": 2},
+        "needs_review": 0,
+    }
+
+
 # ------------------------------------------------- blank and unknown filters
 #
 # W10 review, fix 2: a filter value that can match nothing made a silent,

@@ -246,3 +246,54 @@ the has-lines preference, reverse the id tie-break. Twenty mutants across the
 three fixes, all killed in the end (the tie-break one survived until the tie
 test was added). `mcp_server.py` stays at 100% line coverage over the
 MCP test files. No existing test changed.
+
+**Second review of the dedup fix.** Ranking inside the filtered set had let
+the date window choose the twin. A bill dated 28 September and its receipt
+dated 3 October counted 100.00 in a September total, 100.00 in October and
+100.00 over both, so month totals did not add up, and the charts (which use
+the archive-wide flag) disagreed with Ask and MCP. The lead's rule: every
+filter except the date window decides which document carries a payment;
+the window then applies to that document. `_payment_choices` ranks over
+`filter_conditions` with `date_from`/`date_to` cleared. A matched document
+whose payment is carried by a twin outside the window (or by an undated
+twin, which no window holds) is the new reason `payment_dated_elsewhere`.
+`kind='utility-bill'` still chooses among bills only, so the bill carries
+the payment in September. `COVERAGE_GUIDE` now says that adjacent date
+windows add up, but totals under different non-date filters can share
+payments and must not be added together.
+
+The same change answers the performance finding. The ranking used to appear
+about six times in the grouped coverage statement, plus two correlated
+`EXISTS` against `spend_facts`. It is now one `MATERIALIZED` CTE, one row
+per candidate document, carrying the chosen twin's date, key and currency.
+Every coverage reason, and the row query's own gate, is a membership test
+against that CTE. The emitted SQL has one `WITH payment_choices AS
+MATERIALIZED` per statement, referenced once by the row query and five
+times by the coverage query, with no `EXISTS` on `spend_facts` left. A
+quick probe (4,000 documents in 2,000 merged pairs, 100 senders, after
+`ANALYZE`) timed the new `sum_amount` at 2.14 s ungrouped and 2.13 s
+grouped by sender, against 3.39 s ungrouped for `cb56306`. The probe was
+stopped before the old grouped figure came in. Without `ANALYZE`, both the
+old and the new statement ran for more than 15 minutes on freshly inserted
+rows: the planner, with no statistics, re-evaluated the view once per
+document. Production autovacuum analyses, but that is a cliff worth knowing
+about.
+
+The row cap moved onto the same data. A twin whose payment lands in a row
+the cap cut is now `over_limit`, not `duplicate_payment`, because its payment
+is in no row (the probe's 50 cut senders reported both twins of each of
+their 1,000 payments as `over_limit`).
+
+**Follow-up, recorded in money-facts.md §5.2, out of this run:** a `facets`
+filter checks a document's own labels, but `sum_amount` sums every line row
+of the carrying document, so `category=energy` on an itemised invoice also
+sums its water line. This predates the review.
+
+Evidence: September plus October equals the two months together (40.00 +
+85.00 = 125.00; before the fix 140.00 + 125.00). The kind-filtered guard
+(bill 100.00 in September, credit note -15.00 in October) and the cut-row
+twin (both `over_limit`; before, one was reported as a duplicate) are new
+tests. Seven mutants all turned a test red: ranking inside the window,
+ranking without the kind filter, no `COALESCE` for an undated carrier, the
+group key not ordered first, a cut row's twin left as a duplicate, NULL
+currency not coalesced, and the window not applied to the chosen document.

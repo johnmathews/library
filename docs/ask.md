@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-05 (*Coverage and trust on structured results*: `sum_amount` counts each payment through a document within the call's filters, not the view's archive-wide `is_canonical`; `distinct_senders` and `sum_amount` rows capped at 50 with `over_limit`; limitation 8 updated). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to *Coverage and trust on structured results* and §1.10 item 8. Read against `structured_query.py`; the within-filter and row-cap tests in `tests/test_mcp_money.py`, which include runs through `_run_query_documents`, pass, seen red first or killed by mutants. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-05 (*Coverage and trust on structured results*: the date window applies to the document that carries a payment, chosen over the other filters, with the new reason `payment_dated_elsewhere`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to *Coverage and trust on structured results*. Read against `structured_query.py`; the month-window, within-filter and row-cap tests in `tests/test_mcp_money.py`, which include runs through `_run_query_documents`, pass, seen red first or killed by mutants. The rest carries its earlier verifications forward.
 **Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, .github/workflows/e2e-nightly.yml
 
 Ask lets you put a natural-language question to the archive and get a prose
@@ -276,7 +276,8 @@ The reasons a document is dropped, by aggregate:
   real but is not spending: a `coverage_limit`, a `balance`, an `estimate`, a
   `none`, or an `amount_kind` nothing has decided yet), `duplicate_payment` (a
   second document for a payment these rows count — see the money paragraph
-  below), `no_sender`/`no_kind` — present only when grouping by that column,
+  below), `payment_dated_elsewhere` (the twin that carries its payment is
+  dated outside the date window, or undated), `no_sender`/`no_kind` — present only when grouping by that column,
   whose inner join drops a document lacking it, and only when no twin with the
   column carries its payment — and `over_limit` (in a group the 50-row cap
   cut; the groups with the largest totals, either sign, are kept).
@@ -309,11 +310,12 @@ own document date into a display currency):
 - **One payment counts once.** The view's `payment_id` groups a payment's
   documents, and one of them is counted, so an invoice and a receipt for the
   same payment total once rather than twice, reported as `duplicate_payment`.
-  The counted one is chosen among the documents that passed the call's filters,
-  with the view's ordering ([money-facts.md](money-facts.md) §5.2), not by the
-  view's archive-wide `is_canonical`: `kind='utility-bill'` still counts a bill
-  whose receipt the view would have picked. The charts keep the archive-wide
-  flag.
+  The counted one is chosen among the documents that pass every filter but the
+  date window, with the view's ordering ([money-facts.md](money-facts.md) §5.2),
+  not by the view's archive-wide `is_canonical`: `kind='utility-bill'` still
+  counts a bill whose receipt the view would have picked. The date window then
+  applies to the chosen document, so month totals add up. The charts keep the
+  archive-wide flag.
 
 Coverage is still counted over `documents`, not over the view. Every one of
 these exclusions is expressible as a document-level predicate — `amount_kind` is
