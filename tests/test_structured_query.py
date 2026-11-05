@@ -10,6 +10,8 @@ import pytest
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
+from library.charts.query import chart_series
+from library.charts.rule import Clause, Rule
 from library.facets.vocabulary import create_facet, create_value, set_document_label
 from library.models import (
     AmountKind,
@@ -17,6 +19,7 @@ from library.models import (
     DocumentSource,
     Facet,
     FacetValue,
+    Grain,
     Kind,
     ReviewStatus,
     Sender,
@@ -1036,6 +1039,367 @@ async def test_sum_amount_narrows_by_facet(
 
     assert {(row.currency, row.total) for row in result.rows} == {("EUR", "120.00")}
     assert result.coverage.matched == 1
+
+
+#: February, with its 29th: every line-facet case below is dated inside it, so
+#: an off-by-one on the window's end would drop a document rather than pass.
+_FEB_2024 = {"date_from": date(2024, 2, 1), "date_to": date(2024, 2, 29)}
+
+
+async def _seed_line_facet_fixture(session: AsyncSession) -> dict[str, int]:
+    """The itemised-payment fixture the line-facet cases share.
+
+    * ``invoice`` — labelled ``category=services``, itemised 60.00 (inherits
+      services) + 40.00 (overridden to supplies).
+    * ``receipt`` — the same payment (same sender and reference, rule R2),
+      labelled ``supplies`` on the whole 100.00. The invoice carries the
+      payment wherever both are candidates, because a line-bearing document
+      ranks first (``docs/money-facts.md`` §5.2) — so the receipt's 100.00
+      must never be what a supplies total reads.
+    * ``joinery`` — no document label at all, itemised 10.00 (services) +
+      20.00 (unlabelled). Only a line carries the facet; the 20.00 must not
+      ride along with it.
+    * ``amountless`` — labelled services, no amount: the ``no_amount`` case.
+    """
+    invoice = await seed(
+        session,
+        "lf-invoice",
+        sender_name="Example Builder",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 8),
+        amount="100.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        reference="EB-201",
+        labels={"category": "services"},
+        lines=[("60.00", None), ("40.00", {"category": "supplies"})],
+    )
+    receipt = await seed(
+        session,
+        "lf-receipt",
+        sender_name="Example Builder",
+        kind_slug="receipt",
+        document_date=date(2024, 2, 14),
+        amount="100.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference="EB-201",
+        labels={"category": "supplies"},
+    )
+    joinery = await seed(
+        session,
+        "lf-joinery",
+        sender_name="Example Joinery",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 9),
+        amount="30.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        reference="EJ-7",
+        lines=[("10.00", {"category": "services"}), ("20.00", None)],
+    )
+    amountless = await seed(
+        session,
+        "lf-amountless",
+        sender_name="Example Builder",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 20),
+        labels={"category": "services"},
+    )
+    return {"invoice": invoice, "receipt": receipt, "joinery": joinery, "amountless": amountless}
+
+
+async def test_sum_amount_facet_counts_only_the_money_rows_carrying_it(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """A facet filter sums the rows (document or line) whose merged labels carry
+    it, and the carrying twin is chosen among the rows that do.
+
+    The expected numbers, from the ``spend_facts`` rules:
+
+    * **services = 70.00**: the invoice's 60.00 line (it inherits services from
+      the invoice) plus the joinery's 10.00 line. Not the invoice's 40.00
+      supplies line, not the joinery's unlabelled 20.00, and not the receipt,
+      whose only row says supplies. The old document-label filter gave 100.00:
+      the whole invoice, and no joinery at all.
+    * **supplies = 40.00**: the invoice's 40.00 line. Both twins carry
+      supplies, so both are candidates, and the line-bearing invoice ranks
+      first; the receipt is ``duplicate_payment``. Neither 100.00 (the
+      receipt's total) nor 140.00 (both twins) is right: they are one
+      payment, and its split says 40.00 of it was supplies. The old filter
+      matched only the receipt by its document label and gave 100.00.
+
+    Asked services → supplies → services, so a result that leaked state from
+    the previous call (a cached CTE, a reused statement) cannot pass.
+    """
+    ids = await _seed_line_facet_fixture(session)
+
+    async def total(value: str) -> tuple[set[tuple[str | None, str]], list[int], Coverage]:
+        result = await sum_amount(
+            session, filters=DocumentFilters(facets={"category": value}, **_FEB_2024)
+        )
+        cited = sorted(i for row in result.rows for i in row.document_ids)
+        return {(row.currency, row.total) for row in result.rows}, cited, result.coverage
+
+    for value in ("services", "supplies", "services"):
+        rows, cited, coverage = await total(value)
+        if value == "services":
+            assert rows == {("EUR", "70.00")}
+            assert cited == sorted([ids["invoice"], ids["joinery"]])
+            # The amountless services document is matched and named, not lost.
+            assert coverage == Coverage(
+                matched=3, included=2, excluded={"no_amount": 1}, needs_review=0
+            )
+        else:
+            assert rows == {("EUR", "40.00")}
+            assert cited == [ids["invoice"]]
+            assert coverage == Coverage(
+                matched=2, included=1, excluded={"duplicate_payment": 1}, needs_review=0
+            )
+
+
+async def test_sum_amount_line_facet_grouped_by_sender_splits_the_matching_lines(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """The grouped path reads the same per-row facet: each sender's group holds
+    only its own matching lines, so the groups still add up to the ungrouped
+    70.00 (60.00 + 10.00) rather than to the documents' 130.00."""
+    await _seed_line_facet_fixture(session)
+
+    result = await sum_amount(
+        session,
+        filters=DocumentFilters(facets={"category": "services"}, **_FEB_2024),
+        group_by="sender",
+    )
+
+    assert {(row.key, row.total) for row in result.rows} == {
+        ("Example Builder", "60.00"),
+        ("Example Joinery", "10.00"),
+    }
+    assert result.coverage.excluded == {"no_amount": 1}
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+
+
+@pytest.mark.parametrize("value", ["services", "supplies"])
+async def test_sum_amount_line_facet_total_equals_the_chart_over_the_same_rows(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]], value: str
+) -> None:
+    """``sum_amount(facets={category: v})`` and a chart ruled ``category in [v]``
+    read the same ``spend_facts`` rows, so over one fixture they give one total.
+
+    Not a comparison of two copies of one rule: the chart filters on
+    ``spend_facts.labels`` per row (``charts/rule.py``) and keeps the view's
+    archive-wide twin, ``sum_amount`` chooses the twin within the filter. Here
+    the two choices coincide (the itemised invoice wins both ways), which is
+    what makes agreement the expected answer. A fixture where they differ is
+    W5's (``docs/money-facts.md`` §5.2).
+    """
+    await _seed_line_facet_fixture(session)
+
+    money = await sum_amount(
+        session, filters=DocumentFilters(facets={"category": value}, **_FEB_2024)
+    )
+    series = await chart_series(
+        session,
+        Rule(all=[Clause(facet="category", values=[value])]),
+        grain=Grain.MONTH,
+        split=None,
+        currency="EUR",
+        since=_FEB_2024["date_from"],
+        until=_FEB_2024["date_to"],
+    )
+
+    assert [(row.currency, Decimal(row.total)) for row in money.rows] == [("EUR", series.total)]
+    assert series.total != Decimal("0")
+
+
+async def test_sum_amount_line_facet_chooses_the_twin_whose_money_carries_it(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """The twin is chosen among the documents whose money carries the facet.
+
+    An itemised invoice with unlabelled lines and its receipt, labelled
+    supplies, are one 100.00 payment. Archive-wide the invoice ranks first
+    (it has lines), but none of its rows is supplies; the receipt's is. So a
+    supplies total is carried by the receipt: 100.00, the receipt included,
+    and the invoice not matched at all. Choosing the twin before applying the
+    facet picks the invoice, sums none of its rows, and reports the receipt as
+    a ``duplicate_payment`` of a payment the rows never counted.
+
+    The chart reads the archive-wide twin and answers 0.00 here; that is
+    W5's item (``docs/money-facts.md`` §5.2), not asserted.
+    """
+    await seed(
+        session,
+        "unlabelled-lines",
+        sender_name="Example Builder",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 15),
+        amount="100.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        reference="EB-305",
+        lines=[("70.00", None), ("30.00", None)],
+    )
+    receipt = await seed(
+        session,
+        "labelled-receipt",
+        sender_name="Example Builder",
+        kind_slug="receipt",
+        document_date=date(2024, 2, 16),
+        amount="100.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference="EB-305",
+        labels={"category": "supplies"},
+    )
+
+    result = await sum_amount(
+        session, filters=DocumentFilters(facets={"category": "supplies"}, **_FEB_2024)
+    )
+
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "100.00")}
+    assert result.rows[0].document_ids == [receipt]
+    assert result.coverage == Coverage(matched=1, included=1, excluded={}, needs_review=0)
+
+
+async def test_sum_amount_facet_matches_a_document_by_its_money_not_its_label(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """``matched`` under a facet: the documents with a money row carrying it,
+    plus the amountless documents labelled with it (they have no money row to
+    ask, and ``no_amount`` is the reason worth reporting).
+
+    The adversarial one is ``relabelled``: labelled services, but its only line
+    is overridden to supplies, so none of its money is services. Counting it
+    as matched under services would leave it in no coverage bucket, since it
+    is not a candidate for any payment, and the partition (``included +
+    excluded == matched``) would break. Under supplies it is an ordinary
+    included document.
+    """
+    relabelled = await seed(
+        session,
+        "relabelled",
+        sender_name="Example Builder",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 10),
+        amount="50.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        labels={"category": "services"},
+        lines=[("50.00", {"category": "supplies"})],
+    )
+    await seed(
+        session,
+        "amountless-services",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 11),
+        labels={"category": "services"},
+    )
+    await seed(
+        session,
+        "amountless-supplies",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 12),
+        labels={"category": "supplies"},
+    )
+
+    services = await sum_amount(
+        session, filters=DocumentFilters(facets={"category": "services"}, **_FEB_2024)
+    )
+    supplies = await sum_amount(
+        session, filters=DocumentFilters(facets={"category": "supplies"}, **_FEB_2024)
+    )
+
+    assert services.rows == []
+    assert services.coverage == Coverage(
+        matched=1, included=0, excluded={"no_amount": 1}, needs_review=0
+    )
+    assert {(row.currency, row.total) for row in supplies.rows} == {("EUR", "50.00")}
+    assert supplies.rows[0].document_ids == [relabelled]
+    assert supplies.coverage == Coverage(
+        matched=2, included=1, excluded={"no_amount": 1}, needs_review=0
+    )
+
+
+async def test_sum_amount_facet_reports_an_amountless_labelled_document_as_no_amount(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """An amountless document has no ``spend_facts`` row to carry a facet, so
+    its document label is what matches it: a services total still says one
+    services document had no amount, rather than reading as complete."""
+    await seed(
+        session,
+        "paid",
+        kind_slug="receipt",
+        document_date=date(2024, 2, 3),
+        amount="25.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "services"},
+    )
+    await seed(
+        session,
+        "unread",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 4),
+        labels={"category": "services"},
+    )
+    await seed(
+        session,
+        "unread-elsewhere",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 5),
+        labels={"category": "software"},
+    )
+
+    result = await sum_amount(
+        session, filters=DocumentFilters(facets={"category": "services"}, **_FEB_2024)
+    )
+
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "25.00")}
+    assert result.coverage == Coverage(
+        matched=2, included=1, excluded={"no_amount": 1}, needs_review=0
+    )
+
+
+async def test_sum_amount_two_facets_must_hold_on_the_same_money_row(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """Facets AND-compose per row, with each row's merged labels: a line's own
+    label beside the facets it inherits from its document.
+
+    The invoice is labelled ``scope=business``. Its 60.00 line is services (and
+    inherits business); its 40.00 line is supplies and overrides scope to
+    personal. ``{category: supplies, scope: business}`` therefore holds on no
+    row, though the document has a supplies row and a business row; a check
+    per facet rather than per row would answer 40.00.
+    """
+    await seed(
+        session,
+        "scoped",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 6),
+        amount="100.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        labels={"scope": "business"},
+        lines=[
+            ("60.00", {"category": "services"}),
+            ("40.00", {"category": "supplies", "scope": "personal"}),
+        ],
+    )
+
+    async def total(facets: dict[str, str]) -> set[tuple[str | None, str]]:
+        result = await sum_amount(session, filters=DocumentFilters(facets=facets, **_FEB_2024))
+        return {(row.currency, row.total) for row in result.rows}
+
+    assert await total({"category": "services", "scope": "business"}) == {("EUR", "60.00")}
+    assert await total({"category": "supplies", "scope": "business"}) == set()
+    assert await total({"category": "supplies", "scope": "personal"}) == {("EUR", "40.00")}
+    assert await total({"scope": "business"}) == {("EUR", "60.00")}
 
 
 async def test_sum_amount_grouped_by_sender_still_partitions_with_the_new_reasons(

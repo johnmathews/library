@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-211 entries.
+212 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## November 2026
 
+- **2026-11-06** — [Money totals filtered by facet count the lines that carry it](261106-money-line-facets.md)
 - **2026-11-06** — [CI time limits, apt retries, and no e2e on docs-only changes](261106-ci-time-limits-and-docs-only-e2e.md)
 - **2026-11-05** — [MCP notes, file results, CI smoke test and tool metrics](261105-mcp-notes-and-files.md)
 - **2026-11-05** — [MCP connectors checked live: claude.ai, ChatGPT and Claude Code](261105-mcp-live-connectors.md)

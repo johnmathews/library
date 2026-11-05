@@ -14,7 +14,7 @@ two retrieval paths share one filter vocabulary.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date
 from decimal import Decimal
@@ -30,6 +30,7 @@ from sqlalchemy import (
     distinct,
     func,
     null,
+    or_,
     select,
     true,
     tuple_,
@@ -202,15 +203,19 @@ async def count_coverage(
     filters: DocumentFilters,
     include_condition: ColumnElement[bool],
     exclusions: dict[str, ColumnElement[bool]],
+    match_conditions: Sequence[ColumnElement[bool]] = (),
 ) -> Coverage:
     """Count a result's coverage in one round-trip, using conditional aggregates.
 
     ``include_condition`` selects the documents the caller's rows are built
     from; ``exclusions`` maps a reason name to the condition identifying the
-    documents dropped for it. The conditions must partition the matched set —
-    the caller owns that, and the invariant is asserted by the caller's tests
-    rather than here, so a legitimate partial count (``list_documents``, whose
-    over-limit drop is positional and has no SQL predicate) is still expressible.
+    documents dropped for it. ``match_conditions`` narrow the matched set
+    beyond ``filters``, for a caller whose filter is not a document filter
+    (``sum_amount``'s facets, which match money rows). The conditions must
+    partition the matched set — the caller owns that, and the invariant is
+    asserted by the caller's tests rather than here, so a legitimate partial
+    count (``list_documents``, whose over-limit drop is positional and has no
+    SQL predicate) is still expressible.
 
     One ``SELECT`` with Postgres ``FILTER (WHERE ...)`` clauses rather than N+1
     counts: this runs on every structured tool call, so it must not multiply
@@ -256,7 +261,7 @@ async def count_coverage(
         ),
         *(func.count(Document.id).filter(condition) for condition in gated_exclusions.values()),
     ]
-    row = (await session.execute(select(*columns).where(*conditions))).one()
+    row = (await session.execute(select(*columns).where(*conditions, *match_conditions))).one()
     matched, included, needs_review = int(row[0]), int(row[1]), int(row[2])
     excluded = {
         reason: int(count)
@@ -471,7 +476,8 @@ def _payment_choices(
     does).
 
     **The candidates** are the documents that pass every caller filter
-    EXCEPT the date window, and the earlier gates of ``sum_amount``. The view
+    EXCEPT the date window, and the earlier gates of ``sum_amount``; under a
+    facet filter, only their rows that carry it are joined. The view
     ranks every live document archive-wide, so its ``is_canonical`` can name a
     twin a ``kind`` or tag filter leaves out, and a total gated on it drops
     that payment. Ranking within the filters fixes that. The date window is
@@ -524,6 +530,41 @@ def _payment_choices(
     )
 
 
+def _facet_match(
+    facets: Mapping[str, str],
+) -> tuple[list[ColumnElement[bool]], list[ColumnElement[bool]]]:
+    """``sum_amount``'s facet filter: on its money rows, and on its documents.
+
+    The first list is for queries over ``spend_facts``: the row carries every
+    facet asked for (``labels @> facets``; one value per facet, so this is the
+    AND across facets, held on one row). The second is the document-level
+    ``matched`` test for coverage: a document matches if one of its money rows
+    does, or, having no amount and so no money row, if its own labels do. That
+    second arm is what keeps an amountless services document reported as
+    ``no_amount`` under services.
+
+    Deliberately not "its own labels match" for a document that has an
+    amount: one labelled services whose every line is overridden to supplies
+    has no services money, is no payment's candidate, and would land in no
+    coverage reason, breaking ``included + excluded == matched``.
+
+    Both lists are empty without facets, so the unfaceted statements are
+    unchanged.
+    """
+    if not facets:
+        return [], []
+    carries = spend_facts.c.labels.contains(dict(facets))
+    money_row = (
+        select(1)
+        .select_from(spend_facts)
+        .where(spend_facts.c.document_id == Document.id, carries)
+        .correlate(Document)
+        .exists()
+    )
+    labelled = and_(*filter_conditions(DocumentFilters(facets=facets)))
+    return [carries], [or_(money_row, Document.amount_total.is_(None) & labelled)]
+
+
 def _chosen_in_window(choices: CTE, filters: DocumentFilters) -> ColumnElement[bool]:
     """The chosen document's date is inside the caller's date window.
 
@@ -565,6 +606,15 @@ async def sum_amount(
       the invoice still counts the payment. The date window then applies to
       the carrying document, so totals over adjacent windows add up. The
       charts keep the archive-wide flag.
+
+    **Facets match money rows, not documents.** A ``spend_facts`` row's
+    ``labels`` are its line's own over its document's, so a facet filter
+    counts exactly the rows (a whole unsplit document, or one line) that carry
+    every facet asked for, as a chart rule does. It is therefore taken out of
+    the shared document filter, which reads ``document_labels`` only and
+    would sum every line of a labelled itemised document while missing a
+    label only a line carries (:func:`_facet_match`). Document search keeps
+    the document-level meaning.
 
     Coverage is still counted over ``documents`` by :func:`count_coverage`, and
     deliberately: every exclusion is expressible as a document-level
@@ -634,17 +684,31 @@ async def sum_amount(
     exclusions["not_summable_kind"] = include & unsummable_kind
     include = include & summable_kind
 
+    # Facets select money ROWS, so they leave the document filter and test the
+    # row's merged labels instead, in the candidates and in the counted rows
+    # alike. In the candidates, so the twin is chosen among the documents
+    # whose money carries the facet; in the rows, so only the matching lines
+    # of the chosen document are summed.
+    document_filters = replace(filters, facets={})
+    facet_rows, facet_match = _facet_match(filters.facets)
+
     # Payment identity (see `_payment_choices`): ranked over every filter but
     # the date window, among the documents that passed every gate above.
     choices = _payment_choices(
-        [*filter_conditions(replace(filters, date_from=None, date_to=None)), include], key_id
+        [
+            *filter_conditions(replace(document_filters, date_from=None, date_to=None)),
+            *facet_rows,
+            include,
+        ],
+        key_id,
     )
 
     def member(condition: ColumnElement[bool]) -> ColumnElement[bool]:
         return Document.id.in_(select(choices.c.document_id).where(condition))
 
     conditions = [
-        *filter_conditions(filters),
+        *filter_conditions(document_filters),
+        *facet_rows,
         member(choices.c.is_chosen),
         spend_facts.c.amount_kind.in_(kind_values),
     ]
@@ -731,7 +795,11 @@ async def sum_amount(
         exclusions["over_limit"] = include & member(in_window & ~shown)
     include = include & member(in_window & shown & choices.c.is_chosen)
     coverage = await count_coverage(
-        session, filters=filters, include_condition=include, exclusions=exclusions
+        session,
+        filters=document_filters,
+        include_condition=include,
+        exclusions=exclusions,
+        match_conditions=facet_match,
     )
     return Aggregated(rows=groups, coverage=coverage)
 

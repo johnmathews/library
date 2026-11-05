@@ -198,6 +198,8 @@ spend_facts = table(
     # Written by 0033 as `sa.Enum(..., native_enum=False)`, i.e. a VARCHAR with
     # a CHECK — so it compares against `AmountKind`'s *values*, not the enum.
     column("amount_kind", String),
+    # The row's merged facet labels: a line's own over its document's.
+    column("labels", JSONB),
 )
 
 

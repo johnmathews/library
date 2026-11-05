@@ -1,7 +1,7 @@
 # Money facts and payment identity
 
-**Status:** active. **Last updated:** 2026-11-05 (§5.2: the date window no longer chooses which twin carries a payment, so month totals add up; new reason `payment_dated_elsewhere`; a facet filter on an itemised document recorded as a follow-up). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §5's spending-total paragraph and §5.2. Read `structured_query._payment_choices` and `sum_amount` against migration 0035's ranking, and `charts/query.py`, `charts/footer.py` and `api/facets.py`, which still filter `sf.is_canonical`. The month-window and within-filter tests in `tests/test_mcp_money.py` pass, seen red first or killed by mutants. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-06 (§5.2: a `facets` filter on a money total counts the money rows, document or line, that carry the facet; the itemised-document follow-up is closed). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: partial, scoped to §5.2. Read `structured_query.sum_amount` and `_facet_match` against migration 0035's row `labels` and `charts/rule.py`; the line-facet tests in `tests/test_structured_query.py` pass, seen red on main first or killed by hand-made mutants. The rest carries its earlier verifications forward.
 **Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, src/library/llm/envelope.py, src/library/structured_query.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
@@ -456,12 +456,22 @@ rule that matches only a payment's non-canonical twin (a label on the bill
 but not the receipt) leaves that payment out. Moving them onto the same
 within-filter choice is a recorded follow-up.
 
-**Follow-up: a facet filter on an itemised document.** The `facets` filter
-checks the document's own labels, but `sum_amount` then sums every line
-row of the carrying document. A `category=energy` filter that matches an
-itemised invoice split into an energy line and a water line also sums the
-water line. This predates the within-filter choice; summing only the
-lines whose (inherited) labels match the filter is the fix.
+**Facets select money rows, not documents.** A total's `facets` filter
+tests each `spend_facts` row's `labels`: a line's own labels over the ones
+it inherits from its document (migration 0035). So it counts exactly the
+rows, a whole unsplit document or one line, that carry every facet asked
+for, as a chart rule does. A `category=energy` total over an invoice split
+into an energy line and a water line sums the energy line only, and an
+energy line on an otherwise unlabelled invoice counts. The twin is chosen
+among the documents with a matching row. An invoice split 60.00 services
+and 40.00 supplies, merged with a receipt labelled supplies, gives 40.00
+under supplies (the invoice's line; the receipt is `duplicate_payment`),
+not the receipt's 100.00. For coverage, a document matches when one of its
+money rows does or, having no amount, when its own labels do: an amountless
+energy bill is still `no_amount` under energy, while a document whose every
+line is relabelled away from the facet does not match. Document search
+(`search_documents`, `semantic_search`, `/api/documents`) still matches
+document-level labels only.
 
 ## 6. `library backfill-amounts`
 

@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-05 (*Coverage and trust on structured results*: the date window applies to the document that carries a payment, chosen over the other filters, with the new reason `payment_dated_elsewhere`). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to *Coverage and trust on structured results*. Read against `structured_query.py`; the month-window, within-filter and row-cap tests in `tests/test_mcp_money.py`, which include runs through `_run_query_documents`, pass, seen red first or killed by mutants. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-06 (*Where a money total comes from* and §1.10 item 11: a `facets` filter on `sum_amount` counts the money rows, document or line, that carry the facet, as a chart does). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: partial, scoped to *Where a money total comes from* and §1.10 item 11. Read against `structured_query.sum_amount`; the line-facet tests in `tests/test_structured_query.py` pass, seen red on main first or killed by hand-made mutants. The rest carries its earlier verifications forward.
 **Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, .github/workflows/e2e-nightly.yml
 
 Ask lets you put a natural-language question to the archive and get a prose
@@ -293,12 +293,11 @@ offered it).
 
 **Where a money total comes from.** `sum_amount` builds its rows from the
 [`spend_facts`](charts.md) view — the same relation the chart engine reads — and
-not from `documents.amount_total`. Three things follow, and each removes one
+not from `documents.amount_total`. Four things follow, and each removes one
 reason an Ask total and a chart over the same question used to disagree — they
-do not make the two agree outright, and §1.10 item 11 lists what still differs
-(line-level versus document-level facet scoping, and currency: `sum_amount`
-groups by currency and never converts, where a chart converts each amount at its
-own document date into a display currency):
+do not make the two agree outright: §1.10 item 11 lists what is still open, and
+`sum_amount` groups by currency and never converts, where a chart converts each
+amount at its own document date into a display currency:
 
 - **A refund reduces a total.** `amount_total` is always a magnitude; the sign
   is a property of what the number *means* and lives in `amount_kind`, so a
@@ -316,6 +315,14 @@ own document date into a display currency):
   counts a bill whose receipt the view would have picked. The date window then
   applies to the chosen document, so month totals add up. The charts keep the
   archive-wide flag.
+- **A facet counts the money that carries it.** A `facets` filter on
+  `sum_amount` tests each view row's labels (a line's own over its
+  document's), so an itemised invoice filtered to one category sums only its
+  lines in that category, and a line-only label counts, as on a chart. A
+  document is `matched` when one of its rows carries the facet or, having no
+  amount, its own labels do, so an amountless one is still `no_amount`. The
+  `list` and `distinct_senders` aggregates and every search tool keep matching
+  document labels ([money-facts.md](money-facts.md) §5.2).
 
 Coverage is still counted over `documents`, not over the view. Every one of
 these exclusions is expressible as a document-level predicate — `amount_kind` is
@@ -1310,7 +1317,7 @@ have Ask treat that annotation as ground truth.
     `matched` and reported in `unembedded`, but is unreachable by vector
     search. That is the honest reading of finding #14, not a fix for it:
     there is still no UI listing documents missing from the index.
-11. **Money answers read `spend_facts`; three things around them still do not.**
+11. **Money answers read `spend_facts`; two things around them still do not.**
     `structured_query.sum_amount` was moved onto the view in #136, so a refund
     reduces a total, non-summable kinds stay out, and one payment documented
     twice counts once — see §1.2's *Where a money total comes from*. What is
@@ -1327,13 +1334,6 @@ have Ask treat that annotation as ground truth.
       missing is the tool — a distribution, a basis for "usual", and a
       `Coverage` shape that can express a partition over two matched sets
       rather than one.
-    - **Facet filters are document-level, not line-level.** The `facets`
-      argument narrows by a document's own labels, which is what the list API
-      and the vocabulary panel mean by a facet filter. A chart splits by the
-      labels on `spend_facts` rows, and a *split* document's lines may carry
-      their own — so for an itemised document filtered by facet, an Ask total
-      includes the whole document where a chart would count only the matching
-      lines.
     - **Date filters still bound `document_date`**, the issue date, with the
       consequences item 6 describes. Moving the sum onto `spend_facts` did not
       change this: the view carries the document's own date.
