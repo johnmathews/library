@@ -24,6 +24,7 @@ from sqlalchemy.pool import NullPool
 from library.config import Settings
 from library.extraction.apply import apply_extraction
 from library.models import (
+    AmountKind,
     Document,
     DocumentLanguage,
     DocumentSource,
@@ -753,6 +754,39 @@ def test_patch_null_tags_and_language_rejected(
         api_client.patch(f"/api/documents/{document_id}", json={"language": None}).status_code
         == 422
     )
+
+
+def test_patch_tag_longer_than_the_slug_column_is_422(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """``tags.slug`` is ``String(64)``: a longer tag is refused by validation,
+    naming the bound, before it reaches the database. Exactly 64 fits."""
+    document_id = seed_document(api_database_url, "w8-patch-long-tag")
+    too_long = "w8-long-" + "t" * 57  # 65 characters
+    response = api_client.patch(f"/api/documents/{document_id}", json={"tags": [too_long]})
+    assert response.status_code == 422, response.text
+    assert "at most 64 characters" in response.text
+    assert fetch_all(api_database_url, "SELECT 1 FROM tags WHERE slug = :slug", slug=too_long) == []
+
+    longest = too_long[:64]
+    response = api_client.patch(f"/api/documents/{document_id}", json={"tags": [longest]})
+    assert response.status_code == 200, response.text
+    assert [tag["slug"] for tag in response.json()["tags"]] == [longest]
+
+
+def test_list_item_carries_amount_kind(api_client: TestClient, api_database_url: str) -> None:
+    """``amount_total`` is a magnitude; the list row says what it means."""
+    seed_document(
+        api_database_url,
+        "w8-list-amount-kind",
+        tag_slugs=["w8-list-amount-kind"],
+        amount_total=Decimal("12.50"),
+        currency="EUR",
+        amount_kind=AmountKind.REFUND,
+    )
+    (item,) = list_docs(api_client, tag="w8-list-amount-kind")["items"]
+    assert item["amount_kind"] == "refund"
+    assert item["amount_total"] == "12.50"
 
 
 def test_patch_empty_body_changes_nothing(api_client: TestClient, api_database_url: str) -> None:

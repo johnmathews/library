@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from typing import Any, cast
 
@@ -26,15 +26,21 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import LLMBackend, Settings
+from library.document_reads import document_text, load_comments
 from library.documents_service import DocumentEditError, edit_document, preview_update
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
 from library.llm import subscription
-from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
+from library.models import Document, ReviewStatus
 from library.schemas import DocumentUpdate
-from library.search import DocumentFilters, search_reach, semantic_search
+from library.search import DocumentFilters, hybrid_search
 from library.spend_lines import AllocationError
-from library.structured_query import CONCEPT_TO_KIND, query_documents
+from library.structured_query import (
+    CONCEPT_TO_KIND,
+    COVERAGE_GUIDE,
+    SUM_AMOUNT_GUIDE,
+    query_documents,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -252,15 +258,9 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Aggregate over structured metadata (sender, kind, document_date, "
             "amount_total). Use for who/how-many/how-much/over-time questions. "
-            "Every result carries a `coverage` block — `matched` documents met "
-            "your filters, `included` are the ones the rows account for, "
-            "`excluded` maps a reason to how many were dropped for it, and "
-            "`needs_review` counts included documents whose extracted metadata "
-            "the archive flagged as untrustworthy. Read it before you answer: a "
-            "total over `included` documents is not a total over `matched` ones. "
-            "`matched`/`included`/`excluded` always count DOCUMENTS, even for "
-            "distinct_senders — a coverage of 1 excluded out of 12 with 3 sender "
-            "rows means 1 of 12 documents was dropped, not 1 of 3 senders. " + _kind_hint()
+            + COVERAGE_GUIDE
+            + " "
+            + _kind_hint()
         ),
         "input_schema": {
             "type": "object",
@@ -270,14 +270,8 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": ["list", "distinct_senders", "sum_amount"],
                     "description": (
                         "distinct_senders: unique senders (e.g. providers). "
-                        "sum_amount: total real expenditure. It reads what each "
-                        "amount MEANS, so a refund reduces the total, a policy's "
-                        "cover limit or an account balance is left out, and one "
-                        "payment documented as both an invoice and a receipt is "
-                        "counted once — each reported in `coverage.excluded` as "
-                        "not_summable_kind, duplicate_payment or quote_not_spend. "
-                        "Pass kind='quote' to total quotes instead. "
-                        "list: matching documents."
+                        + SUM_AMOUNT_GUIDE
+                        + " list: matching documents."
                     ),
                 },
                 **_FILTER_PROPERTIES,
@@ -538,7 +532,7 @@ async def _run_semantic_search(
     # keeps `_filters_from_args` one shared mapping for every caller.
     filters = replace(_filters_from_args(args), review_status=None)
     top_k = _top_k_arg(args.get("top_k"), settings)
-    hits = await semantic_search(
+    search = await hybrid_search(
         session,
         query=query,
         query_embedding=embedding,
@@ -546,9 +540,8 @@ async def _run_semantic_search(
         top_k=top_k,
         chunks_per_doc=settings.retrieve_chunks_per_doc,
     )
-    reach = await search_reach(session, filters)
     rows = []
-    for hit in hits:
+    for hit in search.hits:
         cited.add(hit.document.id)
         if hit.page_number is not None and hit.document.id not in pages:
             pages[hit.document.id] = hit.page_number
@@ -566,14 +559,7 @@ async def _run_semantic_search(
                 ),
             }
         )
-    return {
-        "results": rows,
-        "coverage": {
-            "matched": reach.matched,
-            "returned": len(rows),
-            "unembedded": reach.unembedded,
-        },
-    }
+    return {"results": rows, "coverage": asdict(search.coverage)}
 
 
 def _top_k_arg(value: object, settings: Settings) -> int:
@@ -833,10 +819,10 @@ async def _run_update_document(
 async def _run_get_document(
     session: AsyncSession, settings: Settings, args: dict[str, Any]
 ) -> dict[str, Any]:
-    """Read one document in full: structured fields, comments (queried
-    explicitly — ``Document.comments``/``Document.pages`` are ``lazy="raise"``),
+    """Read one document in full: structured fields, comments (oldest first)
     and its text (joined markdown pages, falling back to ``ocr_text``),
-    truncated to ``settings.ask_get_document_max_chars``."""
+    truncated to ``settings.ask_get_document_max_chars`` — all read through
+    ``document_reads``, like the MCP ``get_document``."""
     raw_id = args.get("document_id")
     try:
         document_id = int(raw_id)  # type: ignore[arg-type]
@@ -847,34 +833,8 @@ async def _run_get_document(
     if document is None or document.deleted_at is not None:
         return {"error": f"document {document_id} not found"}
 
-    comment_rows = (
-        (
-            await session.execute(
-                select(DocumentComment)
-                .where(DocumentComment.document_id == document_id)
-                .order_by(DocumentComment.created_at)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    page_rows = (
-        (
-            await session.execute(
-                select(DocumentPage)
-                .where(DocumentPage.document_id == document_id)
-                .order_by(DocumentPage.page_number)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    full_text = (
-        "\n\n".join(page.markdown for page in page_rows) if page_rows else (document.ocr_text or "")
-    )
-    max_chars = settings.ask_get_document_max_chars
-    text_truncated = len(full_text) > max_chars
-    text = full_text[:max_chars] if text_truncated else full_text
+    comment_rows = await load_comments(session, document_id, newest_first=False)
+    text = await document_text(session, document, max_chars=settings.ask_get_document_max_chars)
 
     return {
         "document_id": document_id,
@@ -894,8 +854,8 @@ async def _run_get_document(
             {"body": comment.body, "date": comment.created_at.isoformat()}
             for comment in comment_rows
         ],
-        "text": text,
-        "text_truncated": text_truncated,
+        "text": text.text,
+        "text_truncated": text.truncated,
     }
 
 

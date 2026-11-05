@@ -72,7 +72,7 @@ from mcp.server.auth.routes import build_metadata, build_resource_metadata_url, 
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
 from mcp.shared.auth import ProtectedResourceMetadata
 from mcp.types import ToolAnnotations
-from pydantic import AnyHttpUrl, Field
+from pydantic import AnyHttpUrl, BaseModel, Field, StringConstraints
 from pydantic_core import to_jsonable_python
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,35 +83,91 @@ from starlette.types import ASGIApp
 
 import library
 from library import comments_service, matters, projects, taxonomy
+from library.ask.context import load_archive_context, render_archive_context
 from library.auth.oauth_provider import LibraryOAuthProvider
 from library.auth.service import validate_api_token
 from library.config import Settings, get_settings
 from library.db import get_sessionmaker
+from library.document_reads import (
+    DocumentText,
+    DocumentTextRangeError,
+    TextSource,
+    document_text,
+    document_web_url,
+    list_item_fields,
+    load_comments,
+)
 from library.documents_service import (
     DocumentEditError,
     edit_document,
     preview_current,
     preview_update,
 )
+from library.embedding import EmbeddingError, embed_query
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
 from library.models import (
     Document,
     DocumentLanguage,
     DocumentSource,
+    DocumentStatus,
+    Facet,
+    FacetValue,
     IngestionEvent,
     Kind,
+    Matter,
+    Project,
+    ReviewStatus,
+    Tag,
+    User,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
-from library.schemas import CommentOut, CurrencyCode, DocumentUpdate
-from library.search import DocumentFilters, build_document_query
+from library.schemas import (
+    CommentOut,
+    CurrencyCode,
+    DocumentFields,
+    DocumentListItem,
+    DocumentUpdate,
+    TagSlug,
+)
+from library.search import (
+    DEFAULT_DOCUMENT_SORT,
+    DEFAULT_SORT_DIRECTION,
+    DocumentFilters,
+    DocumentSort,
+    SearchCoverage,
+    SortDirection,
+    build_document_query,
+    hybrid_search,
+)
 from library.spend_lines import AllocationError
 from library.storage import derived_path, path_for
+from library.structured_query import (
+    CONCEPT_TO_KIND,
+    COVERAGE_GUIDE,
+    SUM_AMOUNT_GUIDE,
+    Aggregate,
+    AmountGroup,
+    Coverage,
+    DocumentRef,
+    GroupBy,
+    SenderGroup,
+    query_documents,
+)
 
 logger = logging.getLogger(__name__)
 
-OCR_TEXT_LIMIT: int = 20_000
+#: get_document's text window: default, floor and ceiling of ``max_chars``.
+DOCUMENT_TEXT_DEFAULT_CHARS: int = 20_000
+DOCUMENT_TEXT_MIN_CHARS: int = 1_000
+DOCUMENT_TEXT_MAX_CHARS: int = 50_000
 MAX_FILE_BYTES: int = 10 * 1024 * 1024
 SEARCH_LIMIT_MAX: int = 50
+#: semantic_search returns passage text with every hit, so its result grows
+#: with ``limit`` far faster than search_documents'. MCP clients cap a tool
+#: result (Claude Code's default is 25k tokens), so both the hit count and
+#: the passage characters per call are bounded.
+SEMANTIC_LIMIT_MAX: int = 20
+SEMANTIC_PASSAGE_BUDGET: int = 24_000
 #: The largest value a Postgres BIGINT (``documents.id``) holds. Bounding the
 #: argument makes an out-of-range id a validation error, not a SQL error.
 MAX_DOCUMENT_ID: int = 2**63 - 1
@@ -134,13 +190,40 @@ Library is a self-hosted family document archive: scanned letters,
 invoices, receipts, contracts, and similar documents in Dutch and
 English, made searchable by OCR and metadata extraction.
 
-Start with `search_documents` to find documents (full-text search with
-Dutch and English stemming, plus metadata filters), then `get_document`
-for the full text of one document. Use `list_kinds`, `list_senders`,
-`list_recipients`, `list_tags`, `list_projects`, and `list_matters` to
-discover valid filter values,
-`library_stats` for an overview, `get_document_file` to retrieve the
-actual file, and `ingest_document` to add a new document to the archive.
+Call `get_library_context` first. It names the connected user (so "my"
+and "I" mean them, and it lists the addressee names that are theirs) and
+the archive's vocabulary in the exact spelling the filters take: kinds,
+matters, projects, tags, the facets with their values, and the most
+frequent senders.
+
+Two ways to find documents:
+- `semantic_search` for what documents say, asked in natural language or
+  in another language than the document ("travel allowance clause"
+  finds a Dutch "reiskostenvergoeding"). It ranks by meaning and keywords
+  together and returns the matching passages. Read its `coverage` before
+  saying something is not in the archive: `unembedded` counts matching
+  documents that are not indexed for it yet.
+- `search_documents` for exact words, names and numbers, and to browse,
+  count or page through documents by filters (full-text search with
+  Dutch and English stemming; page with `offset`). Use it too when
+  semantic search is unavailable.
+
+Then `get_document` for one document's text, the household's comments on
+it and whether its details are trusted (`review_status`). Long documents
+come in pages: follow `next_start_page`. `list_kinds`, `list_senders`,
+`list_recipients`, `list_tags`, `list_projects`, and `list_matters` list
+filter values with document counts,
+`library_stats` gives an overview, `get_document_file` retrieves the
+actual file, and `ingest_document` adds a new document to the archive.
+
+Amounts: `amount_total` is always a magnitude and `amount_kind` says what
+it is (paid, due, refunded, a coverage limit, ...). Do not add amounts up
+across documents yourself: the sign depends on `amount_kind`, and one
+payment often appears on several documents. For any total ("how much did
+we spend on ...") use `money_query`: it nets refunds, leaves out cover
+limits and balances, counts each payment once, and says in `coverage`
+what it left out and why. Pass on what `coverage` says when `excluded`
+is not empty or `needs_review` is above 0.
 
 To correct a document's details (title, kind, sender, dates, amount,
 tags, ...) use `update_document_metadata` in two steps: call it without
@@ -431,44 +514,253 @@ async def _get_document(
     return document
 
 
-def _document_summary(document: Document) -> dict[str, Any]:
-    """The metadata fields shared by search results and document detail."""
-    return {
-        "id": document.id,
-        "title": document.title,
-        "summary": document.summary,
-        "kind": (
-            {"slug": document.kind.slug, "name": document.kind.name} if document.kind else None
-        ),
-        "sender": (
-            {"id": document.sender.id, "name": document.sender.name} if document.sender else None
-        ),
-        "recipient": (
-            {"id": document.recipient.id, "name": document.recipient.name}
-            if document.recipient
-            else None
-        ),
-        "tags": [
-            {"slug": tag.slug, "name": tag.name}
-            for tag in sorted(document.tags, key=lambda tag: tag.slug)
-        ],
-        "topics": list(document.topics or []),
-        "projects": [
-            {"slug": project.slug, "name": project.name}
-            for project in sorted(document.projects, key=lambda project: project.slug)
-        ],
-        "matters": [
-            {"slug": matter.slug, "name": matter.name}
-            for matter in sorted(document.matters, key=lambda matter: matter.slug)
-        ],
-        "document_date": document.document_date.isoformat() if document.document_date else None,
-        "language": document.language.value,
-        "status": document.status.value,
-        "mime_type": document.mime_type,
-        "page_count": document.page_count,
-        "created_at": document.created_at.isoformat(),
-        "updated_at": document.updated_at.isoformat(),
-    }
+# ------------------------------------------------------------- read results
+#
+# Typed, so FastMCP publishes an ``outputSchema`` for each read tool. The
+# fields are ``schemas.DocumentFields``, built by
+# ``document_reads.list_item_fields`` — the same values the web app's list
+# and detail views show.
+
+
+class DocumentEvent(BaseModel):
+    """One audit-trail entry: what happened to the document, and when."""
+
+    event: str
+    created_at: datetime
+
+
+class DocumentRead(DocumentFields):
+    """The result of get_document."""
+
+    source: DocumentSource = Field(description="How the document entered the archive.")
+    original_filename: str | None
+    sha256: str
+    ocr_confidence: float | None
+    web_url: str | None = Field(
+        description=(
+            "The document's page in the Library web app, to give the user; null when "
+            "the server has no public URL configured."
+        )
+    )
+    text: str = Field(
+        description=(
+            "The document's text: its per-page markdown (the text search matches on) "
+            "joined with blank lines, or its OCR text when it has no pages yet."
+        )
+    )
+    text_source: TextSource = Field(
+        description="'pages' (page markdown), 'ocr_text' (no pages yet) or 'none' (no text)."
+    )
+    text_page_count: int = Field(description="Pages of text the document has; 0 without pages.")
+    text_start_page: int | None = Field(description="First page in `text`; null without pages.")
+    text_end_page: int | None = Field(
+        description="Last page in `text`, possibly only its start; null without pages."
+    )
+    text_truncated: bool = Field(description="True when more text follows `text`.")
+    text_total_chars: int = Field(description="Length of the whole text, every page.")
+    next_start_page: int | None = Field(
+        description="The start_page to pass to read on; null when there is no next page."
+    )
+    continuation: str | None = Field(
+        description="How to read the rest when `text_truncated`; null otherwise."
+    )
+    comments: list[CommentOut] = Field(
+        description=(
+            "Household members' comments, newest first: personal context the document "
+            "does not say. author_id is the Library user who wrote it."
+        )
+    )
+    events: list[DocumentEvent] = Field(description="Audit trail, oldest first.")
+
+
+class SemanticSearchHit(DocumentFields):
+    """One semantic_search result: a search_documents row plus its passages."""
+
+    score: float = Field(
+        description=(
+            "Relevance (reciprocal rank fusion of meaning and keyword rankings); higher "
+            "is better, comparable only within one call."
+        )
+    )
+    passages: list[str] = Field(
+        description=(
+            "The document's passages nearest the query, best first, shortened to fit "
+            "the result. Empty when only the keyword ranking found the document; "
+            "coverage.unembedded says whether documents are missing from the meaning "
+            "index. Read the full text with get_document."
+        )
+    )
+    passages_truncated: bool = Field(
+        description="True when passages were dropped or shortened to fit the result."
+    )
+    page_number: int | None = Field(
+        description="The page of the best passage, when the document has pages."
+    )
+
+
+class SemanticSearchResults(BaseModel):
+    """The result of semantic_search."""
+
+    results: list[SemanticSearchHit]
+    coverage: SearchCoverage = Field(
+        description=(
+            "matched: documents your filters let through; returned: how many came "
+            "back; unembedded: matched documents not indexed for meaning, which "
+            "only keyword matches can reach. matched 0 means the filters excluded "
+            "everything; a non-zero unembedded means an answer may be incomplete "
+            "for that reason, not because the archive is silent."
+        )
+    )
+
+
+class LibraryContext(BaseModel):
+    """The result of get_library_context."""
+
+    context: str = Field(
+        description=(
+            "Who the connected user is (their name, the addressee names that are "
+            "theirs, their own notes about the household) and the archive's "
+            "vocabulary: kinds, matters, projects, tags, facets with their values "
+            "as {facet_key: value_key}, frequent senders."
+        )
+    )
+
+
+class SearchResults(BaseModel):
+    """The result of search_documents."""
+
+    results: list[DocumentListItem]
+    total: int = Field(description="Matching documents, before limit and offset.")
+    offset: int
+    limit: int
+    next_offset: int | None = Field(
+        description="The offset of the next page of results; null on the last page."
+    )
+
+
+class MoneyQueryResult(BaseModel):
+    """The result of money_query: ``structured_query.query_documents``'s,
+    field for field, with its row and coverage types."""
+
+    result_type: Aggregate = Field(description="The aggregate the rows answer.")
+    rows: list[AmountGroup | SenderGroup | DocumentRef] = Field(
+        description=(
+            "sum_amount: one {key, total, currency, document_count, document_ids} per "
+            "currency (and per sender or kind with group_by; key is null without it), "
+            "total a signed decimal string. distinct_senders: {sender, document_count, "
+            "document_ids}. list: document rows. document_ids cite at most 25."
+        )
+    )
+    coverage: Coverage = Field(
+        description=(
+            "matched: documents your filters let through; included: those the rows "
+            "account for; excluded: reason -> documents dropped for it (empty when "
+            "the rows are the whole story); needs_review: included documents whose "
+            "extracted details validation flagged."
+        )
+    )
+
+
+def _continuation(window: DocumentText, max_chars: int) -> str | None:
+    """How to read past ``window``, worded for the model; ``None`` when the
+    window reaches the end of the text."""
+    if not window.truncated:
+        return None
+    if window.source != "pages":
+        return (
+            f"The text is {window.total_chars} characters and stops at {max_chars}. "
+            "This document has no page text to page through: call get_document again "
+            f"with a larger max_chars (up to {DOCUMENT_TEXT_MAX_CHARS}), or use "
+            "get_document_file for the original file."
+        )
+    end, count, following = window.end_page, window.page_count, window.next_start_page
+    if window.end_page_complete:
+        return (
+            f"The text stops after page {end} of {count}. Call get_document again with "
+            f"start_page={following} to continue."
+        )
+    if following == end:
+        return (
+            f"The text stops part-way through page {end} of {count}. Call get_document "
+            f"again with start_page={following} to continue (page {end} is repeated whole)."
+        )
+    hint = (
+        f"Page {end} is longer than max_chars={max_chars} and was cut. Call get_document "
+        f"again with start_page={end} and a larger max_chars (up to "
+        f"{DOCUMENT_TEXT_MAX_CHARS}) to read it whole, or use get_document_file."
+    )
+    if following is not None:
+        hint += f" The next page is start_page={following}."
+    return hint
+
+
+# ------------------------------------------------------- shared parameters
+#
+# The filters search_documents, semantic_search and money_query take, defined
+# once so the tools describe and validate each filter the same way. Each maps
+# onto one field of ``search.DocumentFilters``.
+#
+# Every text value is stripped and must then be non-empty. A blank value is a
+# filter that matches no document (a blank sender is ``ilike '%%'``, which
+# matches every one), so it would answer with a plausible empty or unfiltered
+# result instead of an error. Refused by the schema (``minLength``) rather than
+# dropped, so the model learns its argument was wrong; Ask's tool loop has no
+# schema validation and drops them instead (``ask.engine._text_arg``).
+
+FilterText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+KindFilter = Annotated[
+    FilterText | None,
+    Field(description="Filter by document kind slug (see list_kinds), e.g. 'invoice'."),
+]
+SenderFilter = Annotated[
+    FilterText | None,
+    Field(
+        description=(
+            "Filter by sender name, case-insensitive substring match "
+            "('eneco' matches 'Eneco BV'). See list_senders."
+        )
+    ),
+]
+RecipientFilter = Annotated[
+    FilterText | None,
+    Field(
+        description=(
+            "Filter by recipient name, case-insensitive substring match "
+            "('john' matches 'John Smith'). See list_recipients."
+        )
+    ),
+]
+TagsFilter = Annotated[
+    list[FilterText] | None,
+    Field(description="Tag slugs (see list_tags); a document must have ALL of them."),
+]
+ProjectsFilter = Annotated[
+    list[FilterText] | None,
+    Field(description="Project slugs (see list_projects); a document in ANY of them matches."),
+]
+MattersFilter = Annotated[
+    list[FilterText] | None,
+    Field(description="Matter slugs (see list_matters); a document in ANY of them matches."),
+]
+FacetsFilter = Annotated[
+    dict[FilterText, FilterText] | None,
+    Field(
+        description=(
+            "Facet labels as {facet_key: value_key}, e.g. {'category': 'energy'}; a "
+            "document must carry ALL of them (it holds one value per facet). "
+            "get_library_context lists the facets and their values."
+        )
+    ),
+]
+DateFromFilter = Annotated[
+    date | None,
+    Field(description="Only documents dated on or after this ISO date (document_date)."),
+]
+DateToFilter = Annotated[
+    date | None,
+    Field(description="Only documents dated on or before this ISO date (document_date)."),
+]
 
 
 # -------------------------------------------------------------------- tools
@@ -480,72 +772,91 @@ async def search_documents(
         str | None,
         Field(
             description=(
-                "Full-text search over title, summary, and OCR text, stemmed in "
+                "Full-text search over title, summary, and document text, stemmed in "
                 "both Dutch and English (searching 'rekening' finds 'rekeningen'). "
                 "Websearch syntax: quoted phrases, OR, -exclusion. Omit to browse "
                 "by filters only."
             )
         ),
     ] = None,
-    kind: Annotated[
-        str | None,
-        Field(description="Filter by document kind slug (see list_kinds), e.g. 'invoice'."),
-    ] = None,
-    sender: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Filter by sender name, case-insensitive substring match "
-                "('eneco' matches 'Eneco BV'). See list_senders."
-            )
-        ),
-    ] = None,
-    recipient: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Filter by recipient name, case-insensitive substring match "
-                "('john' matches 'John Smith'). See list_recipients."
-            )
-        ),
-    ] = None,
-    tag: Annotated[
-        str | None,
-        Field(description="Filter by tag slug (see list_tags)."),
-    ] = None,
-    project: Annotated[
-        str | None,
-        Field(description="Filter by project slug (see list_projects)."),
-    ] = None,
-    matter: Annotated[
-        str | None,
-        Field(description="Filter by matter slug (see list_matters)."),
-    ] = None,
+    kind: KindFilter = None,
+    sender: SenderFilter = None,
+    recipient: RecipientFilter = None,
+    tags: TagsFilter = None,
+    projects: ProjectsFilter = None,
+    matters: MattersFilter = None,
+    facets: FacetsFilter = None,
     language: Annotated[
         DocumentLanguage | None,
         Field(description="Filter by detected document language."),
     ] = None,
-    date_from: Annotated[
-        date | None,
-        Field(description="Only documents dated on or after this ISO date (document_date)."),
+    status: Annotated[
+        DocumentStatus | None,
+        Field(
+            description=(
+                "Filter by processing state; 'indexed' is fully processed, 'failed' "
+                "means processing stopped."
+            )
+        ),
     ] = None,
-    date_to: Annotated[
-        date | None,
-        Field(description="Only documents dated on or before this ISO date (document_date)."),
+    review_status: Annotated[
+        ReviewStatus | None,
+        Field(
+            description=(
+                "Filter by whether the extracted details are trusted: 'verified' "
+                "(checked by a person), 'needs_review' (validation flagged them), "
+                "'unreviewed'."
+            )
+        ),
     ] = None,
+    source: Annotated[
+        DocumentSource | None,
+        Field(description="Filter by how the document entered the archive."),
+    ] = None,
+    date_from: DateFromFilter = None,
+    date_to: DateToFilter = None,
+    sort: Annotated[
+        DocumentSort,
+        Field(
+            description=(
+                "Order without `query`: 'document_date' (undated last) or "
+                "'added_date'. Ignored with `query`, which orders by relevance."
+            )
+        ),
+    ] = DEFAULT_DOCUMENT_SORT,
+    direction: Annotated[
+        SortDirection,
+        Field(description="'desc' (newest first, the default) or 'asc'. Ignored with `query`."),
+    ] = DEFAULT_SORT_DIRECTION,
     limit: Annotated[
         int,
         Field(ge=1, le=SEARCH_LIMIT_MAX, description="Maximum number of results."),
     ] = 10,
-) -> dict[str, Any]:
+    offset: Annotated[
+        int,
+        Field(
+            ge=0,
+            le=MAX_DOCUMENT_ID,
+            description="Results to skip, to page past `limit` (pass next_offset).",
+        ),
+    ] = 0,
+) -> SearchResults:
     """Search and filter the document archive; the primary way to find documents.
 
-    Returns the matching documents (id, title, summary, kind, sender,
-    recipient, tags, document_date, language) plus the total match count. With `query`,
-    results are ranked by relevance and each carries a `snippet` (matching
-    OCR-text fragments, matches wrapped in <b>...</b>) and a `rank` score;
-    without it, newest documents come first. All filters AND-combine.
-    Follow up with get_document for the full text of a result.
+    Returns {results, total, offset, limit, next_offset}. Each result has the
+    document's id, title, summary, kind, sender, recipient, tags, projects,
+    matters, dates, amount_total, currency, amount_kind, review_status and
+    processing status. With `query`, results are ranked by relevance and
+    each carries a `snippet` (matching text fragments, matches wrapped in
+    <b>...</b>) and a `rank` score; without it, newest documents come first.
+    Different filters AND-combine with each other and with `query`. Within
+    one filter, `tags` and `facets` need ALL their values, while `projects`
+    and `matters` match a document in ANY of theirs. Page with `offset`
+    (next_offset is the next page's offset, null on the last). Follow up with
+    get_document for a result's full text. amount_total is always a
+    magnitude: amount_kind says whether it is money paid, due or refunded,
+    so do not add amounts up across results yourself; money_query totals
+    them correctly.
     """
     document_query = build_document_query(
         query,
@@ -553,76 +864,386 @@ async def search_documents(
             kind_slug=kind,
             sender_contains=sender,
             recipient_contains=recipient,
-            tag_slugs=(tag,) if tag else (),
-            project_slugs=(project,) if project else (),
-            matter_slugs=(matter,) if matter else (),
+            tag_slugs=tuple(tags or ()),
+            project_slugs=tuple(projects or ()),
+            matter_slugs=tuple(matters or ()),
+            facets=dict(facets or {}),
             language=language,
+            status=status,
+            review_status=review_status,
+            source=source,
             date_from=date_from,
             date_to=date_to,
+            sort=sort,
+            direction=direction,
         ),
     )
     async with _session() as session:
         total = (await session.execute(document_query.count)).scalar_one()
-        result = await session.execute(document_query.statement.limit(limit))
+        result = await session.execute(document_query.statement.limit(limit).offset(offset))
         if document_query.has_rank:
             results = [
-                {**_document_summary(document), "snippet": snippet, "rank": float(rank)}
+                DocumentListItem(**list_item_fields(document), snippet=snippet, rank=rank)
                 for document, rank, snippet in result.all()
             ]
         else:
             results = [
-                {**_document_summary(document), "snippet": None, "rank": None}
+                DocumentListItem(**list_item_fields(document))
                 for document in result.scalars().all()
             ]
-    return {"results": results, "total": total}
+    following = offset + len(results)
+    return SearchResults(
+        results=results,
+        total=total,
+        offset=offset,
+        limit=limit,
+        next_offset=following if following < total and results else None,
+    )
+
+
+@mcp.tool(title="Semantic search", annotations=READ_ONLY)
+async def semantic_search(
+    query: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1),
+        Field(
+            description=(
+                "What to find, in natural language and in any language: 'the travel "
+                "allowance clause in my contract' also finds a Dutch "
+                "'reiskostenvergoeding'."
+            )
+        ),
+    ],
+    kind: KindFilter = None,
+    sender: SenderFilter = None,
+    recipient: RecipientFilter = None,
+    tags: TagsFilter = None,
+    projects: ProjectsFilter = None,
+    matters: MattersFilter = None,
+    facets: FacetsFilter = None,
+    date_from: DateFromFilter = None,
+    date_to: DateToFilter = None,
+    limit: Annotated[
+        int,
+        Field(ge=1, le=SEMANTIC_LIMIT_MAX, description="Maximum number of documents."),
+    ] = 10,
+) -> SemanticSearchResults:
+    """Find documents by what they say: meaning and keywords together.
+
+    For questions about a document's content asked in natural language or
+    in another language than the document. Ranks by both the meaning of
+    the query (vector search over document passages) and its words
+    (full-text search), fused. Returns {results, coverage}. Each result is
+    a search_documents row (id, title, kind, sender, dates, amount_total,
+    amount_kind, review_status, ...) plus `passages` (the document's text
+    nearest the query, best first), `page_number` and `score`. The filters
+    mean what they mean in search_documents and AND-combine; scope the
+    search when the question names a sender, a kind or a period.
+
+    Read `coverage` before concluding anything is absent: `matched` is how
+    many documents passed the filters (0 means widen them), `returned` how
+    many came back, and `unembedded` how many matched documents are not
+    indexed for meaning yet; say so when it is not 0. For exact words,
+    names or numbers, browsing, counting or paging, use search_documents.
+    Errors when the embedding service is down: use search_documents then.
+    """
+    settings = get_settings()
+    try:
+        embedding = await embed_query(query, settings=settings)
+    except EmbeddingError as exc:
+        logger.warning("mcp semantic_search: embedding failed: %s", exc)
+        raise ToolError(
+            "Semantic search is unavailable right now (the embedding service did not "
+            "answer). Use search_documents, keyword search with Dutch and English "
+            "stemming, instead."
+        ) from exc
+    filters = DocumentFilters(
+        kind_slug=kind,
+        sender_contains=sender,
+        recipient_contains=recipient,
+        tag_slugs=tuple(tags or ()),
+        project_slugs=tuple(projects or ()),
+        matter_slugs=tuple(matters or ()),
+        facets=dict(facets or {}),
+        date_from=date_from,
+        date_to=date_to,
+    )
+    async with _session() as session:
+        search = await hybrid_search(
+            session,
+            query=query,
+            query_embedding=embedding,
+            filters=filters,
+            top_k=limit,
+            chunks_per_doc=settings.retrieve_chunks_per_doc,
+        )
+        per_hit = SEMANTIC_PASSAGE_BUDGET // max(1, len(search.hits))
+        results = []
+        for hit in search.hits:
+            passages, truncated = _fit_passages(hit.chunk_texts, per_hit)
+            results.append(
+                SemanticSearchHit(
+                    **list_item_fields(hit.document),
+                    score=hit.score,
+                    passages=passages,
+                    passages_truncated=truncated,
+                    page_number=hit.page_number,
+                )
+            )
+    return SemanticSearchResults(results=results, coverage=search.coverage)
+
+
+def _fit_passages(passages: Sequence[str], budget: int) -> tuple[list[str], bool]:
+    """``passages`` best first, cut to at most ``budget`` characters in total.
+
+    Whole passages are kept while they fit; the first one that does not is
+    shortened to the space left (ending in an ellipsis) and the rest are
+    dropped, so the best passage always keeps its start.
+    """
+    kept: list[str] = []
+    used = 0
+    for passage in passages:
+        room = budget - used
+        if len(passage) <= room:
+            kept.append(passage)
+            used += len(passage)
+            continue
+        if room > 1:
+            kept.append(passage[: room - 1] + "…")
+        return kept, True
+    return kept, False
+
+
+@mcp.tool(title="Get library context", annotations=READ_ONLY)
+async def get_library_context() -> LibraryContext:
+    """Who the connected user is, and the archive's vocabulary. Call this first.
+
+    Returns {context}: a short text naming the user (so "my", "me" and "I"
+    in a question mean them), the addressee names that are theirs, their
+    own notes about the household when they wrote any (authoritative
+    personal context), and the exact slugs and names the search filters
+    take: kinds, matters, projects, tags, the facets with their values
+    (search_documents' `facets` filter), and the most frequent senders.
+    The same block the web app's Ask feature gives its model.
+    """
+    user_id = _current_user_id()
+    async with _session() as session:
+        user = await session.get(User, user_id) if user_id is not None else None
+        if user is None:
+            raise ToolError("No Library user is connected to this session; reconnect the app.")
+        context = render_archive_context(await load_archive_context(session, user))
+    return LibraryContext(context=context)
 
 
 @mcp.tool(title="Get document", annotations=READ_ONLY)
 async def get_document(
     document_id: DocumentId,
-) -> dict[str, Any]:
-    """Fetch one document's full metadata, OCR text, and processing history.
+    start_page: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=MAX_DOCUMENT_ID,
+            description=(
+                "The page of text to start at (default 1); pass next_start_page to "
+                "read on through a long document."
+            ),
+        ),
+    ] = 1,
+    max_chars: Annotated[
+        int,
+        Field(
+            ge=DOCUMENT_TEXT_MIN_CHARS,
+            le=DOCUMENT_TEXT_MAX_CHARS,
+            description="The most characters of text to return (default 20000).",
+        ),
+    ] = DOCUMENT_TEXT_DEFAULT_CHARS,
+) -> DocumentRead:
+    """Fetch one document: its metadata, its text, the household's comments on it.
 
-    Returns everything search_documents shows plus financial fields
-    (amount_total, currency, due_date, expiry_date), provenance (source,
-    original_filename, sha256, ocr_confidence), the audit-trail events,
-    and the full OCR text. OCR text longer than 20,000 characters is
-    truncated with an explanatory note and `ocr_text_truncated: true`;
-    get_document_file returns the original file if you need all of it.
-    Errors if the document id is unknown or deleted.
+    Returns everything search_documents shows plus provenance (source,
+    original_filename, sha256, ocr_confidence), `web_url` (its page in the
+    Library web app, when configured), the comments (personal context the
+    document itself does not say; newest first), the audit-trail events,
+    and `text`: the document's page markdown, which is what search matches
+    on, or its OCR text when it has no pages yet. `review_status` says
+    whether the extracted details are trusted ('needs_review' comes with
+    `review_findings`).
+
+    Text is paged: at most `max_chars` characters (default 20000) from
+    `start_page` on. When `text_truncated` is true, `continuation` says how
+    to read on, usually by calling again with `start_page=next_start_page`.
+
+    Money: amount_total is always a magnitude and amount_kind says what it
+    is (payment_due, payment_made, refund = money back, coverage_limit,
+    ...). Do not add up amount_total across documents yourself: the sign
+    depends on amount_kind and one payment often appears on several
+    documents (an invoice and its receipt). money_query totals amounts
+    correctly.
+
+    Errors if the document id is unknown or deleted, or `start_page` is past
+    the document's last page of text.
     """
     async with _session() as session:
         document = await _get_document(session, document_id)
-        ocr_text = document.ocr_text
-        truncated = False
-        if ocr_text is not None and len(ocr_text) > OCR_TEXT_LIMIT:
-            note = (
-                f"\n[... truncated: the full text is {len(ocr_text)} characters; "
-                "get_document_file returns the original file, or open the "
-                "document in the Library web app]"
+        try:
+            window = await document_text(
+                session, document, max_chars=max_chars, start_page=start_page
             )
-            ocr_text = ocr_text[:OCR_TEXT_LIMIT] + note
-            truncated = True
-        return {
-            **_document_summary(document),
-            "source": document.source.value,
-            "original_filename": document.original_filename,
-            "sha256": document.sha256,
-            "amount_total": (
-                str(document.amount_total) if document.amount_total is not None else None
-            ),
-            "currency": document.currency,
-            "due_date": document.due_date.isoformat() if document.due_date else None,
-            "expiry_date": document.expiry_date.isoformat() if document.expiry_date else None,
-            "ocr_confidence": document.ocr_confidence,
-            "ocr_text": ocr_text,
-            "ocr_text_truncated": truncated,
-            "has_searchable_pdf": document.searchable_pdf,
-            "events": [
-                {"event": event.event, "created_at": event.created_at.isoformat()}
+        except DocumentTextRangeError as exc:
+            raise ToolError(str(exc)) from exc
+        comments = await load_comments(session, document_id, newest_first=True)
+        return DocumentRead(
+            **list_item_fields(document),
+            source=document.source,
+            original_filename=document.original_filename,
+            sha256=document.sha256,
+            ocr_confidence=document.ocr_confidence,
+            web_url=document_web_url(get_settings().public_base_url, document_id),
+            text=window.text,
+            text_source=window.source,
+            text_page_count=window.page_count,
+            text_start_page=window.start_page,
+            text_end_page=window.end_page,
+            text_truncated=window.truncated,
+            text_total_chars=window.total_chars,
+            next_start_page=window.next_start_page,
+            continuation=_continuation(window, max_chars),
+            comments=[CommentOut.model_validate(comment) for comment in comments],
+            events=[
+                DocumentEvent(event=event.event, created_at=event.created_at)
                 for event in sorted(document.events, key=lambda event: event.id)
             ],
-        }
+        )
+
+
+#: money_query's description. The sign/dedup and coverage sentences are
+#: ``structured_query``'s, the same ones Ask's ``query_documents`` tool quotes.
+MONEY_QUERY_DESCRIPTION: str = (
+    "Add up, count or list documents' money: the only correct way to total "
+    "amounts across documents. Returns {result_type, rows, coverage}. "
+    + SUM_AMOUNT_GUIDE
+    + " Totals are per currency; group_by (sum_amount only) also splits them by "
+    "sender or kind. distinct_senders: the senders among matching documents, "
+    "with document counts. list: matching documents, newest first, up to 50. "
+    "The filters mean what they mean in search_documents. "
+    + COVERAGE_GUIDE
+    + " When `excluded` is not empty, say in your answer what was left out, with "
+    "the reason and the count; when `needs_review` is above 0, say that many "
+    "included documents have flagged details. Never present a partial total as "
+    "complete. review_status filters by trust, and what it removes is reported "
+    "as `filtered_review_status`: prefer reporting needs_review over filtering it "
+    "out of a total."
+)
+
+
+async def _unknown_filter_values(session: AsyncSession, filters: DocumentFilters) -> list[str]:
+    """One phrase per tag, project or matter slug and facet key/value pair in
+    ``filters`` that the archive does not have, in argument order.
+
+    Only money_query asks: such a filter matches nothing, and a total over
+    nothing is a 0 that reads like an answer. The search tools return an empty
+    result whose counts already say nothing matched.
+    """
+    unknown: list[str] = []
+    for label, model, slugs in (
+        ("tag", Tag, filters.tag_slugs),
+        ("project", Project, filters.project_slugs),
+        ("matter", Matter, filters.matter_slugs),
+    ):
+        if not slugs:
+            continue
+        known = set((await session.scalars(select(model.slug).where(model.slug.in_(slugs)))).all())
+        unknown.extend(f"unknown {label} '{slug}'" for slug in slugs if slug not in known)
+    if filters.facets:
+        pairs = (
+            await session.execute(
+                select(Facet.key, FacetValue.key)
+                .outerjoin(FacetValue, FacetValue.facet_id == Facet.id)
+                .where(Facet.key.in_(list(filters.facets)))
+            )
+        ).all()
+        facets = {facet for facet, _ in pairs}
+        values = set(pairs)
+        for facet, value in filters.facets.items():
+            if facet not in facets:
+                unknown.append(f"unknown facet '{facet}'")
+            elif (facet, value) not in values:
+                unknown.append(f"unknown facet value {facet}='{value}'")
+    return unknown
+
+
+@mcp.tool(title="Money query", annotations=READ_ONLY, description=MONEY_QUERY_DESCRIPTION)
+async def money_query(
+    aggregate: Annotated[
+        Aggregate,
+        Field(
+            description=(
+                "'sum_amount' (default) totals the money; 'distinct_senders' lists the "
+                "senders; 'list' lists the documents."
+            )
+        ),
+    ] = "sum_amount",
+    group_by: Annotated[
+        GroupBy | None,
+        Field(description="Split a sum_amount total by 'sender' or 'kind'."),
+    ] = None,
+    kind: KindFilter = None,
+    sender: SenderFilter = None,
+    recipient: RecipientFilter = None,
+    tags: TagsFilter = None,
+    projects: ProjectsFilter = None,
+    matters: MattersFilter = None,
+    facets: FacetsFilter = None,
+    date_from: DateFromFilter = None,
+    date_to: DateToFilter = None,
+    review_status: Annotated[
+        ReviewStatus | None,
+        Field(
+            description=(
+                "Only documents whose extracted details are 'verified', 'needs_review' "
+                "or 'unreviewed'. Omit (usually right) to include everything."
+            )
+        ),
+    ] = None,
+) -> MoneyQueryResult:
+    if group_by is not None and aggregate != "sum_amount":
+        raise ToolError(
+            "group_by applies only to aggregate='sum_amount'; omit it, or use sum_amount."
+        )
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise ToolError(f"date_from {date_from} is after date_to {date_to}.")
+    filters = DocumentFilters(
+        kind_slug=kind,
+        sender_contains=sender,
+        recipient_contains=recipient,
+        tag_slugs=tuple(tags or ()),
+        project_slugs=tuple(projects or ()),
+        matter_slugs=tuple(matters or ()),
+        facets=dict(facets or {}),
+        date_from=date_from,
+        date_to=date_to,
+        review_status=review_status,
+    )
+    async with _session() as session:
+        if kind is not None:
+            known = await session.scalar(select(Kind.id).where(Kind.slug == kind))
+            if known is None:
+                # A kind that matches nothing makes a total of 0 that reads
+                # like a real answer; a concept word is the usual cause.
+                suggestion = CONCEPT_TO_KIND.get(kind.strip().lower())
+                hint = f"; did you mean kind='{suggestion}'?" if suggestion else "."
+                raise ToolError(f"unknown kind '{kind}'{hint} list_kinds lists the kind slugs.")
+        unknown = await _unknown_filter_values(session, filters)
+        if unknown:
+            raise ToolError(
+                "; ".join(unknown) + ". get_library_context lists the tags, projects, "
+                "matters and facet values the filters take; list_tags, list_projects and "
+                "list_matters list them with document counts."
+            )
+        result = await query_documents(
+            session, filters=filters, aggregate=aggregate, group_by=group_by
+        )
+    return MoneyQueryResult.model_validate(result)
 
 
 @mcp.tool(title="Get document file", annotations=READ_ONLY)
@@ -864,11 +1485,12 @@ async def update_document_metadata(
         ),
     ] = None,
     tags: Annotated[
-        list[str] | None,
+        list[TagSlug] | None,
         Field(
             description=(
-                "The complete new list of tag slugs (replaces the current tags; "
-                f"unknown slugs are created). [] removes every tag. {_UNCHANGED}"
+                "The complete new list of tag slugs, at most 64 characters each "
+                "(replaces the current tags; unknown slugs are created). [] removes "
+                f"every tag. {_UNCHANGED}"
             )
         ),
     ] = None,
@@ -1118,7 +1740,8 @@ async def list_recipients() -> dict[str, Any]:
 async def list_tags() -> dict[str, Any]:
     """List all tags with per-tag document counts.
 
-    Use the returned slugs as the `tag` filter of search_documents.
+    Use the returned slugs in the `tags` filter of search_documents and
+    semantic_search.
     """
     async with _session() as session:
         tags = await taxonomy.list_tags(session)
@@ -1129,7 +1752,8 @@ async def list_tags() -> dict[str, Any]:
 async def list_projects() -> dict[str, Any]:
     """List all projects (document collections) with per-project document counts.
 
-    Use the returned slugs as the `project` filter of search_documents.
+    Use the returned slugs in the `projects` filter of search_documents and
+    semantic_search.
     Archived projects are omitted.
     """
     async with _session() as session:
@@ -1141,7 +1765,8 @@ async def list_projects() -> dict[str, Any]:
 async def list_matters() -> dict[str, Any]:
     """List all business matters (subject categories) with per-matter document counts.
 
-    Use the returned slugs as the `matter` filter of search_documents.
+    Use the returned slugs in the `matters` filter of search_documents and
+    semantic_search.
     Archived matters are omitted.
     """
     async with _session() as session:

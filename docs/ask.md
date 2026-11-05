@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.8: the write tool's preview shows the value applying would store, from `documents_service.preview_update`'s rolled-back dry run shared with MCP, and refuses what applying would refuse). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.8. Read `_run_update_document` and `documents_service.preview_update` against the prose; `test_update_tool_preview_shows_what_the_database_stores` seen red first (the preview showed `12.345` and the uncollapsed sender), then green with the rest of `tests/test_ask_document_write.py`. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-05 (*Coverage and trust on structured results*: the date window applies to the document that carries a payment, chosen over the other filters, with the new reason `payment_dated_elsewhere`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to *Coverage and trust on structured results*. Read against `structured_query.py`; the month-window, within-filter and row-cap tests in `tests/test_mcp_money.py`, which include runs through `_run_query_documents`, pass, seen red first or killed by mutants. The rest carries its earlier verifications forward.
 **Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, .github/workflows/e2e-nightly.yml
 
 Ask lets you put a natural-language question to the archive and get a prose
@@ -113,7 +113,10 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    says. `matched: 0` means the filters excluded everything; `matched: 40,
    returned: 0` means those 40 documents genuinely don't say this; a non-zero
    `unembedded` means the negative is partly a technical gap, not a content
-   fact (§1.10 item 10).
+   fact (§1.10 item 10). The retrieval and these counts come from one
+   service, `search.hybrid_search`, which the MCP `semantic_search` tool
+   calls too ([mcp.md §1.3](mcp.md)); the tool embeds the question itself
+   and turns an embedding failure into a tool result.
 3. **Structured query** (`query_documents`). Aggregations over the extracted
    columns: distinct senders, summed amounts (by currency, optionally grouped by
    sender/kind), and document lists. Filters are the list API's
@@ -137,6 +140,11 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    the concept→kind hints `quote`/`estimate` → `quote`). The exclusion lives in
    `structured_query.sum_amount`, not the prompt, so it holds regardless of how
    the question is phrased.
+
+   The tool's sentences on sign, payment dedup and the coverage block are
+   `structured_query.SUM_AMOUNT_GUIDE` and `COVERAGE_GUIDE`. The MCP
+   `money_query` tool, which calls the same `query_documents`, quotes them
+   too ([mcp.md §1.3](mcp.md)), so both explain a total the same way.
 4. **Full-document read** (`get_document`). Once another tool has located a
    document, this reads it in full: structured fields, its **comments** (see
    §1.9), and its text (joined per-page markdown, falling back to `ocr_text`),
@@ -246,8 +254,9 @@ Each aggregate's exclusion reasons are built as **successive refinements of one
 include chain**, not independently-gated conditions. `sum_amount`, for
 example, starts from "has an amount", narrows to "and is not a quote" (unless
 the caller is asking about quotes specifically), then to "and its `amount_kind`
-is one this question totals", then to "and it is the canonical document for its
-payment", and finally — only when grouping — to "and has the group-by column".
+is one this question totals", then to "and it is the document counted for its
+payment", with the group-by column folded into that choice when grouping, and
+last to "and its row survived the row cap".
 Each reason therefore means "survived every earlier gate, fails this one", so
 the reasons partition the matched set by construction: a document that is both a
 quote and senderless lands under `quote_not_spend` alone, never under both. An
@@ -266,11 +275,15 @@ The reasons a document is dropped, by aggregate:
   (quotes are not expenditure; see below), `not_summable_kind` (the amount is
   real but is not spending: a `coverage_limit`, a `balance`, an `estimate`, a
   `none`, or an `amount_kind` nothing has decided yet), `duplicate_payment` (a
-  second document for a payment already counted — see §1.2's money paragraph
-  below), and `no_sender`/`no_kind` — present only when grouping by that column,
-  whose inner join drops a document lacking it.
+  second document for a payment these rows count — see the money paragraph
+  below), `payment_dated_elsewhere` (the twin that carries its payment is
+  dated outside the date window, or undated), `no_sender`/`no_kind` — present only when grouping by that column,
+  whose inner join drops a document lacking it, and only when no twin with the
+  column carries its payment — and `over_limit` (in a group the 50-row cap
+  cut; the groups with the largest totals, either sign, are kept).
 - `distinct_senders` — `no_sender` (its inner join to `Sender` drops a
-  document with no extracted sender).
+  document with no extracted sender) and `over_limit` (a sender beyond the
+  50 with the most documents).
 - `list` — `over_limit` (the result limit is 50 and the drop is positional —
   which documents fall off depends on sort order, not a predicate).
 There is also `filtered_review_status`, reported when the caller passes
@@ -294,14 +307,20 @@ own document date into a display currency):
 - **Only expenditure is summed.** `SUMMABLE_AMOUNT_KINDS` decides, so a policy's
   cover limit, an account balance, an estimate and an undecided (NULL)
   `amount_kind` stay out, reported as `not_summable_kind`.
-- **One payment counts once.** `spend_facts.is_canonical` names exactly one
-  document per payment, so an invoice and a receipt for the same payment total
-  once rather than twice, reported as `duplicate_payment`.
+- **One payment counts once.** The view's `payment_id` groups a payment's
+  documents, and one of them is counted, so an invoice and a receipt for the
+  same payment total once rather than twice, reported as `duplicate_payment`.
+  The counted one is chosen among the documents that pass every filter but the
+  date window, with the view's ordering ([money-facts.md](money-facts.md) §5.2),
+  not by the view's archive-wide `is_canonical`: `kind='utility-bill'` still
+  counts a bill whose receipt the view would have picked. The date window then
+  applies to the chosen document, so month totals add up. The charts keep the
+  archive-wide flag.
 
 Coverage is still counted over `documents`, not over the view. Every one of
 these exclusions is expressible as a document-level predicate — `amount_kind` is
-a column on `documents`, and canonicality is an `EXISTS` against the view — so
-the partition contract above is unchanged and only the row-building query moved.
+a column on `documents`, and being the counted document is membership of a
+ranking over the filtered set — so the partition contract above is unchanged.
 
 One exception is deliberate: **the summable set follows the question.** A caller
 filtering `kind='quote'` is asking "how much have my quotes come to?", and a
@@ -1272,8 +1291,9 @@ have Ask treat that annotation as ground truth.
    search, the prose-citation fallback still attaches the retrieved candidates.
    The system prompt instructs against it; it is not enforced in code.
 8. Truncation is disclosed but not remediable. `query_documents` reports
-   `over_limit` when a `list` exceeds its 50-row limit, and the tool exposes no
-   `limit` parameter — so the model can say "50 of 500" but cannot fetch the
+   `over_limit` when a `list` exceeds its 50-row limit, or `distinct_senders`
+   or `sum_amount` has more than 50 groups, and the tool exposes no `limit`
+   parameter — so the model can say "50 of 500" but cannot fetch the
    rest. That is deliberate for this release (the goal was disclosure, not
    completeness), but it means a list answer over a large match set is a sample
    the model knows is a sample.

@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.6: `documents_service.py` row, the shared edit path and its dry-run preview). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to the §1.6 `documents_service.py` row, read against `edit_document` and `preview_update` in `src/library/documents_service.py` and their callers in `api/documents.py`, `ask/engine.py` and `mcp_server.py`. Other sections carry forward their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-05 (§1.6: `structured_query.py` row, now also behind the MCP `money_query` tool; §1.4: the MCP tool summary). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to the §1.6 `structured_query.py` row and the §1.4 MCP bullet, read against `src/library/structured_query.py` and its callers in `ask/engine.py` and `mcp_server.py`. Other sections carry forward their earlier verifications.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -303,8 +303,9 @@ are stored as SHA-256 digests only:
   natural-language **Ask** (`POST /api/ask`, see [ask.md](ask.md)).
 - **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens:
   static `library_…` tokens, and OAuth access tokens from Library's own
-  authorization server when OAuth is on (see §1.5). Tools for searching,
-  reading, and ingesting documents from LLM clients. See [mcp.md](mcp.md).
+  authorization server when OAuth is on (see §1.5). Tools for searching (by
+  keyword or by meaning), reading, totalling amounts, ingesting, editing
+  and commenting on documents from LLM clients. See [mcp.md](mcp.md).
 - **Web app** — Vue 3 SPA using the **Mosaic** (Cruip) theme: violet accent,
   soft rounded-xl cards, dark mode, Inter loaded from Google Fonts. Content-first,
   responsive 320px-up, accessible. (Reskinned from GOV.UK — see
@@ -418,14 +419,15 @@ top-level modules.
 | `src/library/taxonomy.py` | Taxonomy listing: kinds, senders, recipients, tags, with counts. |
 | `src/library/mcp_server.py` | The MCP server: FastMCP tools over the archive (§1.4). |
 | `src/library/notifications.py` | Pushover push notifications (per-user, opt-in). |
-| `src/library/search.py` | Shared document query building for the REST API and the MCP server. |
+| `src/library/search.py` | Shared document queries: the filter conditions, full-text search and ordering behind the REST list and MCP `search_documents` (`build_document_query`), and the hybrid vector + full-text retrieval with its coverage counts behind Ask's and MCP's `semantic_search` (`hybrid_search`). |
 | `src/library/consume.py` | Consume-folder watcher: ingest files dropped into a watched directory. |
 | `src/library/ingest.py` | Ingestion service: bytes in, `Document` row + queued job out. |
 | `src/library/documents_service.py` | The one document-metadata edit path shared by the PATCH route, Ask and MCP (`edit_document`), and the edit preview (`preview_update`), which reads the stored values back from a rolled-back dry run. |
+| `src/library/document_reads.py` | The one document-read path: a document's pages and comments (`load_pages`, `load_comments`), its readable text (`document_text`: page markdown, paged and capped, else OCR text), and the list-row fields (`list_item_fields`), shared by the REST list/detail/markdown routes, Ask's and MCP's `get_document`, MCP's `search_documents`, the comments list route, the embed stage, and the document link in notifications (`document_web_url`). |
 | `src/library/config.py` | Settings, loaded from the environment with the `LIBRARY_` prefix. |
 | `src/library/app.py` | The FastAPI app factory: routers, the SPA fallback, `/metrics`, `/healthz`, and the `/mcp` slashless rewrite, and the lifespan (telemetry, the events broker, the scheduled Claude credential check, and disposing the shared DB engine on exit). |
 | `src/library/spend_lines.py` | Manual allocation of a document's amount across spend lines: the replace-whole write path behind the `spend_lines`/`line_labels` tables, whose sum against `documents.amount_total` is enforced by the deferred constraint triggers of migration 0035. |
-| `src/library/structured_query.py` | Structured aggregation over extracted metadata (`sum_amount`, `distinct_senders`, `list_documents`) behind the `/ask` `query_documents` tool; each result carries a `Coverage` object reporting what the rows leave out. `sum_amount` builds its rows from the `spend_facts` view, so an Ask money total is signed, kind-filtered and payment-deduplicated like a chart's; coverage is still counted over `documents`. |
+| `src/library/structured_query.py` | Structured aggregation over extracted metadata (`sum_amount`, `distinct_senders`, `list_documents`) behind the `/ask` `query_documents` tool and the MCP `money_query` tool, which also quote its model-facing wording on sign, dedup and coverage (`SUM_AMOUNT_GUIDE`, `COVERAGE_GUIDE`); each result carries a `Coverage` object reporting what the rows leave out. `sum_amount` builds its rows from the `spend_facts` view, so an Ask money total is signed, kind-filtered and payment-deduplicated like a chart's; coverage is still counted over `documents`. |
 
 Everything else under `src/library/` is a single-purpose helper of under ~300
 lines — storage, FX, matters, projects, PDF unlock, the events broker and

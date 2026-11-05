@@ -14,13 +14,28 @@ two retrieval paths share one filter vocabulary.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date
 from decimal import Decimal
 from typing import Any, Literal, TypedDict
 
-from sqlalchemy import ColumnElement, case, distinct, func, select
+from sqlalchemy import (
+    CTE,
+    ColumnElement,
+    Integer,
+    and_,
+    case,
+    cast,
+    distinct,
+    func,
+    null,
+    select,
+    true,
+    tuple_,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from library.models import (
     AMOUNT_SIGN,
@@ -36,6 +51,14 @@ from library.search import DocumentFilters, filter_conditions
 
 # How many contributing document ids to attach to each aggregated row.
 MAX_CITED_IDS: int = 25
+
+#: The most rows ``distinct_senders`` and ``sum_amount`` return: one row per
+#: sender (per currency) would otherwise grow with the archive, each citing up
+#: to ``MAX_CITED_IDS`` ids, into a tool result no model context holds. The
+#: largest groups are kept, and the documents of the rest are reported as
+#: ``over_limit``, as ``list_documents`` reports its own cut. Read at call
+#: time, so a test can lower it.
+MAX_GROUP_ROWS: int = 50
 
 # Maps everyday concepts an LLM might use to the fixed kind slugs (seeded in
 # migration 0001). Surfaced in the tool description so the model can translate
@@ -59,6 +82,46 @@ CONCEPT_TO_KIND: dict[str, str] = {
 
 Aggregate = Literal["list", "distinct_senders", "sum_amount"]
 GroupBy = Literal["sender", "kind"]
+
+# How to read a result, worded for a model. Ask's `query_documents` tool and
+# the MCP `money_query` tool both quote these, so the two LLM surfaces over
+# this module explain sign, dedup and coverage in the same words; a change
+# here changes both.
+
+#: What ``sum_amount`` totals: signed by ``amount_kind``, real expenditure
+#: only, one document per payment, and where the rest is reported.
+SUM_AMOUNT_GUIDE: str = (
+    "sum_amount: total real expenditure. It reads what each "
+    "amount MEANS, so a refund reduces the total, a policy's "
+    "cover limit or an account balance is left out, and one "
+    "payment documented as both an invoice and a receipt is "
+    "counted once, on the date of the document that carries it (the "
+    "receipt when both match your other filters) — each reported in "
+    "`coverage.excluded` as not_summable_kind, duplicate_payment "
+    "(payment_dated_elsewhere when the carrying document is dated outside "
+    "your date window) or quote_not_spend. Pass kind='quote' to total "
+    "quotes instead."
+)
+
+#: How to read the ``coverage`` block every result carries (``Coverage``).
+COVERAGE_GUIDE: str = (
+    "Every result carries a `coverage` block — `matched` documents met "
+    "your filters, `included` are the ones the rows account for, "
+    "`excluded` maps a reason to how many were dropped for it, and "
+    "`needs_review` counts included documents whose extracted metadata "
+    "the archive flagged as untrustworthy. Read it before you answer: a "
+    "total over `included` documents is not a total over `matched` ones. "
+    "`matched`/`included`/`excluded` always count DOCUMENTS, even for "
+    "distinct_senders — a coverage of 1 excluded out of 12 with 3 sender "
+    "rows means 1 of 12 documents was dropped, not 1 of 3 senders. "
+    f"distinct_senders and sum_amount return at most {MAX_GROUP_ROWS} rows, "
+    "the largest groups; `over_limit` counts the documents in the rows that "
+    "were cut (narrow the filters, or drop group_by for the whole total). "
+    "Totals over adjacent date windows with the same other filters add up; "
+    "totals under different other filters (kind='utility-bill' and "
+    "kind='receipt', say) can count the same payment, so never add them "
+    "together."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,28 +362,38 @@ async def distinct_senders(
     The join to ``Sender`` is inner, so a document whose sender never extracted
     is absent from the breakdown entirely — reported as ``no_sender`` rather
     than left for the reader to notice the counts do not add up.
+
+    At most ``MAX_GROUP_ROWS`` senders, those with the most documents; the
+    documents of the senders cut are ``over_limit``.
     """
+    # Grouped by id as well as name: names are unique, so the groups are the
+    # same, and the id is what the over-limit predicate below needs.
     statement = (
         select(
+            Sender.id,
             Sender.name,
             func.count(Document.id),
             func.array_agg(Document.id),
         )
         .join(Sender, Document.sender_id == Sender.id)
         .where(*filter_conditions(filters))
-        .group_by(Sender.name)
+        .group_by(Sender.id, Sender.name)
         .order_by(func.count(Document.id).desc(), Sender.name)
     )
     rows = (await session.execute(statement)).all()
+    kept = rows[:MAX_GROUP_ROWS]
     groups = [
         SenderGroup(sender=name, document_count=count, document_ids=sorted(ids)[:MAX_CITED_IDS])
-        for name, count, ids in rows
+        for _, name, count, ids in kept
     ]
+    include: ColumnElement[bool] = Document.sender_id.isnot(None)
+    exclusions: dict[str, ColumnElement[bool]] = {"no_sender": Document.sender_id.is_(None)}
+    if len(kept) < len(rows):
+        shown = Document.sender_id.in_([sender_id for sender_id, *_ in kept])
+        exclusions["over_limit"] = include & ~shown
+        include = include & shown
     coverage = await count_coverage(
-        session,
-        filters=filters,
-        include_condition=Document.sender_id.isnot(None),
-        exclusions={"no_sender": Document.sender_id.is_(None)},
+        session, filters=filters, include_condition=include, exclusions=exclusions
     )
     return Aggregated(rows=groups, coverage=coverage)
 
@@ -378,6 +451,95 @@ def _signed_amount(kinds: frozenset[AmountKind]) -> ColumnElement[Decimal]:
     )
 
 
+def _payment_choices(
+    candidates: Sequence[ColumnElement[bool]],
+    group_key_id: InstrumentedAttribute[int | None] | None,
+) -> CTE:
+    """One row per candidate document: which document carries its payment.
+
+    Columns: ``document_id``; ``is_chosen`` (this document carries its
+    payment); and the chosen document's ``chosen_date``, ``chosen_has_key``,
+    ``chosen_key_id`` and ``chosen_currency``, which say where the payment
+    lands: in which date window, whether in any grouped row at all, and in
+    which row.
+
+    **The ordering** is the ``spend_facts`` view's own (migration 0035): a
+    line-bearing document first, so an itemised invoice keeps its split; then
+    a ``payment_made``; then the lowest id. When grouping, having the group
+    key comes before all three, so a payment is carried by a twin that can
+    appear in a row whenever it has one (``chosen_has_key`` false means none
+    does).
+
+    **The candidates** are the documents that pass every caller filter
+    EXCEPT the date window, and the earlier gates of ``sum_amount``. The view
+    ranks every live document archive-wide, so its ``is_canonical`` can name a
+    twin a ``kind`` or tag filter leaves out, and a total gated on it drops
+    that payment. Ranking within the filters fixes that. The date window is
+    deliberately not among them: a window that picked the twin would let a
+    bill dated 28 September carry its payment in a September total while its
+    3 October receipt carried it in October, and month totals would not add
+    up. The window is applied to the chosen document instead
+    (``payment_dated_elsewhere``).
+
+    One row per document, not per ``spend_facts`` row: grouped by document,
+    so a document with spend lines is ranked once (``has_lines`` is
+    ``bool_or`` over its rows).
+
+    A ``MATERIALIZED`` CTE: the row query and the coverage query each test
+    several memberships against it, and computing the ranking once per
+    statement instead of once per membership is most of their cost. It reads
+    ``Document`` itself, and a CTE is never correlated to the outer query.
+    """
+    has_key: ColumnElement[bool] = group_key_id.isnot(None) if group_key_id is not None else true()
+    window: dict[str, Any] = {
+        "partition_by": spend_facts.c.payment_id,
+        "order_by": (
+            has_key.desc(),
+            func.bool_or(spend_facts.c.line_id.isnot(None)).desc(),
+            func.coalesce(Document.amount_kind == AmountKind.PAYMENT_MADE.value, False).desc(),
+            Document.id.asc(),
+        ),
+    }
+    return (
+        select(
+            Document.id.label("document_id"),
+            ((func.row_number().over(**window) == 1) & has_key).label("is_chosen"),
+            func.first_value(Document.document_date).over(**window).label("chosen_date"),
+            func.first_value(has_key).over(**window).label("chosen_has_key"),
+            func.first_value(group_key_id if group_key_id is not None else cast(null(), Integer))
+            .over(**window)
+            .label("chosen_key_id"),
+            func.first_value(func.coalesce(Document.currency, ""))
+            .over(**window)
+            .label("chosen_currency"),
+        )
+        .select_from(Document)
+        .join(spend_facts, spend_facts.c.document_id == Document.id)
+        .where(*candidates)
+        # `documents.id` is the primary key, so every `Document` column is
+        # functionally dependent on it and may be read without aggregating.
+        .group_by(Document.id, spend_facts.c.payment_id)
+        .cte("payment_choices")
+        .prefix_with("MATERIALIZED")
+    )
+
+
+def _chosen_in_window(choices: CTE, filters: DocumentFilters) -> ColumnElement[bool]:
+    """The chosen document's date is inside the caller's date window.
+
+    ``COALESCE(..., false)``: an undated chosen document is in no window, and a
+    NULL here would drop its twins out of every coverage reason at once.
+    """
+    bounds: list[ColumnElement[bool]] = []
+    if filters.date_from is not None:
+        bounds.append(choices.c.chosen_date >= filters.date_from)
+    if filters.date_to is not None:
+        bounds.append(choices.c.chosen_date <= filters.date_to)
+    if not bounds:
+        return true()
+    return func.coalesce(and_(*bounds), False)
+
+
 async def sum_amount(
     session: AsyncSession, *, filters: DocumentFilters, group_by: GroupBy | None = None
 ) -> Aggregated[AmountGroup]:
@@ -395,14 +557,20 @@ async def sum_amount(
     * **Kind.** Only ``SUMMABLE_AMOUNT_KINDS`` are expenditure, so a policy's
       cover limit, an account balance, an estimate and an undecided (NULL) kind
       stay out of "what did I spend".
-    * **Payment identity.** ``is_canonical`` picks exactly one document per
-      payment, so one payment documented as an invoice *and* a receipt is
-      totalled once.
+    * **Payment identity.** The view's ``payment_id`` groups the documents of
+      one payment, so one payment documented as an invoice *and* a receipt is
+      totalled once. Which document carries it is decided among the documents
+      that pass every filter but the date window (:func:`_payment_choices`),
+      not by the view's archive-wide ``is_canonical``: a filter matching only
+      the invoice still counts the payment. The date window then applies to
+      the carrying document, so totals over adjacent windows add up. The
+      charts keep the archive-wide flag.
 
     Coverage is still counted over ``documents`` by :func:`count_coverage`, and
-    deliberately: every new exclusion is expressible as a document-level
-    predicate — ``amount_kind`` is a column on ``documents``, and canonicality is
-    an ``EXISTS`` against the view — so only the row-building query moved.
+    deliberately: every exclusion is expressible as a document-level
+    predicate — ``amount_kind`` is a column on ``documents``, and where a
+    document's payment landed is membership of one ranking CTE — so the
+    partition holds by construction.
 
     The reasons a document is dropped, each meaning "survived every earlier
     gate, fails this one" so that they partition the matched set:
@@ -415,9 +583,15 @@ async def sum_amount(
     * ``not_summable_kind`` — the amount is real but is not spending: a
       ``coverage_limit``, a ``balance``, an ``estimate``, a ``none``, or an
       ``amount_kind`` nothing has decided yet.
-    * ``duplicate_payment`` — a second document for a payment already counted.
+    * ``duplicate_payment`` — a second document for a payment counted in these
+      rows, never one whose payment the rows leave out.
+    * ``payment_dated_elsewhere`` — its payment is carried by a twin dated
+      outside the date window (or undated), so it counts in that twin's window.
     * ``no_sender`` / ``no_kind`` — only when grouping by that column, whose
-      INNER JOIN drops documents that lack it.
+      INNER JOIN drops documents that lack it: a document without the key
+      whose payment no twin with the key carries.
+    * ``over_limit`` — its payment lands in a group cut by ``MAX_GROUP_ROWS``
+      (the largest |total|s are kept), whether it carries the payment or not.
     """
     # Explicitly correlated to Document: group_by="kind" joins Kind into the
     # outer query too, and without this SQLAlchemy auto-correlates the two
@@ -437,17 +611,15 @@ async def sum_amount(
     # "undecided" a reportable state rather than a hole.
     summable_kind = Document.amount_kind.in_(kind_values)
     unsummable_kind = Document.amount_kind.is_(None) | Document.amount_kind.notin_(kind_values)
-    # `payments` seeds its reachability from every live document, so a document
-    # with an amount always has at least one `spend_facts` row. Having none that
-    # is canonical therefore means exactly one thing: another document holds the
-    # payment's canonical slot.
-    is_canonical = (
-        select(1)
-        .select_from(spend_facts)
-        .where(spend_facts.c.document_id == Document.id, spend_facts.c.is_canonical)
-        .correlate(Document)
-        .exists()
-    )
+    # The group key's id column on `Document`. Names and slugs are unique, so
+    # grouping rows by it as well as by the name changes no group, and it is
+    # what the over-limit predicate and the payment choice read.
+    key_column: InstrumentedAttribute[str] | None = None
+    key_id: InstrumentedAttribute[int | None] | None = None
+    if group_by == "sender":
+        key_column, key_id = Sender.name, Document.sender_id
+    elif group_by == "kind":
+        key_column, key_id = Kind.slug, Document.kind_id
 
     # Each exclusion is "survived every earlier gate, but fails this one", so the
     # reasons partition the matched set instead of overlapping. A quote with an
@@ -461,18 +633,19 @@ async def sum_amount(
         include = include & ~is_quote
     exclusions["not_summable_kind"] = include & unsummable_kind
     include = include & summable_kind
-    exclusions["duplicate_payment"] = include & ~is_canonical
-    include = include & is_canonical
-    if group_by == "sender":
-        exclusions["no_sender"] = include & Document.sender_id.is_(None)
-        include = include & Document.sender_id.isnot(None)
-    elif group_by == "kind":
-        exclusions["no_kind"] = include & Document.kind_id.is_(None)
-        include = include & Document.kind_id.isnot(None)
+
+    # Payment identity (see `_payment_choices`): ranked over every filter but
+    # the date window, among the documents that passed every gate above.
+    choices = _payment_choices(
+        [*filter_conditions(replace(filters, date_from=None, date_to=None)), include], key_id
+    )
+
+    def member(condition: ColumnElement[bool]) -> ColumnElement[bool]:
+        return Document.id.in_(select(choices.c.document_id).where(condition))
 
     conditions = [
         *filter_conditions(filters),
-        spend_facts.c.is_canonical,
+        member(choices.c.is_chosen),
         spend_facts.c.amount_kind.in_(kind_values),
     ]
     if filters.kind_slug != "quote":
@@ -482,7 +655,6 @@ async def sum_amount(
     # row PER LINE, so a plain count would report an itemised document once per
     # line and array_agg would cite it as many times. The money is right either
     # way, which is what makes this the quiet half of the bug.
-    key_column = None
     statement = (
         select(
             func.sum(_signed_amount(kinds)),
@@ -496,33 +668,68 @@ async def sum_amount(
     )
 
     # Joined through `Document`, not through the view's own `sender_id`, so the
-    # join and `count_coverage`'s `no_sender` predicate read the same column.
+    # join and the payment choice read the same column.
     if group_by == "sender":
-        key_column = Sender.name
         statement = statement.join(Sender, Document.sender_id == Sender.id)
     elif group_by == "kind":
-        key_column = Kind.slug
         statement = statement.join(Kind, Document.kind_id == Kind.id)
 
-    if key_column is not None:
-        statement = statement.add_columns(key_column).group_by(key_column, spend_facts.c.currency)
+    if key_column is not None and key_id is not None:
+        statement = statement.add_columns(key_column, key_id).group_by(
+            key_column, key_id, spend_facts.c.currency
+        )
     else:
         statement = statement.group_by(spend_facts.c.currency)
     statement = statement.order_by(func.sum(_signed_amount(kinds)).desc())
 
-    groups: list[AmountGroup] = []
-    for row in (await session.execute(statement)).all():
-        total, currency, count, ids = row[0], row[1], row[2], row[3]
-        key = row[4] if key_column is not None else None
-        groups.append(
-            AmountGroup(
-                key=key,
-                total=str(Decimal(total)),
-                currency=currency,
-                document_count=count,
-                document_ids=sorted(ids)[:MAX_CITED_IDS],
-            )
+    rows = (await session.execute(statement)).all()
+    keyed = key_column is not None
+
+    def size(index: int) -> tuple[Decimal, str, str]:
+        """Largest |total| first, either sign: a refund-only sender's -90.00
+        outweighs another's +5.00. Key and currency make ties deterministic."""
+        row = rows[index]
+        return (-abs(Decimal(row[0])), (row[4] or "") if keyed else "", row[1] or "")
+
+    # Shown in the query's order (largest total first), not in size order.
+    kept = sorted(sorted(range(len(rows)), key=size)[:MAX_GROUP_ROWS])
+    groups = [
+        AmountGroup(
+            key=rows[index][4] if keyed else None,
+            total=str(Decimal(rows[index][0])),
+            currency=rows[index][1],
+            document_count=rows[index][2],
+            document_ids=sorted(rows[index][3])[:MAX_CITED_IDS],
         )
+        for index in kept
+    ]
+    # Where each matched document's payment landed, read off its chosen
+    # document. Every document past the gates above is a candidate, so it has
+    # exactly one row in `choices` and exactly one of these holds for it:
+    #   no chosen document with the key  -> no_sender / no_kind
+    #   chosen, dated outside the window -> payment_dated_elsewhere
+    #   chosen, in the window, row cut   -> over_limit
+    #   chosen, in a row, not this one   -> duplicate_payment
+    #   this document is the chosen one  -> included
+    carried = choices.c.chosen_has_key
+    in_window = carried & _chosen_in_window(choices, filters)
+    shown: ColumnElement[bool] = true()
+    if len(kept) < len(rows):
+        # The row a payment lands in is its chosen document's. A NULL currency
+        # is a group of its own (coalesced to "" in `choices`).
+        if key_id is None:
+            shown = choices.c.chosen_currency.in_([rows[index][1] or "" for index in kept])
+        else:
+            shown = tuple_(choices.c.chosen_key_id, choices.c.chosen_currency).in_(
+                [(rows[index][5], rows[index][1] or "") for index in kept]
+            )
+    exclusions["duplicate_payment"] = include & member(in_window & shown & ~choices.c.is_chosen)
+    exclusions["payment_dated_elsewhere"] = include & member(carried & ~in_window)
+    if group_by is not None:
+        exclusions["no_sender" if group_by == "sender" else "no_kind"] = include & member(~carried)
+    if len(kept) < len(rows):
+        exclusions["over_limit"] = include & member(in_window & ~shown)
+    include = include & member(in_window & shown & choices.c.is_chosen)
     coverage = await count_coverage(
         session, filters=filters, include_condition=include, exclusions=exclusions
     )

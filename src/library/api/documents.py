@@ -9,7 +9,7 @@ see docs/api.md §1.3.3 for the user-facing description.
 
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
@@ -19,14 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
+from library.document_reads import list_item_fields, load_comments, load_pages
 from library.documents_service import DocumentEditError, edit_document
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
 from library.jobs import extract_document
 from library.models import (
     Document,
-    DocumentComment,
     DocumentLanguage,
-    DocumentPage,
     DocumentSource,
     DocumentStatus,
     IngestionEvent,
@@ -45,15 +44,8 @@ from library.schemas import (
     DocumentUploadResponse,
     ExtractionQueuedResponse,
     IngestionEventOut,
-    KindOut,
     MarkdownPage,
     MarkdownResponse,
-    MatterRef,
-    ProjectRef,
-    RecipientOut,
-    SenderOut,
-    TagOut,
-    ValidationFindingSummary,
 )
 from library.search import (
     DEFAULT_DOCUMENT_SORT,
@@ -285,12 +277,12 @@ async def list_documents(
 
     if query.has_rank:
         items = [
-            DocumentListItem(**_list_item_fields(document), snippet=snippet_value, rank=rank_value)
+            DocumentListItem(**list_item_fields(document), snippet=snippet_value, rank=rank_value)
             for document, rank_value, snippet_value in result.all()
         ]
     else:
         items = [
-            DocumentListItem(**_list_item_fields(document)) for document in result.scalars().all()
+            DocumentListItem(**list_item_fields(document)) for document in result.scalars().all()
         ]
     return DocumentListResponse(items=items, total=total, limit=limit, offset=offset)
 
@@ -377,17 +369,7 @@ async def get_document_markdown(
     read-only Recently-Deleted detail view is not blank (see ``get_document``).
     """
     await _get_document_or_404(session, document_id, include_deleted=include_deleted)
-    rows = (
-        (
-            await session.execute(
-                select(DocumentPage)
-                .where(DocumentPage.document_id == document_id)
-                .order_by(DocumentPage.page_number)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await load_pages(session, document_id)
     pages = [MarkdownPage(page_number=row.page_number, markdown=row.markdown) for row in rows]
     return MarkdownResponse(page_count=len(pages), pages=pages)
 
@@ -691,77 +673,11 @@ def _deleted_item(document: Document, *, retention_days: int, now: datetime) -> 
     purge_at = document.deleted_at + timedelta(days=retention_days)
     days_remaining = max(0, (purge_at - now).days)
     return DeletedDocumentItem(
-        **_list_item_fields(document),
+        **list_item_fields(document),
         deleted_at=document.deleted_at,
         purge_at=purge_at,
         days_remaining=days_remaining,
     )
-
-
-def _list_item_fields(document: Document) -> dict[str, Any]:
-    """The DocumentListItem field values shared by list and detail responses."""
-    return {
-        "id": document.id,
-        "title": document.title,
-        "summary": document.summary,
-        "kind": (
-            KindOut(slug=document.kind.slug, name=document.kind.name) if document.kind else None
-        ),
-        "sender": (
-            SenderOut(id=document.sender.id, name=document.sender.name) if document.sender else None
-        ),
-        "recipient": (
-            RecipientOut(id=document.recipient.id, name=document.recipient.name)
-            if document.recipient
-            else None
-        ),
-        "tags": [
-            TagOut(slug=tag.slug, name=tag.name)
-            for tag in sorted(document.tags, key=lambda tag: tag.slug)
-        ],
-        "topics": list(document.topics or []),
-        "projects": [
-            ProjectRef(slug=project.slug, name=project.name)
-            for project in sorted(document.projects, key=lambda project: project.slug)
-        ],
-        "matters": [
-            MatterRef(slug=matter.slug, name=matter.name)
-            for matter in sorted(document.matters, key=lambda matter: matter.slug)
-        ],
-        "document_date": document.document_date,
-        "due_date": document.due_date,
-        "expiry_date": document.expiry_date,
-        "language": document.language,
-        "status": document.status,
-        "mime_type": document.mime_type,
-        "page_count": document.page_count,
-        "created_at": document.created_at,
-        "updated_at": document.updated_at,
-        "has_searchable_pdf": document.searchable_pdf,
-        "has_thumbnail": (derived_path(document.sha256) / THUMBNAIL_NAME).is_file(),
-        "review_status": document.review_status,
-        "review_findings": _review_findings(document),
-        "amount_total": document.amount_total,
-        "currency": document.currency,
-    }
-
-
-def _review_findings(document: Document) -> list[ValidationFindingSummary]:
-    """Compact validation findings for list rows — only when the document still
-    needs review, so clean rows stay lean."""
-    if document.review_status != ReviewStatus.NEEDS_REVIEW:
-        return []
-    validation = document.extra.get("validation") if isinstance(document.extra, dict) else None
-    findings = validation.get("findings", []) if isinstance(validation, dict) else []
-    return [
-        ValidationFindingSummary(
-            rule=finding.get("rule", ""),
-            field=finding.get("field"),
-            message=finding.get("message", ""),
-        )
-        for finding in findings
-        if isinstance(finding, dict)
-    ]
 
 
 # Derived from the mapper, never hand-written. A commit expires exactly two
@@ -797,24 +713,13 @@ async def _refresh_for_detail(session: AsyncSession, document: Document) -> None
 async def _detail(session: AsyncSession, document: Document) -> DocumentDetail:
     """Build the detail response; exposes extraction provenance, not raw extra.
 
-    Comments are queried explicitly (``Document.comments`` is ``lazy="raise"``,
-    since a normal document load never wants them) rather than eager-loaded on
-    every read of ``Document`` — this is the one place the detail payload needs
-    them.
+    Comments are queried explicitly (``document_reads.load_comments``;
+    ``Document.comments`` is ``lazy="raise"``, since a normal document load
+    never wants them) rather than eager-loaded on every read of ``Document``.
     """
-    comments = (
-        (
-            await session.execute(
-                select(DocumentComment)
-                .where(DocumentComment.document_id == document.id)
-                .order_by(DocumentComment.created_at.desc())
-            )
-        )
-        .scalars()
-        .all()
-    )
+    comments = await load_comments(session, document.id, newest_first=True)
     return DocumentDetail(
-        **_list_item_fields(document),
+        **list_item_fields(document),
         deleted_at=document.deleted_at,
         ocr_text=document.ocr_text,
         ocr_confidence=document.ocr_confidence,

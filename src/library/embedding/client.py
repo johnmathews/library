@@ -32,7 +32,8 @@ async def embed_texts(
     """Embed ``texts`` into 1024-dim unit vectors, preserving order.
 
     Batches by ``settings.embedding_batch_size``. Raises ``EmbeddingError`` on
-    transport failure or a dimension mismatch. An empty input returns ``[]``.
+    transport failure, an unreadable response, or a dimension mismatch. An
+    empty input returns ``[]``.
     """
     if not texts:
         return []
@@ -60,6 +61,11 @@ async def embed_texts(
                 vectors.append([float(value) for value in vector])
     except httpx.HTTPError as error:
         raise EmbeddingError(f"embedding request failed: {error}") from error
+    except (ValueError, TypeError) as error:
+        # A 200 that is not the expected payload: a proxy's HTML page
+        # (JSONDecodeError is a ValueError), a vector that is not a list, or a
+        # value that is not a number.
+        raise EmbeddingError(f"embedder returned an unreadable response: {error}") from error
     finally:
         if owns_client:
             await client.aclose()

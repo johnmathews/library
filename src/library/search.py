@@ -1,7 +1,9 @@
-"""Shared document query building for the REST API and the MCP server.
+"""Shared document query building and retrieval for the REST API, Ask and MCP.
 
 One place owns the filter conditions, the bilingual full-text search
-(rank + snippet), and the ordering, so the two consumers cannot drift.
+(rank + snippet), the ordering, and the hybrid (vector + full-text)
+retrieval with its coverage counts (``hybrid_search``), so the consumers
+cannot drift.
 
 Search semantics (see docs/api.md §1.3.3)
 -----------------------------------------
@@ -618,3 +620,62 @@ async def semantic_search(
             )
         )
     return hits
+
+
+@dataclass(frozen=True, slots=True)
+class SearchCoverage:
+    """What a content search could see, beside what it returned.
+
+    ``matched`` and ``unembedded`` are :class:`SearchReach`'s counts over the
+    call's filters; ``returned`` is how many hits came back. ``matched: 0``
+    means the filters excluded everything; ``matched: 40, returned: 0`` means
+    those 40 documents do not say this; a non-zero ``unembedded`` means part
+    of the answer is missing because documents were never indexed.
+    """
+
+    matched: int
+    returned: int
+    unembedded: int
+
+
+@dataclass(frozen=True, slots=True)
+class HybridSearchResult:
+    """The hits of one :func:`hybrid_search` call and their coverage."""
+
+    hits: list[SemanticHit]
+    coverage: SearchCoverage
+
+
+async def hybrid_search(
+    session: AsyncSession,
+    *,
+    query: str,
+    query_embedding: Sequence[float],
+    filters: DocumentFilters,
+    top_k: int,
+    chunks_per_doc: int,
+) -> HybridSearchResult:
+    """Content search for a caller that reports its result to a model.
+
+    :func:`semantic_search` (vector + FTS, fused with RRF) plus the
+    :class:`SearchCoverage` of ``filters``, which is what lets a model tell
+    "the archive does not say this" from "the documents were never indexed".
+    Shared by Ask's ``semantic_search`` tool and the MCP ``semantic_search``
+    tool. The caller embeds ``query`` itself (``embedding.embed_query``) and
+    handles the embedding service being down.
+    """
+    hits = await semantic_search(
+        session,
+        query=query,
+        query_embedding=query_embedding,
+        filters=filters,
+        top_k=top_k,
+        chunks_per_doc=chunks_per_doc,
+    )
+    reach = await search_reach(session, filters)
+    return HybridSearchResult(
+        hits=hits,
+        coverage=SearchCoverage(
+            matched=reach.matched, returned=len(hits), unembedded=reach.unembedded
+        ),
+    )
