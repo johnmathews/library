@@ -5,14 +5,14 @@ on:
     # main only. This used to be `["**"]`, which ran CI on every feature-branch
     # push as well — and since `pull_request` also fires for those branches,
     # every push to a PR'd branch produced TWO runs, each emitting a check-run
-    # named `ci-gate` against the same SHA. That is not merely wasteful: the
-    # push run deliberately skips `e2e` (see its `if:` below) and the PR run
-    # does not, so the two disagree about what was actually verified, and the
-    # required check reflects whichever finished last.
+    # named `ci-gate` against the same SHA. That was not merely wasteful: the
+    # branch push run skipped `e2e` and the PR run did not, so the two
+    # disagreed about what was actually verified, and the required check
+    # reflected whichever finished last.
     #
-    # The PR run is the gate — it is what the `main` ruleset requires and the
-    # only one that runs e2e — so the push run's only unique job was giving
-    # feedback before a PR exists. Open the PR (or use workflow_dispatch).
+    # The PR run is the gate — it is what the `main` ruleset requires — so the
+    # push run's only unique job was giving feedback before a PR exists. Open
+    # the PR (or use workflow_dispatch).
     branches: [main]
   pull_request:
   workflow_dispatch:
@@ -24,21 +24,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Compute which areas the change touches so the unit-test jobs can be skipped
-  # when clearly irrelevant (frontend-only change → skip backend; backend/docs
-  # change → skip frontend). SAFETY: on main we force both test jobs to run
-  # regardless (see their `if:`), because the `build` job bakes real backend +
-  # frontend coverage numbers into the promoted image — main must never skip a
-  # side and bake a null. A change under .github/workflows (the `ci` output)
-  # runs everything. `promote` and the deploy path are unaffected: on main all
-  # jobs run. The required check is the `ci-gate` aggregator below, which treats
-  # a skipped job as a pass — so path-skipping never blocks a merge.
+  # Compute which areas the change touches so jobs can be skipped when clearly
+  # irrelevant (frontend-only change → skip backend; backend change → skip
+  # frontend; docs-only change → backend suite only, no e2e, compose-smoke or
+  # typecheck). SAFETY: on main every job runs regardless (see their `if:`),
+  # because the `build` job bakes real backend + frontend coverage numbers into
+  # the promoted image — main must never skip a side and bake a null. A change
+  # under .github (the `ci` output) runs everything. The required check is the
+  # `ci-gate` aggregator below, which treats a skipped job as a pass — so
+  # path-skipping never blocks a merge — except where an `expect.<job>` output
+  # says the change needed that job.
+  #
+  # Every job here has a timeout-minutes. GitHub's default is 360, and an apt
+  # mirror stall once held an e2e shard for 27 minutes before someone cancelled
+  # it. Each limit is at least 2-4x the job's median (from 24 runs,
+  # 2026-10-27..11-05, noted per job), with a 5-minute floor for the short
+  # jobs; the long ones also cover their capped apt retries.
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # median 6 s
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      docs: ${{ steps.filter.outputs.docs }}
       ci: ${{ steps.filter.outputs.ci }}
+      # The single place "this change needs e2e" is decided: the e2e job's
+      # `if:` and ci-gate's `expect.e2e` both read it, so a skip the change did
+      # not allow reds the gate instead of passing as a path skip. main is
+      # forced on: `promote` needs e2e (a skipped e2e skips promote and leaves
+      # :latest behind), and the image bakes docs/*.md (Dockerfile COPY docs/),
+      # so even a docs-only merge must build, e2e and promote.
+      e2e: >-
+        ${{ github.ref == 'refs/heads/main' ||
+        steps.filter.outputs.backend == 'true' ||
+        steps.filter.outputs.frontend == 'true' ||
+        steps.filter.outputs.ci == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -61,15 +81,22 @@ jobs:
               - '.env.example'
               - 'Makefile'
               - 'scripts/**'
-              # docs/ only, NOT journal/ or a blanket '**/*.md'. The backend
-              # suite really does read four real documents — check_docs.py's
-              # WORK_UNIT_PLAN, MODULE_MAP_DOC and DOCS_INDEX, all under docs/ —
-              # so a docs change can legitimately red it. Nothing under tests/
-              # reads journal/ or any .md outside docs/, and the gates that DO
-              # cover them (`check_docs.py`, `build_journal_index.py --check`)
-              # live in `docs-stamps`, which is unconditional. Journal entries
-              # are this repo's most frequent commit; running the whole backend
-              # suite for one bought nothing.
+              # Read at runtime from inside the image (Dockerfile COPY), and
+              # compose-smoke asserts both shipped: a weights- or baseline-only
+              # change must run it.
+              - 'models/**'
+              - 'recall-baseline.json'
+            # Its own filter so a docs-only change runs the backend suite but
+            # not e2e, compose-smoke or typecheck. docs/ only, NOT journal/ or
+            # a blanket '**/*.md': the backend suite really does read real
+            # documents under docs/ (check_docs.py's WORK_UNIT_PLAN,
+            # MODULE_MAP_DOC and DOCS_INDEX), so a docs change can legitimately
+            # red it. Nothing under tests/ reads journal/ or any .md outside
+            # docs/, and the gates that DO cover them (`check_docs.py`,
+            # `build_journal_index.py --check`) live in `docs-stamps`, which is
+            # unconditional. Journal entries are this repo's most frequent
+            # commit; running the whole backend suite for one bought nothing.
+            docs:
               - 'docs/**'
             frontend:
               - 'frontend/**'
@@ -81,12 +108,17 @@ jobs:
   backend:
     needs: changes
     # Always on main (coverage baked into the promoted image); on branches/PRs
-    # only when backend-relevant paths or the workflow itself changed.
+    # only when backend-relevant paths, docs/ (tests read it) or the workflow
+    # itself changed.
     if: >-
       github.ref == 'refs/heads/main' ||
       needs.changes.outputs.backend == 'true' ||
+      needs.changes.outputs.docs == 'true' ||
       needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
+    # Median 437 s (longest healthy run 1248 s, 804 s of it the apt step);
+    # the apt step below is capped at 16, so 30 is ~7 normal plus that cap.
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write # update the sticky coverage comment on PRs
@@ -104,11 +136,29 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
+      # The runner's apt mirror is sometimes slow enough to stall a download
+      # for many minutes (median 25 s here; 615, 714 and 804 s seen). So: up to
+      # 3 attempts of at most 300 s each. `timeout` runs under sudo so it can
+      # kill root's apt-get, and it kills the whole process group, so the
+      # `bash -c` children go too. `dpkg --configure -a` finishes any unpack a
+      # killed attempt interrupted. A retry reuses the .debs already fetched
+      # into /var/cache/apt/archives. The step limit is a backstop.
       - name: Install OCR system packages
+        timeout-minutes: 16
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            tesseract-ocr tesseract-ocr-nld tesseract-ocr-eng ghostscript unpaper
+          for attempt in 1 2 3; do
+            if sudo timeout --kill-after=30 300 bash -c '
+              apt-get update &&
+              apt-get install -y --no-install-recommends \
+                tesseract-ocr tesseract-ocr-nld tesseract-ocr-eng ghostscript unpaper'
+            then
+              exit 0
+            fi
+            echo "::warning::OCR apt install attempt $attempt of 3 failed or ran over 300 s"
+            sudo dpkg --configure -a || true
+          done
+          echo "::error::OCR apt install failed 3 times; usually a slow apt mirror, so rerun the job"
+          exit 1
       - name: Install dependencies
         run: uv sync --locked
       # The golden corpus is 15 real financial/personal documents, so it lives in
@@ -242,6 +292,7 @@ jobs:
   # regression to hide in. At 0 that direction is inert, which is the point.
   docs-stamps:
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # median 15 s
     permissions:
       contents: read
     steps:
@@ -289,6 +340,7 @@ jobs:
       needs.changes.outputs.backend == 'true' ||
       needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # median 36 s
     permissions:
       contents: read
     steps:
@@ -319,6 +371,7 @@ jobs:
       needs.changes.outputs.frontend == 'true' ||
       needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # median 143 s
     permissions:
       contents: read
       pull-requests: write # update the sticky coverage comment on PRs
@@ -368,22 +421,19 @@ jobs:
     # wall-clock. The deploy gate stays safe — `promote` still needs all of
     # backend/frontend/e2e/compose-smoke to pass (see its `needs` below).
     #
-    # SCOPE: e2e is the pipeline's long pole, so it runs only where it earns its
-    # cost — pull requests, main, and manual dispatch — not on every intermediate
-    # feature-branch push. A PR re-runs it before merge, and main runs it as the
-    # promote gate, so nothing reaches production un-e2e'd. Path-gated too:
-    # skipped when only docs/config changed with no code (backend/frontend/ci
-    # all false).
+    # SCOPE: e2e is the pipeline's long pole, so it is path-gated: skipped on a
+    # PR that changes no backend, frontend or CI path (docs/, journal/ and
+    # top-level *.md alone). Always on main, where it gates promote, so nothing
+    # reaches production un-e2e'd. The condition lives in the `changes` job's
+    # `e2e` output, which ci-gate also reads (`expect.e2e`): if this job is
+    # skipped when that output is true, the gate goes red.
     needs: changes
-    if: >-
-      (github.event_name == 'pull_request' ||
-       github.ref == 'refs/heads/main' ||
-       github.event_name == 'workflow_dispatch') &&
-      (github.ref == 'refs/heads/main' ||
-       needs.changes.outputs.backend == 'true' ||
-       needs.changes.outputs.frontend == 'true' ||
-       needs.changes.outputs.ci == 'true')
+    if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
+    # Successful shards: median 369-413 s, longest 1663 s (a 1219 s apt
+    # stall). The two install steps below are capped at 16 + 5 minutes, so
+    # 35 is ~7 normal, plus both caps, plus headroom.
+    timeout-minutes: 35
     # Without this, GitHub names each leg from every matrix value — "e2e
     # (desktop, chromium firefox webkit, chromium firefox webkit, 30)" — which
     # is unreadable in the checks list.
@@ -488,13 +538,48 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ matrix.shard }}-${{ hashFiles('frontend/package-lock.json') }}
-      # --with-deps is kept even though the cache above usually hits: the
-      # browser binaries are cached, their apt dependencies are not, and every
-      # run gets a fresh VM. Installing only this shard's browsers is what makes
-      # it cheaper.
+      # Two steps where there used to be one `install --with-deps`, because
+      # they fail differently. The browser binaries come from the cache above
+      # (it hit on every hung run); their apt dependencies are not cached, every
+      # run gets a fresh VM, and THAT is what hung: logs stopped mid-download
+      # at `Get:NN http://azure.archive.ubuntu.com/...` for 10-27 minutes.
+      # Normal: median 31 s, p90 61 s, healthy max 141 s for the old combined
+      # step, so 300 s per attempt is twice the worst healthy run.
+      #
+      # Same retry shape as the backend's OCR apt step. `sudo env PATH=...`
+      # rather than plain sudo: secure_path would hide setup-node's toolcache,
+      # so `npx` (and the `node` its shebang asks env for) would resolve to the
+      # image's system node or not at all. `timeout` runs as root so it can kill
+      # root's apt-get; it signals its whole process group, and Playwright
+      # spawns `sh -c "apt-get update && apt-get install ..."` in that group.
+      # BROWSERS is unquoted on purpose: it is a space-separated list.
+      - name: Install Playwright system dependencies
+        working-directory: frontend
+        timeout-minutes: 16
+        env:
+          BROWSERS: ${{ matrix.browsers }}
+        run: |
+          for attempt in 1 2 3; do
+            # shellcheck disable=SC2086
+            if sudo env "PATH=$PATH" timeout --kill-after=30 300 \
+              npx playwright install-deps $BROWSERS
+            then
+              exit 0
+            fi
+            echo "::warning::playwright install-deps attempt $attempt of 3 failed or ran over 300 s"
+            sudo dpkg --configure -a || true
+          done
+          echo "::error::playwright install-deps failed 3 times; usually a slow apt mirror, so rerun the job"
+          exit 1
+      # Only this shard's browsers, which is what keeps the WebKit shards cheap.
       - name: Install Playwright browsers
         working-directory: frontend
-        run: npx playwright install --with-deps ${{ matrix.browsers }}
+        timeout-minutes: 5
+        env:
+          BROWSERS: ${{ matrix.browsers }}
+        run: |
+          # shellcheck disable=SC2086
+          npx playwright install $BROWSERS
       - name: Build the frontend
         working-directory: frontend
         run: npm run build-only
@@ -547,6 +632,7 @@ jobs:
       needs.changes.outputs.frontend == 'true' ||
       needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # median 196 s
     env:
       # The runner talks plain HTTP to :8000; Secure cookies would be
       # dropped by curl's cookie jar. Production keeps the default (true).
@@ -666,6 +752,7 @@ jobs:
       needs.frontend.result != 'failure' &&
       (needs.backend.result == 'success' || needs.frontend.result == 'success')
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # median 165 s; a cold layer cache rebuilds everything
     permissions:
       contents: read
       packages: write
@@ -726,6 +813,7 @@ jobs:
     needs: [build, backend, frontend, e2e, compose-smoke]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # median 14 s
     permissions:
       contents: read
       packages: write
@@ -757,6 +845,11 @@ jobs:
   #     check blocks the merge forever (this is what stranded a Dependabot PR
   #     once). That skip-tolerance is deliberate and must stay.
   #
+  #   * Unless `expect.<job>=true`: then that job must be exactly `success`.
+  #     A deliberate path skip and an accidental one (an `if:` mistake that
+  #     stops e2e on a code PR) both report `skipped`; passing the `changes`
+  #     output that decides the job tells them apart. Today only e2e has one.
+  #
   #   * `changes` must be exactly `success`. It is unconditional (no `if:`), so
   #     the only results it can legitimately produce are success/failure/
   #     cancelled — `skipped` there means something is structurally wrong. It is
@@ -772,18 +865,22 @@ jobs:
     needs: [changes, backend, frontend, e2e, compose-smoke, build, docs-stamps, typecheck]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # median 6 s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Require that no upstream job failed
         # A job must appear in BOTH `needs:` above and the argument list below.
         # Listing it only in `needs:` makes the gate wait for it and then ignore
-        # its result — silently, since ci_gate.sh can only judge what it is given.
+        # its result — silently, since ci_gate.sh can only judge what it is
+        # given. tests/test_ci_workflow.py checks the two lists agree.
+        # `expect.e2e` sits next to `e2e` so the log line reads as a pair.
         run: |
           scripts/ci_gate.sh \
             "changes=${{ needs.changes.result }}" \
             "backend=${{ needs.backend.result }}" \
             "frontend=${{ needs.frontend.result }}" \
             "e2e=${{ needs.e2e.result }}" \
+            "expect.e2e=${{ needs.changes.outputs.e2e }}" \
             "compose-smoke=${{ needs.compose-smoke.result }}" \
             "build=${{ needs.build.result }}" \
             "docs-stamps=${{ needs.docs-stamps.result }}" \

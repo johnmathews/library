@@ -12,7 +12,11 @@ The gate's contract:
   non-success `changes` would launder a wholly untested run into a green
   required check (`test_broken_changes_is_not_laundered_by_skips`).
 * Every other job may be `success` or `skipped` (path-skipping is legitimate,
-  and a skipped *required* check blocks a merge forever).
+  and a skipped *required* check blocks a merge forever) — unless an
+  `expect.<job>=true` argument says this change needed it, in which case it
+  must be exactly `success`. That is what tells a deliberate skip (docs-only
+  PR, `changes.outputs.e2e=false`) from an accidental one (an `if:` typo that
+  stops e2e on a code PR), which look identical in `needs.<job>.result`.
 """
 
 import subprocess
@@ -22,14 +26,19 @@ import pytest
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "ci_gate.sh"
 
-_OTHERS = ("backend", "frontend", "e2e", "compose-smoke", "build")
+# Every job ci-gate needs besides `changes`. tests/test_ci_workflow.py pins the
+# workflow's own list to its argument list; this one only has to be realistic.
+_OTHERS = ("backend", "frontend", "e2e", "compose-smoke", "build", "docs-stamps", "typecheck")
 
 
-def _argv(changes: str = "success", **overrides: str) -> list[str]:
-    """Build `name=result` pairs, defaulting every non-overridden job to success."""
+def _argv(changes: str = "success", *extra: str, **overrides: str) -> list[str]:
+    """Build `name=result` pairs, defaulting every non-overridden job to success.
+
+    `extra` is appended verbatim — the `expect.<job>=...` arguments.
+    """
     pairs = [f"changes={changes}"]
     pairs += [f"{name}={overrides.get(name.replace('-', '_'), 'success')}" for name in _OTHERS]
-    return pairs
+    return [*pairs, *extra]
 
 
 def _run(argv: list[str]) -> subprocess.CompletedProcess[str]:
@@ -111,3 +120,70 @@ def test_missing_changes_pair_is_an_error() -> None:
 
     assert result.returncode == 1
     assert "changes" in result.stdout + result.stderr
+
+
+# --- expect.<job>: a skip the change did not allow -----------------------------
+
+
+@pytest.mark.parametrize(
+    ("case", "argv", "expected_exit"),
+    [
+        (
+            "code PR, e2e accidentally skipped",
+            _argv("success", "expect.e2e=true", e2e="skipped"),
+            1,
+        ),
+        (
+            "docs-only PR, e2e deliberately skipped",
+            _argv("success", "expect.e2e=false", e2e="skipped"),
+            0,
+        ),
+        ("code PR, e2e ran and passed", _argv("success", "expect.e2e=true"), 0),
+        ("expect false, e2e ran anyway (main)", _argv("success", "expect.e2e=false"), 0),
+        ("expect true, e2e failed", _argv("success", "expect.e2e=true", e2e="failure"), 1),
+        ("expect true, e2e cancelled", _argv("success", "expect.e2e=true", e2e="cancelled"), 1),
+        ("expect false, e2e failed", _argv("success", "expect.e2e=false", e2e="failure"), 1),
+        (
+            "expect true but no e2e result supplied",
+            ["changes=success", "backend=success", "expect.e2e=true"],
+            1,
+        ),
+        (
+            "expect false but no e2e result supplied (typo'd job name)",
+            _argv("success", "expect.e2e2=false"),
+            1,
+        ),
+        ("expect value not a boolean", _argv("success", "expect.e2e=maybe"), 1),
+        ("expect value empty (changes output missing)", _argv("success", "expect.e2e="), 1),
+        ("expect names no job", _argv("success", "expect.=true"), 1),
+    ],
+)
+def test_gate_expect(case: str, argv: list[str], expected_exit: int) -> None:
+    result = _run(argv)
+    assert result.returncode == expected_exit, (
+        f"{case}: argv={argv} exited {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+def test_required_but_skipped_names_the_job_and_the_output() -> None:
+    """The red a reviewer sees must say which job and why it was required."""
+    result = _run(_argv("success", "expect.e2e=true", e2e="skipped"))
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert (
+        "::error::job 'e2e' was required to run for this change "
+        "(changes.outputs.e2e=true) but result: skipped"
+    ) in output, output
+
+
+@pytest.mark.parametrize("value", ["maybe", "", "True", "1"])
+def test_bad_expect_value_is_named(value: str) -> None:
+    """Only the literal strings GitHub renders a boolean as are accepted."""
+    result = _run(_argv("success", f"expect.e2e={value}"))
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "::error::" in output
+    assert "expect.e2e" in output, output
