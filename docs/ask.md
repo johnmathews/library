@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.8: the write tool's preview shows the value applying would store, from `documents_service.preview_update`'s rolled-back dry run shared with MCP, and refuses what applying would refuse). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.8. Read `_run_update_document` and `documents_service.preview_update` against the prose; `test_update_tool_preview_shows_what_the_database_stores` seen red first (the preview showed `12.345` and the uncollapsed sender), then green with the rest of `tests/test_ask_document_write.py`. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-05 (§1.2 step 2: retrieval and its coverage counts are `search.hybrid_search`, shared with the MCP `semantic_search` tool). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §1.2 step 2's *Scoping the search* paragraph. Read `_run_semantic_search` and `search.hybrid_search` against the prose; `tests/test_ask_search_filters.py` passes unchanged and `tests/test_api_ask.py` passes with its retrieval fakes patched on `library.search`. The rest carries its earlier verifications forward.
 **Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, .github/workflows/e2e-nightly.yml
 
 Ask lets you put a natural-language question to the archive and get a prose
@@ -113,7 +113,10 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    says. `matched: 0` means the filters excluded everything; `matched: 40,
    returned: 0` means those 40 documents genuinely don't say this; a non-zero
    `unembedded` means the negative is partly a technical gap, not a content
-   fact (§1.10 item 10).
+   fact (§1.10 item 10). The retrieval and these counts come from one
+   service, `search.hybrid_search`, which the MCP `semantic_search` tool
+   calls too ([mcp.md §1.3](mcp.md)); the tool embeds the question itself
+   and turns an embedding failure into a tool result.
 3. **Structured query** (`query_documents`). Aggregations over the extracted
    columns: distinct senders, summed amounts (by currency, optionally grouped by
    sender/kind), and document lists. Filters are the list API's

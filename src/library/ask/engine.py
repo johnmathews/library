@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from typing import Any, cast
 
@@ -33,7 +33,7 @@ from library.extraction.extractor import estimate_cost_usd
 from library.llm import subscription
 from library.models import Document, ReviewStatus
 from library.schemas import DocumentUpdate
-from library.search import DocumentFilters, search_reach, semantic_search
+from library.search import DocumentFilters, hybrid_search
 from library.spend_lines import AllocationError
 from library.structured_query import CONCEPT_TO_KIND, query_documents
 
@@ -539,7 +539,7 @@ async def _run_semantic_search(
     # keeps `_filters_from_args` one shared mapping for every caller.
     filters = replace(_filters_from_args(args), review_status=None)
     top_k = _top_k_arg(args.get("top_k"), settings)
-    hits = await semantic_search(
+    search = await hybrid_search(
         session,
         query=query,
         query_embedding=embedding,
@@ -547,9 +547,8 @@ async def _run_semantic_search(
         top_k=top_k,
         chunks_per_doc=settings.retrieve_chunks_per_doc,
     )
-    reach = await search_reach(session, filters)
     rows = []
-    for hit in hits:
+    for hit in search.hits:
         cited.add(hit.document.id)
         if hit.page_number is not None and hit.document.id not in pages:
             pages[hit.document.id] = hit.page_number
@@ -567,14 +566,7 @@ async def _run_semantic_search(
                 ),
             }
         )
-    return {
-        "results": rows,
-        "coverage": {
-            "matched": reach.matched,
-            "returned": len(rows),
-            "unembedded": reach.unembedded,
-        },
-    }
+    return {"results": rows, "coverage": asdict(search.coverage)}
 
 
 def _top_k_arg(value: object, settings: Settings) -> int:

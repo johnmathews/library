@@ -74,6 +74,8 @@ MCP_URL = "http://testserver/mcp/"
 
 EXPECTED_TOOLS = {
     "search_documents",
+    "semantic_search",
+    "get_library_context",
     "get_document",
     "get_document_file",
     "ingest_document",
@@ -628,8 +630,8 @@ def _properties(schema: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
 
 
 async def test_read_tools_publish_output_schemas(mcp_connect: McpConnector) -> None:
-    """Typed returns: tools/list carries an outputSchema for both read tools,
-    naming the fields a client can rely on."""
+    """Typed returns: tools/list carries an outputSchema for every read tool
+    that returns documents or context, naming the fields a client can rely on."""
     async with mcp_connect() as session:
         tools = {tool.name: tool for tool in (await session.list_tools()).tools}
 
@@ -654,8 +656,26 @@ async def test_read_tools_publish_output_schemas(mcp_connect: McpConnector) -> N
     for field in ("amount_kind", "amount_total", "review_status", "snippet", "rank"):
         assert field in item_properties, field
 
+    semantic_schema = tools["semantic_search"].outputSchema
+    assert semantic_schema is not None
+    assert {"results", "coverage"} <= set(semantic_schema["properties"])
+    hit_properties = _properties(semantic_schema, semantic_schema["properties"]["results"]["items"])
+    for field in ("passages", "page_number", "score", "amount_kind", "review_status", "tags"):
+        assert field in hit_properties, field
+    coverage_properties = _properties(semantic_schema, semantic_schema["properties"]["coverage"])
+    assert set(coverage_properties) == {"matched", "returned", "unembedded"}
+
+    context_schema = tools["get_library_context"].outputSchema
+    assert context_schema is not None
+    assert "context" in context_schema["properties"]
+
     description = tools["get_document"].description or ""
     assert "Do not add up amount_total" in description
+
+    # The facet vocabulary lives in get_library_context, so the parameter
+    # that needs it says where to find it.
+    facets = tools["search_documents"].inputSchema["properties"]["facets"]
+    assert "get_library_context" in facets["description"]
 
 
 # --- get_document ------------------------------------------------------------

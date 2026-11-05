@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
+from library import search as search_module
 from library.api import ask as ask_module
 from library.ask import engine as ask_engine
 from library.config import get_settings
@@ -709,12 +710,12 @@ async def test_run_ask_captures_turn_messages(monkeypatch: pytest.MonkeyPatch) -
     ) -> list[Any]:
         return []
 
-    monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+    monkeypatch.setattr(search_module, "semantic_search", fake_search)
 
     async def fake_reach(session: Any, filters: Any) -> Any:
         return SearchReach(matched=0, unembedded=0)
 
-    monkeypatch.setattr(ask_engine, "search_reach", fake_reach)
+    monkeypatch.setattr(search_module, "search_reach", fake_reach)
 
     client = _FakeAnthropic(
         [
@@ -810,12 +811,12 @@ async def test_run_ask_turn_messages_replayable_when_tool_limit_hit(
         return []
 
     monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
-    monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+    monkeypatch.setattr(search_module, "semantic_search", fake_search)
 
     async def fake_reach(session: Any, filters: Any) -> Any:
         return SearchReach(matched=0, unembedded=0)
 
-    monkeypatch.setattr(ask_engine, "search_reach", fake_reach)
+    monkeypatch.setattr(search_module, "search_reach", fake_reach)
 
     settings = get_settings()
     # Every round returns a tool_use, so the loop never reaches a final answer.
@@ -1132,12 +1133,12 @@ async def test_run_semantic_search_excerpt_concatenates_passages(
         ]
 
     monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
-    monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+    monkeypatch.setattr(search_module, "semantic_search", fake_search)
 
     async def fake_reach(session: Any, filters: Any) -> Any:
         return SearchReach(matched=0, unembedded=0)
 
-    monkeypatch.setattr(ask_engine, "search_reach", fake_reach)
+    monkeypatch.setattr(search_module, "search_reach", fake_reach)
 
     cited: set[int] = set()
     pages: dict[int, int] = {}
@@ -1470,12 +1471,12 @@ def test_ask_cites_nothing_when_the_loop_produces_no_answer(
         ]
 
     monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
-    monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+    monkeypatch.setattr(search_module, "semantic_search", fake_search)
 
     async def fake_reach(session: Any, filters: Any) -> Any:
         return SearchReach(matched=0, unembedded=0)
 
-    monkeypatch.setattr(ask_engine, "search_reach", fake_reach)
+    monkeypatch.setattr(search_module, "search_reach", fake_reach)
 
     # Every response is a tool_use, so the loop exhausts ask_max_tool_turns
     # without ever producing text and falls back to the _NO_ANSWER sentinel.

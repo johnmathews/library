@@ -68,3 +68,54 @@ search results.
 - Sender and recipient names have the same gap the tag had: `String(255)`
   columns, no length check. A longer name is still a database error.
 - OCR-only documents page by `max_chars` alone (no character offset).
+
+## 6. W9: semantic search and library context
+
+Finding F5: the MCP server had keyword search only, while Ask's hybrid
+retriever (vector + full-text, fused with RRF) needs nothing but the
+embedding service.
+
+- **One retrieval service.** `search.hybrid_search` runs `semantic_search`
+  plus `search_reach` and returns the hits with a `SearchCoverage`
+  (`matched`, `returned`, `unembedded`). Ask's `_run_semantic_search` now
+  calls it, and its inline retrieval and coverage assembly are gone. Callers
+  still embed the query themselves, so an embedding failure stays theirs to
+  word (Ask: a tool-result error; MCP: a `ToolError` pointing at
+  `search_documents`).
+- **`semantic_search`** takes Ask's filters, named as in `search_documents`
+  (`sender`, `recipient`, list `tags`/`projects`/`matters`, `facets`,
+  dates), plus `limit` up to 50. Results are `search_documents` rows plus
+  `passages`, `page_number` and `score`, and the coverage block. The nine
+  shared filters are now one `Annotated` type each, so the two tools
+  describe a filter identically.
+- **`get_library_context`** returns Ask's rendered archive-context block for
+  the caller: identity line, own recipient names, *About you* notes, the
+  vocabulary. Text only: the block is already written for a model, and the
+  structured lists are the `list_*` tools. `search_documents`' `facets`
+  description and the server instructions point at it; the instructions say
+  to call it first and when to use which search.
+- The `list_tags`/`list_projects`/`list_matters` descriptions still named
+  the singular filters W8 removed; they now name `tags`/`projects`/`matters`.
+
+**Evidence.** The new tests in `tests/test_mcp_semantic.py` and the extended
+listing and outputSchema checks in `tests/test_mcp.py` were all red before
+the tools existed. Since several of those reds were only "unknown tool", 21
+hand-made mutants were run (each filter dropped from the mapping, one
+passage only, no page, `limit` ignored, the embedding error uncaught, the
+query not stripped, the context of a fixed user, the missing-user check
+removed, the `facets` pointer and the instructions line removed, coverage
+without `unembedded`, `returned` set to `matched`, Ask's coverage
+truncated): all 21 turned their test red. `mcp_server.py` stays at 100%
+line coverage over the MCP test files.
+
+**Things learned.** The plan said existing test patches would hold because
+callers keep calling `embed_query`. That held for `embed_query`, but four
+`tests/test_api_ask.py` tests also replaced `semantic_search` and
+`search_reach` on the engine module, names that moved with the core. They
+now patch them on `library.search`, where `hybrid_search` looks them up;
+the fakes and every assertion are unchanged. `tests/test_ask_search_filters.py`
+passes unchanged.
+
+**Not done.** A keyword-only hit has no passage; a `ts_headline` snippet
+for it would be one more query per call. `semantic_search` has no
+`offset`, by design (a fused ranking has no stable pages).

@@ -1,13 +1,13 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.3: `get_document` returns page markdown, paged, with comments, `review_status`, `amount_kind` and `web_url`; `search_documents` gains `offset`, list filters, facets, status, review, source and sort, and the web app's list fields). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §1.3's `search_documents` and `get_document` rows and *Reading*. The new read tests in `tests/test_mcp.py` pass, each seen red first or killed by a hand-made mutant; the prose was read against `mcp_server.py` and `document_reads.py`.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/document_reads.py
+**Status:** active. **Last updated:** 2026-11-05 (§1.3: new `semantic_search` (hybrid search with passages and a `coverage` block, shared with Ask) and `get_library_context` (the caller's identity and the archive vocabulary); the server instructions say to call the latter first). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §1.3's `semantic_search`, `get_library_context` and list-tool rows and *Searching by meaning*. The new tests in `tests/test_mcp_semantic.py` pass, each seen red first or killed by a hand-made mutant; the prose was read against `mcp_server.py`, `search.hybrid_search` and `ask/context.py`.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,
 the Anthropic API MCP connector, or any MCP-capable agent) can search the
-archive, read documents, fetch files, ingest new documents, correct
+archive by keyword or by meaning, read documents, fetch files, ingest new documents, correct
 document details and add comments.
 
 - **Endpoint:** `https://<your-host>/mcp` (Streamable HTTP transport,
@@ -176,6 +176,8 @@ user to confirm any tool without it). The three write tools are
 | Tool | Parameters | Returns |
 |------|------------|---------|
 | `search_documents` | `query?` (websearch syntax, Dutch+English stemming), `kind?` (slug), `sender?` (case-insensitive substring of sender name), `recipient?` (case-insensitive substring of recipient name), `tags?` (slugs, a document must have all), `projects?` (slugs — see `list_projects`; any of them), `matters?` (slugs — see `list_matters`; any of them), `facets?` (`{facet_key: value_key}`, all of them), `language?` (`nld`/`eng`/`mixed`/`unknown`), `status?` (processing state), `review_status?` (`verified`/`needs_review`/`unreviewed`), `source?`, `date_from?`, `date_to?` (ISO dates, inclusive, on `document_date`), `sort` (`document_date` default, or `added_date`) and `direction` (`desc` default, or `asc`), both ignored with `query`; `limit` (default 10, max 50), `offset` (default 0) | `{results, total, offset, limit, next_offset}`. Each result is a row of the web app's list ([api.md §1.3.2](api.md)): `id, title, summary, kind, sender, recipient, tags, topics, projects, matters, document_date, due_date, expiry_date, language, status, mime_type, page_count, created_at, updated_at, has_searchable_pdf, has_thumbnail, review_status, review_findings, amount_total, currency, amount_kind, snippet, rank`. Ranked when `query` is given (snippets carry `<b>…</b>` match markers), otherwise ordered by `sort`. `next_offset` is the next page's `offset`, `null` on the last page. |
+| `semantic_search` | `query` (natural language, any language; blank refused), `kind?`, `sender?`, `recipient?`, `tags?`, `projects?`, `matters?`, `facets?`, `date_from?`, `date_to?` (the same filters as `search_documents`), `limit` (default 10, max 50) | `{results, coverage}`. Each result is a `search_documents` row without `snippet`/`rank`, plus `passages` (the nearest passages, best first; `[]` for a keyword-only match), `page_number` (of the best passage, or `null`) and `score` (higher is better). `coverage` is `{matched, returned, unembedded}`. See *Searching by meaning* below. |
+| `get_library_context` | — | `{context}`: the connected user's identity and the archive vocabulary as text. See *Searching by meaning* below. |
 | `get_document` | `document_id`, `start_page` (default 1), `max_chars` (default 20 000, 1 000–50 000) | Every field of a search result except `snippet`/`rank`, plus provenance (`source`, `original_filename`, `sha256`, `ocr_confidence`), `web_url`, the document's `text` with its paging fields (*Reading* below), `comments` `[{id, document_id, author_id, body, created_at}]` newest first, and the audit-trail `events` `[{event, created_at}]`. `topics` are read-only auto-extracted. |
 | `get_document_file` | `document_id`, `variant` = `"original"` (default) or `"searchable_pdf"` | `{filename, mime_type, size_bytes, content_base64}`. Files over 10 MB are refused with an error telling the user to download the file from the web app. A variant that was never produced is an error. |
 | `ingest_document` | `filename`, `content_base64` (PDF, JPEG, PNG, HEIC/HEIF, TIFF, plain text, Markdown, DOCX), `source_note?` | `{id, sha256, status, duplicate}`. Runs the same ingestion service as uploads (dedup by SHA-256, OCR + extraction queued); `source` is recorded as `mcp` and the calling token's user as uploader. A `source_note` is stored on the audit trail — but only when the ingest was not a duplicate, since a duplicate creates no new document to attach it to. Content matching a document in the trash is refused until it is restored or purged. |
@@ -183,8 +185,8 @@ user to confirm any tool without it). The three write tools are
 | `list_senders` | — | `{senders: [{id, name, document_count, colour}]}` — every sender, including those with no documents; `colour` is a chart colour or `null`. |
 | `list_recipients` | — | `{recipients: [{id, name, document_count}]}` |
 | `list_tags` | — | `{tags: [{slug, name, document_count}]}` |
-| `list_projects` | — | `{projects: [{id, slug, name, description, document_count}]}` — archived projects are omitted. Use the slugs as the `project` filter of `search_documents`. |
-| `list_matters` | — | `{matters: [{id, slug, name, hint, document_count}]}` — archived matters are omitted. Use the slugs as the `matter` filter of `search_documents`. |
+| `list_projects` | — | `{projects: [{id, slug, name, description, document_count}]}` — archived projects are omitted. Use the slugs in the `projects` filter of `search_documents` and `semantic_search`. |
+| `list_matters` | — | `{matters: [{id, slug, name, hint, document_count}]}` — archived matters are omitted. Use the slugs in the `matters` filter of `search_documents` and `semantic_search`. |
 | `update_document_metadata` | `document_id`; any of `title?`, `summary?`, `document_date?`, `kind_slug?` (an existing kind), `sender?`, `recipient?` (names, matched case-insensitively, created if new), `tags?`, `projects?`, `matters?` (complete replacement lists; `[]` empties), `language?`, `amount_total?`, `currency?` (ISO 4217), `due_date?`, `expiry_date?`; `clear_fields?` (list of the nullable scalar fields above to empty); `apply` (default `false`); `preview_token?` | Preview (`apply` false): `{document_id, applied: false, changes: {field: {current, proposed}}, preview_token}`, nothing written. Apply: `{document_id, applied: true, updated_fields, current: {field: value}, review_status}`. See *Editing* below. |
 | `add_comment` | `document_id`, `body` (stripped; blank refused) | `{id, document_id, author_id, body, created_at}` — the comment, authored by the token's user. Writes a `comment_added` audit event and queues a re-embed so the comment becomes searchable (the same service as the web app's *Add comment*). Unknown or deleted document: error. |
 | `library_stats` | — | `{total_documents, by_status, by_kind, ingested_last_7_days, oldest_document_date, newest_document_date}`. `by_status` counts the lifecycle states that have documents (`received`, `ocr`, `extract`, `markdown`, `embed`, `indexed`, `failed`); soft-deleted documents are excluded from every figure. |
@@ -196,10 +198,45 @@ semantics. Two differences: sender and recipient are matched by name
 substring (the web app filters by id), and a call returns at most 50
 results (the web app's list allows 100).
 
-Both read tools declare their result type, so `tools/list` carries an
-`outputSchema` for each, and both build their fields with
-`document_reads.list_item_fields`, the same function as the web app's
-list and detail views (`src/library/document_reads.py`).
+`search_documents`, `semantic_search`, `get_document` and
+`get_library_context` declare their result type, so `tools/list` carries
+an `outputSchema` for each. The three document tools build their fields
+with `document_reads.list_item_fields`, the same function as the web
+app's list and detail views (`src/library/document_reads.py`).
+
+**Searching by meaning.** `semantic_search` is Ask's content search
+([ask.md §1.2](ask.md), step 2): the query is embedded (bge-m3), and the
+nearest passages (vector search) and the full-text ranking are fused with
+reciprocal rank fusion, so a question in English finds a Dutch document
+and a paraphrase finds the clause. Both tools call one service,
+`search.hybrid_search`, which returns the hits and the `coverage` block.
+
+- `coverage.matched` is how many documents passed the filters,
+  `returned` how many came back, and `unembedded` how many matched
+  documents have no passages indexed: those only a keyword match can
+  reach. The description and the server instructions tell the model to
+  read it before saying something is not in the archive.
+- `limit` is fixed at 1–50 (the Ask tool's `top_k` ceiling is the
+  setting `LIBRARY_ASK_SEARCH_MAX_TOP_K`); each result carries up to
+  `LIBRARY_RETRIEVE_CHUNKS_PER_DOC` passages. There is no `offset`: a
+  fused ranking has no stable pages, so `search_documents` is the tool
+  for walking a whole result set.
+- It takes Ask's filters, named as in `search_documents`, and no
+  `status`, `review_status`, `language` or `source`: the coverage block
+  reports reach, not what a filter removed (ask.md §1.2).
+- When the embedding service does not answer, the call is a tool error
+  telling the model to use `search_documents` instead.
+
+**Library context.** `get_library_context` returns the block Ask appends
+to its system prompt (`ask/context.py`), for the connected user: their
+name, the recipient names linked to them, their own *About you* notes
+(Settings → Ask), and the kind, matter, project and tag slugs, the
+facets with their values, and the most frequent senders. Each household
+member gets their own identity and notes; the vocabulary is the same.
+It returns the rendered text only: the model reads text, the block is
+already written and tested for a model, and the structured lists with
+ids and counts are what the `list_*` tools return. The server
+instructions tell the model to call it first.
 
 **Reading: page text, paged.** `get_document`'s `text` is the document's
 per-page markdown joined with blank lines, which is the text full-text

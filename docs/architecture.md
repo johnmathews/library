@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.6: `document_reads.py` row, the shared document-read path). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to the §1.6 `document_reads.py` row, read against `src/library/document_reads.py` and its callers in `api/documents.py`, `api/comments.py`, `ask/engine.py`, `jobs.py`, `notifications.py` and `mcp_server.py`. Other sections carry forward their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-05 (§1.6: `search.py` row, now also the hybrid retrieval shared by Ask and MCP; §1.4: the MCP tool summary). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to the §1.6 `search.py` and `document_reads.py` rows and the §1.4 MCP bullet, read against `src/library/search.py`, `src/library/document_reads.py` and their callers in `api/documents.py`, `ask/engine.py`, `jobs.py` and `mcp_server.py`. Other sections carry forward their earlier verifications.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -303,8 +303,9 @@ are stored as SHA-256 digests only:
   natural-language **Ask** (`POST /api/ask`, see [ask.md](ask.md)).
 - **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens:
   static `library_…` tokens, and OAuth access tokens from Library's own
-  authorization server when OAuth is on (see §1.5). Tools for searching,
-  reading, and ingesting documents from LLM clients. See [mcp.md](mcp.md).
+  authorization server when OAuth is on (see §1.5). Tools for searching (by
+  keyword or by meaning), reading, ingesting, editing and commenting on
+  documents from LLM clients. See [mcp.md](mcp.md).
 - **Web app** — Vue 3 SPA using the **Mosaic** (Cruip) theme: violet accent,
   soft rounded-xl cards, dark mode, Inter loaded from Google Fonts. Content-first,
   responsive 320px-up, accessible. (Reskinned from GOV.UK — see
@@ -418,7 +419,7 @@ top-level modules.
 | `src/library/taxonomy.py` | Taxonomy listing: kinds, senders, recipients, tags, with counts. |
 | `src/library/mcp_server.py` | The MCP server: FastMCP tools over the archive (§1.4). |
 | `src/library/notifications.py` | Pushover push notifications (per-user, opt-in). |
-| `src/library/search.py` | Shared document query building for the REST API and the MCP server. |
+| `src/library/search.py` | Shared document queries: the filter conditions, full-text search and ordering behind the REST list and MCP `search_documents` (`build_document_query`), and the hybrid vector + full-text retrieval with its coverage counts behind Ask's and MCP's `semantic_search` (`hybrid_search`). |
 | `src/library/consume.py` | Consume-folder watcher: ingest files dropped into a watched directory. |
 | `src/library/ingest.py` | Ingestion service: bytes in, `Document` row + queued job out. |
 | `src/library/documents_service.py` | The one document-metadata edit path shared by the PATCH route, Ask and MCP (`edit_document`), and the edit preview (`preview_update`), which reads the stored values back from a rolled-back dry run. |
