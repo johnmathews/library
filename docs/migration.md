@@ -1,7 +1,7 @@
 # Migrating from paperless-ngx
 
-**Status:** active. **Last updated:** 2026-09-03 (no prose change: re-stamped because `cli.py`, one of the files this document covers, changed again in the recall-corpus rebuild for #105/#106 — wholly unrelated to the paperless importer this document describes. Re-stamped DELIBERATELY rather than left to age: that branch also widened `check_docs`'s staleness comparison by one day to fix #126, so this document would have stayed green on its 2026-09-02 stamp without anyone looking. Consuming that grace silently is exactly how the gate stops meaning anything.) no prose change: re-stamped because `cli.py`, one of the files this document covers, gained two lines in the disclosure eval's `_seed_scenario` helper (#136), wholly unrelated to the paperless importer; nothing on this page was touched by that change). Earlier (2026-08-29, no prose change: re-stamped because `cli.py`, one of the files this document covers, grew a `backfill-amounts` command (money facts) on the `money-facts` branch, wholly unrelated to the paperless importer; nothing on this page was touched by that change). Earlier (2026-08-28, no prose change: re-stamped because `cli.py`, one of the files this document covers, grew two new commands — `label-archive` and `recipients` — on the `charts-redesign` branch, both wholly unrelated to the paperless importer; nothing on this page was touched by that change). Earlier (2026-08-27): (no prose change: re-stamped because the covered `cli.py` grew `eval-disclosure` on the `feat/disclosure-eval` branch, wholly unrelated to the paperless importer). Earlier (2026-08-13): (no prose change: re-stamped because the covered `cli.py` and `importer/` were touched after the previous stamp; earlier, 2026-08-12: documentation verification sweep: documented `LIBRARY_IMPORT_DEFAULT_OWNER`, the `senders:` block in the dry-run report, and the `id`/`document_type` keys in `extra["paperless"]`; corrected the `user_edited_fields` names). Earlier: 2026-06-11.
-**Last verified:** 2026-11-04 — method: re-stamp only. `cli.py`, which `Covers:` names, changed in two strings of `user disable` (help text and output now mention connected apps); read that diff, and this document describes neither command. Its earlier verifications are in this file's history and stand.
+**Status:** active. **Last updated:** 2026-11-06 (§1.3.3: the import analyses the money tables when it has written documents). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: partial, scoped to §1.3.3. Read `run_import` and `money/statistics.py`, and ran `tests/test_importer.py` (the ANALYZE tests seen red with the call removed, and red when the guard was removed). The rest carries its earlier verifications forward.
 **Covers:** src/library/importer/, src/library/cli.py
 
 `library import paperless` copies every document out of a running
@@ -126,6 +126,16 @@ Documents arriving **with** paperless OCR text go straight to status
 `--no-extract`) and a thumbnail job. Documents **without** text (rare —
 e.g. paperless never finished processing them) go through Library's
 normal pipeline: OCR, extraction, thumbnail.
+
+### 1.3.3 Planner statistics
+
+When a real (not dry-run) import has written at least one document, it ends
+with one `ANALYZE` of the tables the money views read
+(`analyze_money_tables`, `src/library/money/statistics.py`). Freshly inserted
+rows have no statistics, and `payments` is a recursive view: on never-analysed
+tables a money question over 4,000 documents timed out at 120 s, against 1.34 s
+after `ANALYZE`. Autovacuum fixes this on its own, but not at once. Details and
+the measurement are in [money-facts.md](money-facts.md) §6.2.
 
 ## 1.4 Idempotency and re-runs
 

@@ -47,6 +47,7 @@ from library.models import (
     Kind,
     Tag,
 )
+from library.money.statistics import analyze_money_tables
 
 logger = logging.getLogger(__name__)
 
@@ -456,6 +457,8 @@ async def run_import(
     if not dry_run:
         await flush_pending()
         await _remap_linked_documents(session, links, id_map)
+        if report.imported:
+            await analyze_money_tables(session)
 
     logger.info(
         "paperless import finished (batch %s): %s seen, %s imported, "

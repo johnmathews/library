@@ -21,7 +21,7 @@ from typing import Any
 import httpx
 import pytest
 from procrastinate.testing import InMemoryConnector
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -44,6 +44,7 @@ from library.importer.runner import ImportFailure, ImportReport, format_report, 
 from library.ingest import ingest_file
 from library.jobs import job_app
 from library.models import Document, DocumentSource, DocumentStatus, IngestionEvent
+from library.money.statistics import MONEY_TABLES
 
 # paperless ids must be unique across the whole test session: the test
 # database (and its documents.paperless_id unique constraint) is shared.
@@ -584,6 +585,63 @@ async def test_double_run_is_idempotent_by_paperless_id(
     # The second run skipped before downloading anything.
     for doc in docs:
         assert fake.download_counts[doc["id"]] == 1
+
+
+def _record_statements(engine: AsyncEngine) -> list[str]:
+    """Every SQL statement the engine executes from now on, in order."""
+    seen: list[str] = []
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _capture(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        seen.append(statement)
+
+    return seen
+
+
+@pytest.mark.integration
+async def test_import_analyses_the_money_tables_once_after_writing(
+    engine: AsyncEngine,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    """Fresh rows have no planner statistics, and the money views are recursive:
+    the first money question after an import must not plan on stale estimates.
+    """
+    fake = FakePaperless()
+    fake.add_document(make_pdf(), content="text 0")
+    statements = _record_statements(engine)
+
+    report = await do_import(session_factory, fake)
+
+    assert report.imported == 1
+    analyses = [s for s in statements if s.lstrip().upper().startswith("ANALYZE")]
+    assert len(analyses) == 1
+    for table in MONEY_TABLES:
+        assert table in analyses[0]
+    last_write = max(i for i, s in enumerate(statements) if s.lstrip().upper().startswith("UPDATE"))
+    assert statements.index(analyses[0]) > last_write, "ANALYZE must follow the last write"
+
+
+@pytest.mark.integration
+async def test_dry_run_and_empty_import_do_not_analyse(
+    engine: AsyncEngine,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    fake = FakePaperless()
+    fake.add_document(make_pdf(), content="text 0")
+    statements = _record_statements(engine)
+
+    await do_import(session_factory, fake, dry_run=True)
+    assert not [s for s in statements if "ANALYZE" in s.upper()]
+
+    await do_import(session_factory, fake)
+    statements.clear()
+    rerun = await do_import(session_factory, fake)  # everything is a duplicate now
+    assert rerun.imported == 0
+    assert not [s for s in statements if "ANALYZE" in s.upper()]
 
 
 @pytest.mark.integration

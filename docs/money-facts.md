@@ -1,7 +1,7 @@
 # Money facts and payment identity
 
-**Status:** active. **Last updated:** 2026-11-06 (§5.2: a `facets` filter on a money total counts the money rows, document or line, that carry the facet; the itemised-document follow-up is closed). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to §5.2. Read `structured_query.sum_amount` and `_facet_match` against migration 0035's row `labels` and `charts/rule.py`; the line-facet tests in `tests/test_structured_query.py` pass, seen red on main first or killed by hand-made mutants. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-06 (§6.2: the amount backfill and the import analyse the money tables; §5.2: a `facets` filter on a money total counts the money rows, document or line, that carry the facet). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: partial, scoped to §5.2 and §6.2. §5.2: read `structured_query.sum_amount` and `_facet_match` against migration 0035's row `labels`; the line-facet tests in `tests/test_structured_query.py` were seen red first or killed by mutants. §6.2: read `money/statistics.py` and its callers; the ANALYZE tests and the view-table pin in `tests/test_money_statistics.py` were seen red. The rest carries its earlier verifications forward.
 **Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, src/library/llm/envelope.py, src/library/structured_query.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
@@ -532,6 +532,20 @@ Two things follow, and both are load-bearing:
 response as a success would hide the very thing this command exists to
 report: how much of the archive still lacks a semantic amount. A document
 the model could not classify is not counted as done.
+
+### 6.2 Planner statistics
+
+When it has classified at least one document, the backfill ends with one
+`ANALYZE` of every table the money views read (`analyze_money_tables`,
+`src/library/money/statistics.py`; `library import paperless` does the same).
+It is not optional tidiness. `payments` is a recursive view, and on tables that
+have never been analysed the planner estimated 43 rows for its recursive step
+(56k actual) and chose 37 nested loops: `sum_amount` over 4,000 documents timed
+out at 120 s, against 1.34 s after `ANALYZE` (23 hash joins). Autovacuum closes
+the window by itself, within 45 s in a test container, so the hang is a
+question asked straight after a bulk write. A backfill that classified nothing
+skips the `ANALYZE`. `tests/test_money_statistics.py` pins that the table list
+covers every base table of `payments` and `spend_facts`.
 
 ## 7. Human corrections: `payment_overrides`
 
