@@ -94,6 +94,10 @@ dev = [
     # the error count was a property of the machine, not of the code, and no
     # baseline taken on one checkout could be reproduced on another (or in CI).
     "mypy>=1.19,<1.20",
+    # tests/test_ci_workflow.py parses .github/workflows/ci.yml. Already in the
+    # lock transitively; named here so the test does not depend on what some
+    # other package happens to pull in.
+    "pyyaml>=6.0.3",
 ]
 
 [project.scripts]

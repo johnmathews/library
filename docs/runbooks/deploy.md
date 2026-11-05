@@ -1,7 +1,7 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.3 and §1.7: the script removes compose's `<12 hex>_library-…` leftover containers before and after `up`, retries a failed `up` once, and aborts if a library container is left `Created`). Earlier: 2026-10-22 (host renamed to `documents`). **Supersedes:** none.
-**Last verified:** 2026-11-04 — method: partial, scoped to the leftover handling. `tests/test_deploy_script.py` runs the sourced functions against a fake ssh/docker (seen red before the change); the listing command was run read-only on `documents` and returned the expected `<name> <state>` rows for project `apps`; `bash -n` and shellcheck clean. A real deploy with the new script is the next check.
+**Status:** active. **Last updated:** 2026-11-05 (§1.2: which CI jobs run on which change — docs-only PRs skip e2e, compose-smoke and typecheck; ci-gate's `expect.e2e` rule; job time limits and the apt retries). Earlier: 2026-11-04 (§1.3 and §1.7: compose leftover containers). **Supersedes:** none.
+**Last verified:** 2026-11-05 — method: partial, scoped to §1.2's CI paragraphs. Read `ci.yml` and `scripts/ci_gate.sh`; ran `tests/test_ci_gate.py` and `tests/test_ci_workflow.py` (both seen red first), and the retry loop in an ubuntu:24.04 container as a sudo user. The table is from reading the job `if:`s; a live docs-only PR is the next check. §1.3/§1.7's leftover handling was last verified 2026-11-04 (`tests/test_deploy_script.py` against a fake ssh/docker).
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh
 
 How to ship a merged change to the live `documents` LXC. This is the focused
@@ -31,6 +31,23 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
    if `promote` hasn't caught up yet, so the footgun above is caught before any
    image is pulled.
 
+   **What runs on which change.** The `changes` job sorts the diff into
+   `backend` (`src/`, `tests/`, `scripts/`, `models/`, `recall-baseline.json`,
+   the build and dependency files), `docs` (`docs/`), `frontend`
+   (`frontend/`) and `ci` (`.github/`). On a pull request:
+
+   | Change touches | Runs (besides `changes`, `docs-stamps`, `ci-gate`) |
+   | --- | --- |
+   | only `journal/` or a top-level `*.md` | nothing else |
+   | `docs/`, with no code path | `backend`, `build` (tests read docs) |
+   | `backend` paths | `backend`, `typecheck`, `build`, `e2e`, `compose-smoke` |
+   | `frontend` paths | `frontend`, `build`, `e2e`, `compose-smoke` |
+   | `.github/` | everything |
+
+   On `main` every job runs whatever changed: `promote` needs e2e and
+   compose-smoke, and the image bakes `docs/*.md`, so a docs-only merge still
+   builds, e2e-tests and promotes.
+
    **What "green" means.** The run's aggregator job is **`ci-gate`**, which
    passes the `needs.<job>.result` of every other job except `promote` —
    including `docs-stamps` and `typecheck` — to `scripts/ci_gate.sh`. That
@@ -39,7 +56,25 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
    *required* check would block a merge forever — but requires **`changes`**
    (the path-filter job all the others declare `needs:` on) to be exactly
    `success`, since a broken `changes` skips every one of them and would
-   otherwise leave the gate nothing to reject. `tests/test_ci_gate.py` exercises those cases.
+   otherwise leave the gate nothing to reject. It also gets
+   `expect.e2e=<changes.outputs.e2e>`, the same output e2e's `if:` reads:
+   with `expect.e2e=true` a skipped e2e is red ("job 'e2e' was required to
+   run for this change"), so an `if:` mistake cannot quietly stop e2e on a
+   code PR. A value other than `true`/`false` is red too.
+   `tests/test_ci_gate.py` exercises those cases, and
+   `tests/test_ci_workflow.py` checks `ci.yml` itself: the gate's `needs:`
+   equals its argument list, e2e's `if:` and `expect.e2e` read the one
+   output, the filters sort sample paths as in the table above, and every
+   job has a `timeout-minutes`.
+
+   **Time limits and apt retries.** Every job has a `timeout-minutes` (5 to 35,
+   about 2-4x its normal duration). The runner's apt mirror sometimes stalls
+   for many minutes, so the two apt steps, the backend's OCR packages and
+   e2e's "Install Playwright system dependencies", try up to 3 times, each
+   attempt killed after 300 s. A run that fails all three ends with
+   `::error::... failed 3 times`; rerun the failed jobs
+   (`gh run rerun <id> --failed`).
+
    The `main` ruleset **does** require `ci-gate` (it also blocks deletion and
    force-pushes, requires a pull request, and has no bypass actors), so a red
    gate blocks the merge rather than merely reporting it. Note `promote` sits
