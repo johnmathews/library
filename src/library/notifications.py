@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from library.document_reads import document_web_url
 from library.models import Document, User
 from library.schemas import NotificationEvent, get_notification_credentials
 
@@ -284,11 +285,7 @@ async def _send_for_target(
 ) -> bool:
     """Send one push for ``kind`` to a resolved target; never raises."""
     push_title, priority = _EVENT_TITLES[kind]
-    url = (
-        f"{document_url_base.rstrip('/')}/documents/{target.document_id}"
-        if document_url_base
-        else None
-    )
+    url = document_web_url(document_url_base, target.document_id)
     result = await send_pushover(
         app_token=target.app_token,
         user_key=target.user_key,

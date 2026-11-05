@@ -12,12 +12,12 @@ comment's text becomes searchable from /ask (see ``jobs.embed_document`` and
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library import comments_service
 from library.auth.deps import current_user
 from library.db import get_session
+from library.document_reads import load_comments
 from library.jobs import embed_document
 from library.models import Document, DocumentComment, IngestionEvent, User
 from library.schemas import CommentIn, CommentOut
@@ -50,17 +50,7 @@ async def list_comments(
 ) -> list[CommentOut]:
     """A document's comments, newest first."""
     await _get_document_or_404(session, document_id)
-    rows = (
-        (
-            await session.execute(
-                select(DocumentComment)
-                .where(DocumentComment.document_id == document_id)
-                .order_by(DocumentComment.created_at.desc())
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await load_comments(session, document_id, newest_first=True)
     return [CommentOut.model_validate(row) for row in rows]
 
 

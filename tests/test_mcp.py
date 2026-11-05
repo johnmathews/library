@@ -23,6 +23,7 @@ from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -32,7 +33,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
 from procrastinate import PsycopgConnector
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -41,7 +42,18 @@ from library.auth.service import API_TOKEN_PREFIX, sha256_hex
 from library.config import get_settings
 from library.jobs import job_app, procrastinate_conninfo
 from library.mcp_server import SERVER_INSTRUCTIONS, mcp
-from library.models import ApiToken, DocumentLanguage, DocumentStatus
+from library.models import (
+    AmountKind,
+    ApiToken,
+    DocumentComment,
+    DocumentLabel,
+    DocumentLanguage,
+    DocumentPage,
+    DocumentStatus,
+    Facet,
+    FacetValue,
+    ReviewStatus,
+)
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.storage import derived_dir, store
 from tests.conftest import AuthUser, _fetch_all, _insert_user
@@ -188,6 +200,71 @@ def mcp_connect(running_app: AppRunner, mcp_token: str) -> McpConnector:
     return connect
 
 
+@asynccontextmanager
+async def _db(database_url: str) -> AsyncIterator[AsyncSession]:
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            yield session
+    finally:
+        await engine.dispose()
+
+
+async def _add_pages(database_url: str, document_id: int, pages: list[str]) -> None:
+    """Store ``pages`` as the document's markdown pages 1..n."""
+    async with _db(database_url) as session:
+        session.add_all(
+            DocumentPage(
+                document_id=document_id, page_number=number, markdown=text, char_count=len(text)
+            )
+            for number, text in enumerate(pages, start=1)
+        )
+        await session.commit()
+
+
+async def _add_comment(
+    database_url: str, document_id: int, author_id: int, body: str, created_at: datetime
+) -> int:
+    async with _db(database_url) as session:
+        comment = DocumentComment(
+            document_id=document_id, author_id=author_id, body=body, created_at=created_at
+        )
+        session.add(comment)
+        await session.commit()
+        return comment.id
+
+
+async def _label(database_url: str, document_id: int, facet_key: str, value_key: str) -> None:
+    """Give the document ``facet_key: value_key``, creating the facet and value."""
+    async with _db(database_url) as session:
+        facet = (
+            await session.execute(select(Facet).where(Facet.key == facet_key))
+        ).scalar_one_or_none()
+        if facet is None:
+            facet = Facet(key=facet_key, label=facet_key)
+            session.add(facet)
+            await session.flush()
+        value = (
+            await session.execute(
+                select(FacetValue).where(
+                    FacetValue.facet_id == facet.id, FacetValue.key == value_key
+                )
+            )
+        ).scalar_one_or_none()
+        if value is None:
+            value = FacetValue(facet_id=facet.id, key=value_key, label=value_key)
+            session.add(value)
+            await session.flush()
+        session.add(
+            DocumentLabel(document_id=document_id, facet_id=facet.id, facet_value_id=value.id)
+        )
+        await session.commit()
+
+
+def _ids(result: dict[str, Any]) -> list[int]:
+    return [item["id"] for item in result["results"]]
+
+
 def payload(result: CallToolResult) -> dict[str, Any]:
     """The structured result of a successful tool call."""
     assert not result.isError, result.content
@@ -310,7 +387,7 @@ async def test_search_documents_dutch_stem(
     async with mcp_connect() as session:
         result = payload(
             await session.call_tool(
-                "search_documents", {"query": "rekening", "tag": "mcp-search-nl"}
+                "search_documents", {"query": "rekening", "tags": ["mcp-search-nl"]}
             )
         )
     assert result["total"] == 1
@@ -377,7 +454,7 @@ async def test_search_documents_project_filter(
     )
     async with mcp_connect() as session:
         result = payload(
-            await session.call_tool("search_documents", {"project": "mcp-search-project"})
+            await session.call_tool("search_documents", {"projects": ["mcp-search-project"]})
         )
         projects = payload(await session.call_tool("list_projects", {}))["projects"]
     assert [item["id"] for item in result["results"]] == [document_id]
@@ -400,7 +477,7 @@ async def test_search_documents_matter_filter(
     )
     async with mcp_connect() as session:
         result = payload(
-            await session.call_tool("search_documents", {"matter": "mcp-search-matter"})
+            await session.call_tool("search_documents", {"matters": ["mcp-search-matter"]})
         )
         matters = payload(await session.call_tool("list_matters", {}))["matters"]
     assert [item["id"] for item in result["results"]] == [document_id]
@@ -411,30 +488,436 @@ async def test_search_documents_matter_filter(
     assert matter["document_count"] == 1
 
 
+async def test_search_offset_pages_past_limit(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    """``offset`` walks past ``limit``; ``next_offset`` says where the next page
+    starts and is null on the last one. A deleted document with the same tag
+    is never counted or returned."""
+    tag = f"mcp-offset-{secrets.token_hex(4)}"
+    dates = [date(2026, 2, 1), date(2025, 2, 28), date(2024, 2, 29), date(2023, 2, 28), None]
+    expected = [
+        await _seed_document(
+            api_database_url, f"{tag}-{index}", tag_slugs=[tag], document_date=document_date
+        )
+        for index, document_date in enumerate(dates)
+    ]
+    await _seed_document(
+        api_database_url,
+        f"{tag}-deleted",
+        tag_slugs=[tag],
+        document_date=date(2026, 2, 28),
+        deleted_at=datetime.now(UTC),
+    )
+    async with mcp_connect() as session:
+        pages = [
+            payload(
+                await session.call_tool(
+                    "search_documents", {"tags": [tag], "limit": 2, "offset": offset}
+                )
+            )
+            for offset in (0, 2, 4)
+        ]
+    assert [_ids(page) for page in pages] == [expected[0:2], expected[2:4], expected[4:5]]
+    assert [page["total"] for page in pages] == [5, 5, 5]
+    assert [page["offset"] for page in pages] == [0, 2, 4]
+    assert [page["next_offset"] for page in pages] == [2, 4, None]
+
+
+async def test_search_multi_tag_and_facet_filters(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    """Tags AND-compose, matters OR-compose, facets AND-compose, and status and
+    review_status narrow further — the same builder as the web app's list."""
+    prefix = f"mcp-multi-{secrets.token_hex(4)}"
+    tag_a, tag_b = f"{prefix}-a", f"{prefix}-b"
+    matter_1, matter_2 = f"{prefix}-m1", f"{prefix}-m2"
+    facet = f"{prefix}-f"
+
+    both = await _seed_document(
+        api_database_url,
+        f"{prefix}-both",
+        tag_slugs=[tag_a, tag_b],
+        matter_slugs=[matter_1],
+        review_status=ReviewStatus.NEEDS_REVIEW,
+    )
+    only_a = await _seed_document(api_database_url, f"{prefix}-only-a", tag_slugs=[tag_a])
+    other_value = await _seed_document(
+        api_database_url, f"{prefix}-other-value", tag_slugs=[tag_a, tag_b]
+    )
+    failed = await _seed_document(
+        api_database_url,
+        f"{prefix}-failed",
+        tag_slugs=[tag_a, tag_b],
+        matter_slugs=[matter_2],
+        status=DocumentStatus.FAILED,
+    )
+    deleted = await _seed_document(
+        api_database_url,
+        f"{prefix}-deleted",
+        tag_slugs=[tag_a, tag_b],
+        matter_slugs=[matter_1],
+        deleted_at=datetime.now(UTC),
+    )
+    for document_id in (both, only_a, failed, deleted):
+        await _label(api_database_url, document_id, facet, "v1")
+    await _label(api_database_url, other_value, facet, "v2")
+
+    async def search(session: ClientSession, **arguments: Any) -> set[int]:
+        return set(_ids(payload(await session.call_tool("search_documents", arguments))))
+
+    async with mcp_connect() as session:
+        assert await search(session, tags=[tag_a, tag_b]) == {both, other_value, failed}
+        assert await search(session, tags=[tag_a], facets={facet: "v1"}) == {both, only_a, failed}
+        assert await search(session, tags=[tag_a, tag_b], facets={facet: "v1"}) == {both, failed}
+        assert await search(
+            session, tags=[tag_a, tag_b], facets={facet: "v1"}, status="indexed"
+        ) == {both}
+        assert await search(session, tags=[tag_a], status="failed") == {failed}
+        assert await search(session, tags=[tag_a], review_status="needs_review") == {both}
+        assert await search(session, matters=[matter_1, matter_2]) == {both, failed}
+        assert await search(session, tags=[tag_a], facets={facet: "nope"}) == set()
+
+
+async def test_search_results_carry_amount_kind(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    """A refund's amount_total is a magnitude; amount_kind is what says it is
+    money coming back, so every result carries both."""
+    tag = f"mcp-amount-kind-{secrets.token_hex(4)}"
+    refund = await _seed_document(
+        api_database_url,
+        f"{tag}-refund",
+        tag_slugs=[tag],
+        amount_total=Decimal("12.50"),
+        currency="EUR",
+        amount_kind=AmountKind.REFUND,
+        document_date=date(2025, 2, 28),
+    )
+    paid = await _seed_document(
+        api_database_url,
+        f"{tag}-paid",
+        tag_slugs=[tag],
+        amount_total=Decimal("12.50"),
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        document_date=date(2025, 2, 1),
+    )
+    undecided = await _seed_document(
+        api_database_url, f"{tag}-undecided", tag_slugs=[tag], document_date=date(2024, 2, 29)
+    )
+    async with mcp_connect() as session:
+        result = payload(await session.call_tool("search_documents", {"tags": [tag]}))
+    by_id = {item["id"]: item for item in result["results"]}
+    assert set(by_id) == {refund, paid, undecided}
+    assert by_id[refund]["amount_kind"] == "refund"
+    assert by_id[paid]["amount_kind"] == "payment_made"
+    assert by_id[undecided]["amount_kind"] is None
+    assert by_id[refund]["amount_total"] == by_id[paid]["amount_total"] == "12.50"
+    assert by_id[refund]["currency"] == "EUR"
+    # The other fields the web app's list rows carry ride along too.
+    assert by_id[refund]["review_status"] == "unreviewed"
+    assert by_id[refund]["due_date"] is None
+
+
+def _properties(schema: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    """``node``'s properties, following a local ``$ref`` if it is one."""
+    if "$ref" in node:
+        node = schema["$defs"][node["$ref"].rsplit("/", 1)[-1]]
+    return node["properties"]
+
+
+async def test_read_tools_publish_output_schemas(mcp_connect: McpConnector) -> None:
+    """Typed returns: tools/list carries an outputSchema for both read tools,
+    naming the fields a client can rely on."""
+    async with mcp_connect() as session:
+        tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+
+    document_schema = tools["get_document"].outputSchema
+    assert document_schema is not None
+    for field in (
+        "text",
+        "next_start_page",
+        "continuation",
+        "comments",
+        "review_status",
+        "amount_kind",
+        "web_url",
+    ):
+        assert field in document_schema["properties"], field
+    assert "ocr_text" not in document_schema["properties"]
+
+    search_schema = tools["search_documents"].outputSchema
+    assert search_schema is not None
+    assert {"results", "total", "offset", "next_offset"} <= set(search_schema["properties"])
+    item_properties = _properties(search_schema, search_schema["properties"]["results"]["items"])
+    for field in ("amount_kind", "amount_total", "review_status", "snippet", "rank"):
+        assert field in item_properties, field
+
+    description = tools["get_document"].description or ""
+    assert "Do not add up amount_total" in description
+
+
 # --- get_document ------------------------------------------------------------
+
+
+async def test_get_document_reads_page_markdown_not_ocr(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    """A thin-OCR scan whose words exist only in its page markdown: search
+    matches on them, so get_document must show them."""
+    document_id = await _seed_document(
+        api_database_url,
+        "mcp-pages-not-ocr",
+        title="Scanned policy",
+        ocr_text="Polis",
+        page_count=2,
+    )
+    await _add_pages(
+        api_database_url,
+        document_id,
+        ["# Polis\n\nDekking: inboedel", "Eigen risico: mcpmarkdownonly"],
+    )
+    async with mcp_connect() as session:
+        result = payload(await session.call_tool("get_document", {"document_id": document_id}))
+    assert result["text_source"] == "pages"
+    assert "mcpmarkdownonly" in result["text"]
+    assert result["text"].index("Dekking: inboedel") < result["text"].index("mcpmarkdownonly")
+    assert (result["text_start_page"], result["text_end_page"]) == (1, 2)
+    assert result["text_page_count"] == 2
+    assert result["text_truncated"] is False
+    assert result["next_start_page"] is None
+    assert result["continuation"] is None
+    assert "ocr_text" not in result
 
 
 async def test_get_document_truncates_long_ocr_text(
     mcp_connect: McpConnector, api_database_url: str
 ) -> None:
-    long_text = "rekening en water " * 2000  # 36k chars
+    """Over ``max_chars`` (default 20 000) the text stops, and the hint names
+    the page to continue at: the one that was cut, read whole next time.
+    (The name predates page text; the text is now the page markdown.)"""
+    pages = [f"page-{n}-start " + "x" * 9_000 for n in (1, 2, 3)]
     document_id = await _seed_document(
-        api_database_url,
-        "mcp-truncate",
-        title="Lange tekst",
-        ocr_text=long_text,
-        topics=["water", "rekening"],
+        api_database_url, "mcp-truncate", title="Lange tekst", topics=["water", "rekening"]
     )
+    await _add_pages(api_database_url, document_id, pages)
     async with mcp_connect() as session:
         result = payload(await session.call_tool("get_document", {"document_id": document_id}))
     assert result["id"] == document_id
     assert result["topics"] == ["water", "rekening"]
-    assert result["ocr_text_truncated"] is True
-    assert len(result["ocr_text"]) < 21_000
-    assert result["ocr_text"].startswith("rekening en water")
-    assert f"truncated: the full text is {len(long_text)} characters" in result["ocr_text"]
-    assert "REST" not in result["ocr_text"] and "/api/" not in result["ocr_text"]
+    assert len(result["text"]) == 20_000
+    assert result["text"].startswith("page-1-start")
+    assert "page-3-start" in result["text"]
+    assert result["text_truncated"] is True
+    assert result["text_total_chars"] == len("\n\n".join(pages))
+    assert (result["text_start_page"], result["text_end_page"]) == (1, 3)
+    assert result["next_start_page"] == 3
+    assert "start_page=3" in result["continuation"]
+    assert "REST" not in result["continuation"] and "/api/" not in result["continuation"]
     assert isinstance(result["events"], list)
+
+
+async def test_get_document_pages_through_long_document(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    """Following ``next_start_page`` reaches every page, in order, and a page
+    longer than ``max_chars`` says to ask for more."""
+    sizes = [1_500, 2_500, 900, 6_000, 300, 3_800, 2_000]
+    pages = [f"[p{n}] " + "y" * size for n, size in enumerate(sizes, start=1)]
+    document_id = await _seed_document(api_database_url, "mcp-page-through")
+    await _add_pages(api_database_url, document_id, pages)
+
+    seen: list[str] = []
+    calls: list[dict[str, Any]] = []
+    start_page: int | None = 1
+    async with mcp_connect() as session:
+        while start_page is not None and len(calls) < 20:
+            result = payload(
+                await session.call_tool(
+                    "get_document",
+                    {"document_id": document_id, "start_page": start_page, "max_chars": 5_000},
+                )
+            )
+            calls.append(result)
+            assert len(result["text"]) <= 5_000
+            assert result["text_start_page"] == start_page
+            seen.extend(marker for n in range(1, 8) if (marker := f"[p{n}]") in result["text"])
+            start_page = result["next_start_page"]
+        # Page 4 alone is over max_chars: a larger max_chars returns it whole.
+        whole = payload(
+            await session.call_tool(
+                "get_document",
+                {"document_id": document_id, "start_page": 4, "max_chars": 6_100},
+            )
+        )
+
+    # 1-3 + the start of 4 | 4 cut | 5, 6 + the start of 7 | 7.
+    assert [call["text_start_page"] for call in calls] == [1, 4, 5, 7]
+    assert seen == ["[p1]", "[p2]", "[p3]", "[p4]", "[p4]", "[p5]", "[p6]", "[p7]", "[p7]"]
+    cut = calls[1]
+    assert cut["text_end_page"] == 4
+    assert cut["text_truncated"] is True
+    assert "max_chars" in cut["continuation"]
+    assert calls[-1]["text_truncated"] is False
+    assert calls[-1]["text_end_page"] == 7
+    assert calls[-1]["continuation"] is None
+    assert whole["text"].startswith(pages[3])
+    assert whole["text_end_page"] == 5
+
+
+async def test_get_document_text_window_edges(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    """A window that ends exactly at a page's end continues at the next
+    page, and an over-long last page has no next page, only a bigger
+    max_chars."""
+    exact_id = await _seed_document(api_database_url, "mcp-window-exact")
+    await _add_pages(api_database_url, exact_id, ["e" * 1_000, "[second]"])
+    oversize_id = await _seed_document(api_database_url, "mcp-window-oversize")
+    await _add_pages(api_database_url, oversize_id, ["short", "[last] " + "z" * 2_000])
+    async with mcp_connect() as session:
+        exact = payload(
+            await session.call_tool("get_document", {"document_id": exact_id, "max_chars": 1_000})
+        )
+        oversize = payload(
+            await session.call_tool(
+                "get_document", {"document_id": oversize_id, "start_page": 2, "max_chars": 1_000}
+            )
+        )
+    assert exact["text"] == "e" * 1_000
+    assert (exact["text_end_page"], exact["next_start_page"]) == (1, 2)
+    assert exact["continuation"] == (
+        "The text stops after page 1 of 2. Call get_document again with start_page=2 to continue."
+    )
+    assert oversize["text"].startswith("[last] ")
+    assert len(oversize["text"]) == 1_000
+    assert oversize["text_truncated"] is True
+    assert (oversize["text_end_page"], oversize["next_start_page"]) == (2, None)
+    assert "larger max_chars" in oversize["continuation"]
+    assert "next page" not in oversize["continuation"]
+
+
+async def test_get_document_falls_back_to_ocr_text_without_pages(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    """No markdown pages yet: the OCR text, capped the same way, with a hint
+    that only a larger max_chars or the file gives more."""
+    long_text = "rekening en water " * 2000  # 36k chars
+    document_id = await _seed_document(
+        api_database_url, "mcp-ocr-fallback", title="Lange tekst", ocr_text=long_text
+    )
+    empty_id = await _seed_document(api_database_url, "mcp-no-text")
+    async with mcp_connect() as session:
+        capped = payload(await session.call_tool("get_document", {"document_id": document_id}))
+        whole = payload(
+            await session.call_tool(
+                "get_document", {"document_id": document_id, "max_chars": 50_000}
+            )
+        )
+        paged = await session.call_tool(
+            "get_document", {"document_id": document_id, "start_page": 2}
+        )
+        empty = payload(await session.call_tool("get_document", {"document_id": empty_id}))
+    assert capped["text_source"] == "ocr_text"
+    assert capped["text"] == long_text[:20_000]
+    assert capped["text_truncated"] is True
+    assert capped["text_total_chars"] == len(long_text)
+    assert capped["next_start_page"] is None
+    assert capped["text_start_page"] is None
+    assert "max_chars" in capped["continuation"]
+    assert "get_document_file" in capped["continuation"]
+    assert whole["text"] == long_text
+    assert whole["text_truncated"] is False and whole["continuation"] is None
+    assert "no page text" in error_text(paged)
+    assert empty["text_source"] == "none"
+    assert empty["text"] == ""
+    assert empty["text_truncated"] is False
+
+
+async def test_get_document_start_page_past_the_end_errors(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    document_id = await _seed_document(api_database_url, "mcp-start-past-end")
+    await _add_pages(api_database_url, document_id, ["one", "two"])
+    async with mcp_connect() as session:
+        result = await session.call_tool(
+            "get_document", {"document_id": document_id, "start_page": 3}
+        )
+    assert error_text(result) == (
+        f"document {document_id} has 2 pages of text; start_page must be at most 2"
+    )
+
+
+async def test_get_document_includes_comments_and_review_status(
+    mcp_connect: McpConnector,
+    api_database_url: str,
+    auth_user: AuthUser,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Comments from both household members (newest first), whether the
+    extracted details are trusted, what the amount means, and a link to the
+    document in the web app once the public URL is configured."""
+    other_user = await _insert_user(
+        api_database_url, f"mcp-other-{secrets.token_hex(4)}", "irrelevant"
+    )
+    document_id = await _seed_document(
+        api_database_url,
+        "mcp-comments-review",
+        title="Refund letter",
+        amount_total=Decimal("12.50"),
+        currency="EUR",
+        amount_kind=AmountKind.REFUND,
+        document_date=date(2024, 2, 29),
+        review_status=ReviewStatus.NEEDS_REVIEW,
+        extra={
+            "validation": {
+                "findings": [
+                    {
+                        "rule": "amount_currency_coupling",
+                        "field": "currency",
+                        "message": "amount without a currency",
+                    }
+                ]
+            }
+        },
+    )
+    older = await _add_comment(
+        api_database_url,
+        document_id,
+        auth_user.id,
+        "paid back into the joint account",
+        datetime(2024, 2, 29, 9, 0, tzinfo=UTC),
+    )
+    newer = await _add_comment(
+        api_database_url,
+        document_id,
+        other_user,
+        "the second refund is still due",
+        datetime(2024, 3, 1, 9, 0, tzinfo=UTC),
+    )
+    async with mcp_connect() as session:
+        without_url = payload(await session.call_tool("get_document", {"document_id": document_id}))
+        monkeypatch.setenv("LIBRARY_PUBLIC_BASE_URL", "https://library.example.test/")
+        get_settings.cache_clear()
+        with_url = payload(await session.call_tool("get_document", {"document_id": document_id}))
+
+    assert [c["id"] for c in without_url["comments"]] == [newer, older]
+    assert [c["author_id"] for c in without_url["comments"]] == [other_user, auth_user.id]
+    assert without_url["comments"][1]["body"] == "paid back into the joint account"
+    assert without_url["review_status"] == "needs_review"
+    assert without_url["review_findings"] == [
+        {
+            "rule": "amount_currency_coupling",
+            "field": "currency",
+            "message": "amount without a currency",
+        }
+    ]
+    assert without_url["amount_kind"] == "refund"
+    assert without_url["amount_total"] == "12.50"
+    assert without_url["document_date"] == "2024-02-29"
+    assert without_url["web_url"] is None
+    assert with_url["web_url"] == f"https://library.example.test/documents/{document_id}"
 
 
 async def test_get_document_unknown_id_errors(mcp_connect: McpConnector) -> None:

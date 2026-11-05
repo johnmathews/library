@@ -14,6 +14,7 @@ from typing import Annotated, Any, Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from library.models import (
+    AmountKind,
     DocumentLanguage,
     DocumentSource,
     DocumentStatus,
@@ -118,8 +119,12 @@ class CommentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class DocumentListItem(BaseModel):
-    """One row of GET /api/documents."""
+class DocumentFields(BaseModel):
+    """The document fields every list row and detail body carries.
+
+    Built by ``document_reads.list_item_fields``; shared by GET /api/documents
+    (``DocumentListItem``), the detail body and the MCP read tools.
+    """
 
     id: int
     title: str | None
@@ -153,18 +158,34 @@ class DocumentListItem(BaseModel):
             "detail endpoint's `validation`."
         ),
     )
-    amount_total: Decimal | None = None
+    amount_total: Decimal | None = Field(
+        default=None,
+        description="Always a magnitude; amount_kind says what it is (a refund is money back).",
+    )
     currency: str | None = None
+    amount_kind: AmountKind | None = Field(
+        default=None,
+        description=(
+            "What amount_total is: payment_due, payment_made, assessment, refund, "
+            "coverage_limit, balance, estimate or none; null when not yet decided."
+        ),
+    )
+
+
+class DocumentListItem(DocumentFields):
+    """One row of GET /api/documents."""
+
     snippet: str | None = Field(
         default=None,
         description=(
-            "Only with ?q=. ts_headline fragments over the OCR text with <b>/</b> "
-            "markers. NOT HTML-escaped: render as text, handle <b> deliberately."
+            "Only with a search query. ts_headline fragments over the document text "
+            "with <b>/</b> markers. NOT HTML-escaped: render as text, handle <b> "
+            "deliberately."
         ),
     )
     rank: float | None = Field(
         default=None,
-        description="Only with ?q=. greatest(ts_rank dutch, ts_rank english).",
+        description="Only with a search query. greatest(ts_rank dutch, ts_rank english).",
     )
 
 
@@ -304,6 +325,11 @@ CurrencyCode = Annotated[
 Colour = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
 
 
+#: A tag slug as ``tags.slug`` (``String(64)``) stores it: a longer one is a
+#: validation error naming the bound, not a database error.
+TagSlug = Annotated[str, StringConstraints(max_length=64)]
+
+
 class DocumentUpdate(BaseModel):
     """PATCH /api/documents/{id} body; only fields present in the body change.
 
@@ -321,8 +347,11 @@ class DocumentUpdate(BaseModel):
     recipient: str | None = Field(
         default=None, description="Recipient name; upserted case-insensitively."
     )
-    tags: list[str] | None = Field(
-        default=None, description="Full replacement list of tag slugs; created if unknown."
+    tags: list[TagSlug] | None = Field(
+        default=None,
+        description=(
+            "Full replacement list of tag slugs (at most 64 characters each); created if unknown."
+        ),
     )
     projects: list[str] | None = Field(
         default=None,

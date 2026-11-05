@@ -72,7 +72,7 @@ from mcp.server.auth.routes import build_metadata, build_resource_metadata_url, 
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
 from mcp.shared.auth import ProtectedResourceMetadata
 from mcp.types import ToolAnnotations
-from pydantic import AnyHttpUrl, Field
+from pydantic import AnyHttpUrl, BaseModel, Field
 from pydantic_core import to_jsonable_python
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,6 +87,15 @@ from library.auth.oauth_provider import LibraryOAuthProvider
 from library.auth.service import validate_api_token
 from library.config import Settings, get_settings
 from library.db import get_sessionmaker
+from library.document_reads import (
+    DocumentText,
+    DocumentTextRangeError,
+    TextSource,
+    document_text,
+    document_web_url,
+    list_item_fields,
+    load_comments,
+)
 from library.documents_service import (
     DocumentEditError,
     edit_document,
@@ -98,18 +107,37 @@ from library.models import (
     Document,
     DocumentLanguage,
     DocumentSource,
+    DocumentStatus,
     IngestionEvent,
     Kind,
+    ReviewStatus,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
-from library.schemas import CommentOut, CurrencyCode, DocumentUpdate
-from library.search import DocumentFilters, build_document_query
+from library.schemas import (
+    CommentOut,
+    CurrencyCode,
+    DocumentFields,
+    DocumentListItem,
+    DocumentUpdate,
+    TagSlug,
+)
+from library.search import (
+    DEFAULT_DOCUMENT_SORT,
+    DEFAULT_SORT_DIRECTION,
+    DocumentFilters,
+    DocumentSort,
+    SortDirection,
+    build_document_query,
+)
 from library.spend_lines import AllocationError
 from library.storage import derived_path, path_for
 
 logger = logging.getLogger(__name__)
 
-OCR_TEXT_LIMIT: int = 20_000
+#: get_document's text window: default, floor and ceiling of ``max_chars``.
+DOCUMENT_TEXT_DEFAULT_CHARS: int = 20_000
+DOCUMENT_TEXT_MIN_CHARS: int = 1_000
+DOCUMENT_TEXT_MAX_CHARS: int = 50_000
 MAX_FILE_BYTES: int = 10 * 1024 * 1024
 SEARCH_LIMIT_MAX: int = 50
 #: The largest value a Postgres BIGINT (``documents.id``) holds. Bounding the
@@ -135,12 +163,19 @@ invoices, receipts, contracts, and similar documents in Dutch and
 English, made searchable by OCR and metadata extraction.
 
 Start with `search_documents` to find documents (full-text search with
-Dutch and English stemming, plus metadata filters), then `get_document`
-for the full text of one document. Use `list_kinds`, `list_senders`,
+Dutch and English stemming, plus metadata filters; page with `offset`),
+then `get_document` for one document's text, the household's comments on
+it and whether its details are trusted (`review_status`). Long documents
+come in pages: follow `next_start_page`. Use `list_kinds`, `list_senders`,
 `list_recipients`, `list_tags`, `list_projects`, and `list_matters` to
 discover valid filter values,
 `library_stats` for an overview, `get_document_file` to retrieve the
 actual file, and `ingest_document` to add a new document to the archive.
+
+Amounts: `amount_total` is always a magnitude and `amount_kind` says what
+it is (paid, due, refunded, a coverage limit, ...). Do not add amounts up
+across documents yourself: the sign depends on `amount_kind`, and one
+payment often appears on several documents.
 
 To correct a document's details (title, kind, sender, dates, amount,
 tags, ...) use `update_document_metadata` in two steps: call it without
@@ -431,44 +466,108 @@ async def _get_document(
     return document
 
 
-def _document_summary(document: Document) -> dict[str, Any]:
-    """The metadata fields shared by search results and document detail."""
-    return {
-        "id": document.id,
-        "title": document.title,
-        "summary": document.summary,
-        "kind": (
-            {"slug": document.kind.slug, "name": document.kind.name} if document.kind else None
-        ),
-        "sender": (
-            {"id": document.sender.id, "name": document.sender.name} if document.sender else None
-        ),
-        "recipient": (
-            {"id": document.recipient.id, "name": document.recipient.name}
-            if document.recipient
-            else None
-        ),
-        "tags": [
-            {"slug": tag.slug, "name": tag.name}
-            for tag in sorted(document.tags, key=lambda tag: tag.slug)
-        ],
-        "topics": list(document.topics or []),
-        "projects": [
-            {"slug": project.slug, "name": project.name}
-            for project in sorted(document.projects, key=lambda project: project.slug)
-        ],
-        "matters": [
-            {"slug": matter.slug, "name": matter.name}
-            for matter in sorted(document.matters, key=lambda matter: matter.slug)
-        ],
-        "document_date": document.document_date.isoformat() if document.document_date else None,
-        "language": document.language.value,
-        "status": document.status.value,
-        "mime_type": document.mime_type,
-        "page_count": document.page_count,
-        "created_at": document.created_at.isoformat(),
-        "updated_at": document.updated_at.isoformat(),
-    }
+# ------------------------------------------------------------- read results
+#
+# Typed, so FastMCP publishes an ``outputSchema`` for each read tool. The
+# fields are ``schemas.DocumentFields``, built by
+# ``document_reads.list_item_fields`` — the same values the web app's list
+# and detail views show.
+
+
+class DocumentEvent(BaseModel):
+    """One audit-trail entry: what happened to the document, and when."""
+
+    event: str
+    created_at: datetime
+
+
+class DocumentRead(DocumentFields):
+    """The result of get_document."""
+
+    source: DocumentSource = Field(description="How the document entered the archive.")
+    original_filename: str | None
+    sha256: str
+    ocr_confidence: float | None
+    web_url: str | None = Field(
+        description=(
+            "The document's page in the Library web app, to give the user; null when "
+            "the server has no public URL configured."
+        )
+    )
+    text: str = Field(
+        description=(
+            "The document's text: its per-page markdown (the text search matches on) "
+            "joined with blank lines, or its OCR text when it has no pages yet."
+        )
+    )
+    text_source: TextSource = Field(
+        description="'pages' (page markdown), 'ocr_text' (no pages yet) or 'none' (no text)."
+    )
+    text_page_count: int = Field(description="Pages of text the document has; 0 without pages.")
+    text_start_page: int | None = Field(description="First page in `text`; null without pages.")
+    text_end_page: int | None = Field(
+        description="Last page in `text`, possibly only its start; null without pages."
+    )
+    text_truncated: bool = Field(description="True when more text follows `text`.")
+    text_total_chars: int = Field(description="Length of the whole text, every page.")
+    next_start_page: int | None = Field(
+        description="The start_page to pass to read on; null when there is no next page."
+    )
+    continuation: str | None = Field(
+        description="How to read the rest when `text_truncated`; null otherwise."
+    )
+    comments: list[CommentOut] = Field(
+        description=(
+            "Household members' comments, newest first: personal context the document "
+            "does not say. author_id is the Library user who wrote it."
+        )
+    )
+    events: list[DocumentEvent] = Field(description="Audit trail, oldest first.")
+
+
+class SearchResults(BaseModel):
+    """The result of search_documents."""
+
+    results: list[DocumentListItem]
+    total: int = Field(description="Matching documents, before limit and offset.")
+    offset: int
+    limit: int
+    next_offset: int | None = Field(
+        description="The offset of the next page of results; null on the last page."
+    )
+
+
+def _continuation(window: DocumentText, max_chars: int) -> str | None:
+    """How to read past ``window``, worded for the model; ``None`` when the
+    window reaches the end of the text."""
+    if not window.truncated:
+        return None
+    if window.source != "pages":
+        return (
+            f"The text is {window.total_chars} characters and stops at {max_chars}. "
+            "This document has no page text to page through: call get_document again "
+            f"with a larger max_chars (up to {DOCUMENT_TEXT_MAX_CHARS}), or use "
+            "get_document_file for the original file."
+        )
+    end, count, following = window.end_page, window.page_count, window.next_start_page
+    if window.end_page_complete:
+        return (
+            f"The text stops after page {end} of {count}. Call get_document again with "
+            f"start_page={following} to continue."
+        )
+    if following == end:
+        return (
+            f"The text stops part-way through page {end} of {count}. Call get_document "
+            f"again with start_page={following} to continue (page {end} is repeated whole)."
+        )
+    hint = (
+        f"Page {end} is longer than max_chars={max_chars} and was cut. Call get_document "
+        f"again with start_page={end} and a larger max_chars (up to "
+        f"{DOCUMENT_TEXT_MAX_CHARS}) to read it whole, or use get_document_file."
+    )
+    if following is not None:
+        hint += f" The next page is start_page={following}."
+    return hint
 
 
 # -------------------------------------------------------------------- tools
@@ -480,7 +579,7 @@ async def search_documents(
         str | None,
         Field(
             description=(
-                "Full-text search over title, summary, and OCR text, stemmed in "
+                "Full-text search over title, summary, and document text, stemmed in "
                 "both Dutch and English (searching 'rekening' finds 'rekeningen'). "
                 "Websearch syntax: quoted phrases, OR, -exclusion. Omit to browse "
                 "by filters only."
@@ -509,21 +608,53 @@ async def search_documents(
             )
         ),
     ] = None,
-    tag: Annotated[
-        str | None,
-        Field(description="Filter by tag slug (see list_tags)."),
+    tags: Annotated[
+        list[str] | None,
+        Field(description="Tag slugs (see list_tags); a document must have ALL of them."),
     ] = None,
-    project: Annotated[
-        str | None,
-        Field(description="Filter by project slug (see list_projects)."),
+    projects: Annotated[
+        list[str] | None,
+        Field(description="Project slugs (see list_projects); a document in ANY of them matches."),
     ] = None,
-    matter: Annotated[
-        str | None,
-        Field(description="Filter by matter slug (see list_matters)."),
+    matters: Annotated[
+        list[str] | None,
+        Field(description="Matter slugs (see list_matters); a document in ANY of them matches."),
+    ] = None,
+    facets: Annotated[
+        dict[str, str] | None,
+        Field(
+            description=(
+                "Facet labels as {facet_key: value_key}, e.g. {'category': 'energy'}; a "
+                "document must carry ALL of them (it holds one value per facet)."
+            )
+        ),
     ] = None,
     language: Annotated[
         DocumentLanguage | None,
         Field(description="Filter by detected document language."),
+    ] = None,
+    status: Annotated[
+        DocumentStatus | None,
+        Field(
+            description=(
+                "Filter by processing state; 'indexed' is fully processed, 'failed' "
+                "means processing stopped."
+            )
+        ),
+    ] = None,
+    review_status: Annotated[
+        ReviewStatus | None,
+        Field(
+            description=(
+                "Filter by whether the extracted details are trusted: 'verified' "
+                "(checked by a person), 'needs_review' (validation flagged them), "
+                "'unreviewed'."
+            )
+        ),
+    ] = None,
+    source: Annotated[
+        DocumentSource | None,
+        Field(description="Filter by how the document entered the archive."),
     ] = None,
     date_from: Annotated[
         date | None,
@@ -533,19 +664,45 @@ async def search_documents(
         date | None,
         Field(description="Only documents dated on or before this ISO date (document_date)."),
     ] = None,
+    sort: Annotated[
+        DocumentSort,
+        Field(
+            description=(
+                "Order without `query`: 'document_date' (undated last) or "
+                "'added_date'. Ignored with `query`, which orders by relevance."
+            )
+        ),
+    ] = DEFAULT_DOCUMENT_SORT,
+    direction: Annotated[
+        SortDirection,
+        Field(description="'desc' (newest first, the default) or 'asc'. Ignored with `query`."),
+    ] = DEFAULT_SORT_DIRECTION,
     limit: Annotated[
         int,
         Field(ge=1, le=SEARCH_LIMIT_MAX, description="Maximum number of results."),
     ] = 10,
-) -> dict[str, Any]:
+    offset: Annotated[
+        int,
+        Field(
+            ge=0,
+            le=MAX_DOCUMENT_ID,
+            description="Results to skip, to page past `limit` (pass next_offset).",
+        ),
+    ] = 0,
+) -> SearchResults:
     """Search and filter the document archive; the primary way to find documents.
 
-    Returns the matching documents (id, title, summary, kind, sender,
-    recipient, tags, document_date, language) plus the total match count. With `query`,
-    results are ranked by relevance and each carries a `snippet` (matching
-    OCR-text fragments, matches wrapped in <b>...</b>) and a `rank` score;
-    without it, newest documents come first. All filters AND-combine.
-    Follow up with get_document for the full text of a result.
+    Returns {results, total, offset, limit, next_offset}. Each result has the
+    document's id, title, summary, kind, sender, recipient, tags, projects,
+    matters, dates, amount_total, currency, amount_kind, review_status and
+    processing status. With `query`, results are ranked by relevance and
+    each carries a `snippet` (matching text fragments, matches wrapped in
+    <b>...</b>) and a `rank` score; without it, newest documents come first.
+    All filters AND-combine. Page with `offset` (next_offset is the next
+    page's offset, null on the last). Follow up with get_document for a
+    result's full text. amount_total is always a magnitude: amount_kind says
+    whether it is money paid, due or refunded, so do not add amounts up
+    across results yourself.
     """
     document_query = build_document_query(
         query,
@@ -553,76 +710,121 @@ async def search_documents(
             kind_slug=kind,
             sender_contains=sender,
             recipient_contains=recipient,
-            tag_slugs=(tag,) if tag else (),
-            project_slugs=(project,) if project else (),
-            matter_slugs=(matter,) if matter else (),
+            tag_slugs=tuple(tags or ()),
+            project_slugs=tuple(projects or ()),
+            matter_slugs=tuple(matters or ()),
+            facets=dict(facets or {}),
             language=language,
+            status=status,
+            review_status=review_status,
+            source=source,
             date_from=date_from,
             date_to=date_to,
+            sort=sort,
+            direction=direction,
         ),
     )
     async with _session() as session:
         total = (await session.execute(document_query.count)).scalar_one()
-        result = await session.execute(document_query.statement.limit(limit))
+        result = await session.execute(document_query.statement.limit(limit).offset(offset))
         if document_query.has_rank:
             results = [
-                {**_document_summary(document), "snippet": snippet, "rank": float(rank)}
+                DocumentListItem(**list_item_fields(document), snippet=snippet, rank=rank)
                 for document, rank, snippet in result.all()
             ]
         else:
             results = [
-                {**_document_summary(document), "snippet": None, "rank": None}
+                DocumentListItem(**list_item_fields(document))
                 for document in result.scalars().all()
             ]
-    return {"results": results, "total": total}
+    following = offset + len(results)
+    return SearchResults(
+        results=results,
+        total=total,
+        offset=offset,
+        limit=limit,
+        next_offset=following if following < total and results else None,
+    )
 
 
 @mcp.tool(title="Get document", annotations=READ_ONLY)
 async def get_document(
     document_id: DocumentId,
-) -> dict[str, Any]:
-    """Fetch one document's full metadata, OCR text, and processing history.
+    start_page: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=MAX_DOCUMENT_ID,
+            description=(
+                "The page of text to start at (default 1); pass next_start_page to "
+                "read on through a long document."
+            ),
+        ),
+    ] = 1,
+    max_chars: Annotated[
+        int,
+        Field(
+            ge=DOCUMENT_TEXT_MIN_CHARS,
+            le=DOCUMENT_TEXT_MAX_CHARS,
+            description="The most characters of text to return (default 20000).",
+        ),
+    ] = DOCUMENT_TEXT_DEFAULT_CHARS,
+) -> DocumentRead:
+    """Fetch one document: its metadata, its text, the household's comments on it.
 
-    Returns everything search_documents shows plus financial fields
-    (amount_total, currency, due_date, expiry_date), provenance (source,
-    original_filename, sha256, ocr_confidence), the audit-trail events,
-    and the full OCR text. OCR text longer than 20,000 characters is
-    truncated with an explanatory note and `ocr_text_truncated: true`;
-    get_document_file returns the original file if you need all of it.
-    Errors if the document id is unknown or deleted.
+    Returns everything search_documents shows plus provenance (source,
+    original_filename, sha256, ocr_confidence), `web_url` (its page in the
+    Library web app, when configured), the comments (personal context the
+    document itself does not say; newest first), the audit-trail events,
+    and `text`: the document's page markdown, which is what search matches
+    on, or its OCR text when it has no pages yet. `review_status` says
+    whether the extracted details are trusted ('needs_review' comes with
+    `review_findings`).
+
+    Text is paged: at most `max_chars` characters (default 20000) from
+    `start_page` on. When `text_truncated` is true, `continuation` says how
+    to read on, usually by calling again with `start_page=next_start_page`.
+
+    Money: amount_total is always a magnitude and amount_kind says what it
+    is (payment_due, payment_made, refund = money back, coverage_limit,
+    ...). Do not add up amount_total across documents yourself: the sign
+    depends on amount_kind and one payment often appears on several
+    documents (an invoice and its receipt).
+
+    Errors if the document id is unknown or deleted, or `start_page` is past
+    the document's last page of text.
     """
     async with _session() as session:
         document = await _get_document(session, document_id)
-        ocr_text = document.ocr_text
-        truncated = False
-        if ocr_text is not None and len(ocr_text) > OCR_TEXT_LIMIT:
-            note = (
-                f"\n[... truncated: the full text is {len(ocr_text)} characters; "
-                "get_document_file returns the original file, or open the "
-                "document in the Library web app]"
+        try:
+            window = await document_text(
+                session, document, max_chars=max_chars, start_page=start_page
             )
-            ocr_text = ocr_text[:OCR_TEXT_LIMIT] + note
-            truncated = True
-        return {
-            **_document_summary(document),
-            "source": document.source.value,
-            "original_filename": document.original_filename,
-            "sha256": document.sha256,
-            "amount_total": (
-                str(document.amount_total) if document.amount_total is not None else None
-            ),
-            "currency": document.currency,
-            "due_date": document.due_date.isoformat() if document.due_date else None,
-            "expiry_date": document.expiry_date.isoformat() if document.expiry_date else None,
-            "ocr_confidence": document.ocr_confidence,
-            "ocr_text": ocr_text,
-            "ocr_text_truncated": truncated,
-            "has_searchable_pdf": document.searchable_pdf,
-            "events": [
-                {"event": event.event, "created_at": event.created_at.isoformat()}
+        except DocumentTextRangeError as exc:
+            raise ToolError(str(exc)) from exc
+        comments = await load_comments(session, document_id, newest_first=True)
+        return DocumentRead(
+            **list_item_fields(document),
+            source=document.source,
+            original_filename=document.original_filename,
+            sha256=document.sha256,
+            ocr_confidence=document.ocr_confidence,
+            web_url=document_web_url(get_settings().public_base_url, document_id),
+            text=window.text,
+            text_source=window.source,
+            text_page_count=window.page_count,
+            text_start_page=window.start_page,
+            text_end_page=window.end_page,
+            text_truncated=window.truncated,
+            text_total_chars=window.total_chars,
+            next_start_page=window.next_start_page,
+            continuation=_continuation(window, max_chars),
+            comments=[CommentOut.model_validate(comment) for comment in comments],
+            events=[
+                DocumentEvent(event=event.event, created_at=event.created_at)
                 for event in sorted(document.events, key=lambda event: event.id)
             ],
-        }
+        )
 
 
 @mcp.tool(title="Get document file", annotations=READ_ONLY)
@@ -864,11 +1066,12 @@ async def update_document_metadata(
         ),
     ] = None,
     tags: Annotated[
-        list[str] | None,
+        list[TagSlug] | None,
         Field(
             description=(
-                "The complete new list of tag slugs (replaces the current tags; "
-                f"unknown slugs are created). [] removes every tag. {_UNCHANGED}"
+                "The complete new list of tag slugs, at most 64 characters each "
+                "(replaces the current tags; unknown slugs are created). [] removes "
+                f"every tag. {_UNCHANGED}"
             )
         ),
     ] = None,

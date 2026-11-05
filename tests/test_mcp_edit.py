@@ -352,19 +352,41 @@ async def test_edit_database_refusal_at_preview_is_masked(
 ) -> None:
     """A database error in the preview's dry run that is not the allocation
     refusal is re-raised, so the client sees the generic masked error (never
-    SQL) and nothing is kept. A tag slug longer than ``tags.slug``'s 64
-    characters is one such error."""
+    SQL) and nothing is kept. A sender name longer than ``senders.name``'s 255
+    characters is one such error. (A long tag used to be the example; tags are
+    now bounded by argument validation: ``test_edit_long_tag_is_an_argument_error``.)"""
     document_id = await _seed_document(
         api_database_url, f"mcp-edit-dberror-{secrets.token_hex(4)}", title="Unchanged"
+    )
+    long_name = "x" * 256
+    async with connect(owner_token) as session:
+        result = await _call(session, {"document_id": document_id, "sender": long_name})
+    assert error_text(result) == "Error calling tool 'update_document_metadata'"
+    assert await _edit_events(api_database_url, document_id) == []
+    assert (
+        await _fetch_all(api_database_url, "SELECT id FROM senders WHERE name = :s", s=long_name)
+        == []
+    )
+
+
+async def test_edit_long_tag_is_an_argument_error(
+    connect: Connector, owner_token: str, api_database_url: str
+) -> None:
+    """A tag over ``tags.slug``'s 64 characters is refused, naming the bound,
+    before any SQL runs; the parameter's own type carries the bound (the same
+    one as the PATCH body), so tools/list advertises it to the client."""
+    document_id = await _seed_document(
+        api_database_url, f"mcp-edit-longtag-{secrets.token_hex(4)}", title="Unchanged"
     )
     long_slug = "x" * 65
     async with connect(owner_token) as session:
         result = await _call(session, {"document_id": document_id, "tags": [long_slug]})
-    assert error_text(result) == "Error calling tool 'update_document_metadata'"
+        tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+    assert "at most 64 characters" in error_text(result)
+    tags_schema = tools["update_document_metadata"].inputSchema["properties"]["tags"]
+    (item_schema,) = [option["items"] for option in tags_schema["anyOf"] if "items" in option]
+    assert item_schema["maxLength"] == 64
     assert await _edit_events(api_database_url, document_id) == []
-    assert (
-        await _fetch_all(api_database_url, "SELECT id FROM tags WHERE slug = :s", s=long_slug) == []
-    )
 
 
 async def test_edit_invalid_value_fails_at_preview(

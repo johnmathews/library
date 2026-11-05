@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from library import thumbnails
 from library.config import get_settings
 from library.db import get_sessionmaker
+from library.document_reads import load_comments, load_pages
 from library.embedding import EmbeddingError, embed_texts
 from library.embedding.chunker import chunker_for_mime
 from library.extraction.apply import apply_extraction, flag_textless_document
@@ -55,8 +56,6 @@ from library.matter_classifier import apply_matter_classification
 from library.models import (
     Document,
     DocumentChunk,
-    DocumentComment,
-    DocumentPage,
     DocumentStatus,
     IngestionEvent,
     ReviewStatus,
@@ -344,17 +343,7 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
         await _record_embed_event(session, document, "embedding_skipped", {"reason": "disabled"})
         return
 
-    pages = (
-        (
-            await session.execute(
-                select(DocumentPage)
-                .where(DocumentPage.document_id == document.id)
-                .order_by(DocumentPage.page_number)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    pages = await load_pages(session, document.id)
 
     chunker = chunker_for_mime(document.mime_type)
     chunk_records: list[tuple[str, int | None]] = []
@@ -374,17 +363,7 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
         ):
             chunk_records.append((piece, None))
 
-    comments = (
-        (
-            await session.execute(
-                select(DocumentComment)
-                .where(DocumentComment.document_id == document.id)
-                .order_by(DocumentComment.created_at)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    comments = await load_comments(session, document.id, newest_first=False)
     # One chunk per comment (never sub-chunked), framed to carry the date so
     # the text itself explains when it was written.
     comment_records: list[tuple[str, int]] = [

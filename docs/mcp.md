@@ -1,8 +1,8 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.3 *Editing*: a preview's `proposed` is the value applying would store, read back from a rolled-back dry run, and the preview token hashes that). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.3's *Editing* paragraph. Read `update_document_metadata`, `_preview_token` and `documents_service.preview_update` against the prose; the 19 tests in `tests/test_mcp_edit.py` green, the four new stored-value tests seen red first (the preview showed `12.345` and the uncollapsed sender). The rest carries its earlier verifications forward.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py
+**Status:** active. **Last updated:** 2026-11-05 (§1.3: `get_document` returns page markdown, paged, with comments, `review_status`, `amount_kind` and `web_url`; `search_documents` gains `offset`, list filters, facets, status, review, source and sort, and the web app's list fields). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to §1.3's `search_documents` and `get_document` rows and *Reading*. The new read tests in `tests/test_mcp.py` pass, each seen red first or killed by a hand-made mutant; the prose was read against `mcp_server.py` and `document_reads.py`.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/document_reads.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,
@@ -154,7 +154,8 @@ file, unsupported type) come back as MCP tool errors whose text is
 written for the model and never points at the REST API, which an LLM
 connector cannot call; where the user has to act, the text says to open
 the document in the Library web app. Invalid arguments (a `document_id`
-below 1 or above the Postgres `BIGINT` maximum, a `limit` above 50) are
+below 1 or above the Postgres `BIGINT` maximum, a `limit` above 50, a
+`max_chars` outside 1 000–50 000, a tag longer than 64 characters) are
 argument-validation errors naming the bound. Anything unexpected (a bug,
 a database failure) is masked to `Error calling tool '<name>'`, so SQL
 and schema details never reach a client; the full error goes to the
@@ -174,8 +175,8 @@ user to confirm any tool without it). The three write tools are
 
 | Tool | Parameters | Returns |
 |------|------------|---------|
-| `search_documents` | `query?` (websearch syntax, Dutch+English stemming), `kind?` (slug), `sender?` (case-insensitive substring of sender name), `recipient?` (case-insensitive substring of recipient name), `tag?` (slug), `project?` (slug — see `list_projects`), `matter?` (slug — see `list_matters`), `language?` (`nld`/`eng`/`mixed`/`unknown`), `date_from?`, `date_to?` (ISO dates, inclusive, on `document_date`), `limit` (default 10, max 50) | `{results: [{id, title, summary, kind, sender, recipient, tags, topics, projects, matters, document_date, language, status, mime_type, page_count, created_at, updated_at, snippet, rank}], total}` — ranked when `query` is given, newest-first otherwise. Snippets carry `<b>…</b>` match markers. |
-| `get_document` | `document_id` | Every field of a search result (above) plus amount, provenance, `has_searchable_pdf`, OCR text (truncated at 20 000 characters with an explanatory note and `ocr_text_truncated: true`) and the audit-trail events `[{event, created_at}]`. `topics` are read-only auto-extracted. |
+| `search_documents` | `query?` (websearch syntax, Dutch+English stemming), `kind?` (slug), `sender?` (case-insensitive substring of sender name), `recipient?` (case-insensitive substring of recipient name), `tags?` (slugs, a document must have all), `projects?` (slugs — see `list_projects`; any of them), `matters?` (slugs — see `list_matters`; any of them), `facets?` (`{facet_key: value_key}`, all of them), `language?` (`nld`/`eng`/`mixed`/`unknown`), `status?` (processing state), `review_status?` (`verified`/`needs_review`/`unreviewed`), `source?`, `date_from?`, `date_to?` (ISO dates, inclusive, on `document_date`), `sort` (`document_date` default, or `added_date`) and `direction` (`desc` default, or `asc`), both ignored with `query`; `limit` (default 10, max 50), `offset` (default 0) | `{results, total, offset, limit, next_offset}`. Each result is a row of the web app's list ([api.md §1.3.2](api.md)): `id, title, summary, kind, sender, recipient, tags, topics, projects, matters, document_date, due_date, expiry_date, language, status, mime_type, page_count, created_at, updated_at, has_searchable_pdf, has_thumbnail, review_status, review_findings, amount_total, currency, amount_kind, snippet, rank`. Ranked when `query` is given (snippets carry `<b>…</b>` match markers), otherwise ordered by `sort`. `next_offset` is the next page's `offset`, `null` on the last page. |
+| `get_document` | `document_id`, `start_page` (default 1), `max_chars` (default 20 000, 1 000–50 000) | Every field of a search result except `snippet`/`rank`, plus provenance (`source`, `original_filename`, `sha256`, `ocr_confidence`), `web_url`, the document's `text` with its paging fields (*Reading* below), `comments` `[{id, document_id, author_id, body, created_at}]` newest first, and the audit-trail `events` `[{event, created_at}]`. `topics` are read-only auto-extracted. |
 | `get_document_file` | `document_id`, `variant` = `"original"` (default) or `"searchable_pdf"` | `{filename, mime_type, size_bytes, content_base64}`. Files over 10 MB are refused with an error telling the user to download the file from the web app. A variant that was never produced is an error. |
 | `ingest_document` | `filename`, `content_base64` (PDF, JPEG, PNG, HEIC/HEIF, TIFF, plain text, Markdown, DOCX), `source_note?` | `{id, sha256, status, duplicate}`. Runs the same ingestion service as uploads (dedup by SHA-256, OCR + extraction queued); `source` is recorded as `mcp` and the calling token's user as uploader. A `source_note` is stored on the audit trail — but only when the ingest was not a duplicate, since a duplicate creates no new document to attach it to. Content matching a document in the trash is refused until it is restored or purged. |
 | `list_kinds` | — | `{kinds: [{slug, name, document_count}]}` |
@@ -189,11 +190,47 @@ user to confirm any tool without it). The three write tools are
 | `library_stats` | — | `{total_documents, by_status, by_kind, ingested_last_7_days, oldest_document_date, newest_document_date}`. `by_status` counts the lifecycle states that have documents (`received`, `ocr`, `extract`, `markdown`, `embed`, `indexed`, `failed`); soft-deleted documents are excluded from every figure. |
 
 `search_documents` shares its query builder (`src/library/search.py`)
-with `GET /api/documents`, so full-text matching, stemming and ranking are
-the same; see [api.md §1.3.3](api.md) for those semantics. It exposes a
-subset of the REST filters (one tag, project or matter per call; sender
-and recipient by name substring; no facet, status or review filters, no
-`offset`) and returns at most 50 results per call.
+with `GET /api/documents`, so full-text matching, stemming, ranking and
+every filter mean the same; see [api.md §1.3.3](api.md) for those
+semantics. Two differences: sender and recipient are matched by name
+substring (the web app filters by id), and a call returns at most 50
+results (the web app's list allows 100).
+
+Both read tools declare their result type, so `tools/list` carries an
+`outputSchema` for each, and both build their fields with
+`document_reads.list_item_fields`, the same function as the web app's
+list and detail views (`src/library/document_reads.py`).
+
+**Reading: page text, paged.** `get_document`'s `text` is the document's
+per-page markdown joined with blank lines, which is the text full-text
+search indexes (`coalesce(pages_markdown, ocr_text)`), so a document
+found on a word is shown with that word. A document with no pages yet
+(not converted, or markdown off) falls back to its OCR text
+(`text_source` is `pages`, `ocr_text` or `none`). Ask's `get_document`
+reads through the same `document_reads.document_text`.
+
+- The text runs from `start_page` for at most `max_chars` characters and
+  always holds as much as fits: a page that does not fit whole is cut, not
+  dropped. `text_start_page`/`text_end_page` are the first and last page
+  in it, `text_page_count` the pages the document has, `text_total_chars`
+  the whole text's length.
+- When more follows (`text_truncated: true`), `next_start_page` is where
+  to continue and `continuation` says so in words. If the window holds
+  only the start of a page, that page is next and is read whole. If the
+  cut page is the window's first (it is longer than `max_chars`),
+  `next_start_page` is the following page and `continuation` says to ask
+  again with a larger `max_chars` (up to 50 000) to read the cut page
+  whole, or to use `get_document_file`.
+- OCR text has no pages: `start_page` above 1 is an error, and the only
+  ways to more text are a larger `max_chars` or `get_document_file`. A
+  `start_page` past the last page is an error naming the page count.
+- `web_url` is `{LIBRARY_PUBLIC_BASE_URL}/documents/{id}`, the link push
+  notifications carry; `null` when that setting is unset.
+- Money: `amount_total` is always a magnitude and `amount_kind` says what
+  it is (a `refund` is money back). The tool descriptions and the server
+  instructions tell the model not to add amounts up across documents
+  itself: the sign depends on `amount_kind`, and one payment often has
+  several documents (an invoice and its receipt).
 
 **Editing: preview, then apply.** `update_document_metadata` never
 writes on the first call. Without `apply` it returns the current value

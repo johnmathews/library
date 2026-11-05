@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.19: creating a comment is `comments_service.add_comment`, shared with the MCP `add_comment` tool). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.19's POST row and its shared-service sentence. Read `create_comment` and `comments_service.add_comment` against the prose; `tests/test_api_comments.py` green unchanged after the route moved onto the service. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-05 (§1.3.2: list items carry `amount_kind`; §1.5: a tag slug is at most 64 characters). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: partial, scoped to those two changes. `tests/test_documents_api.py::test_list_item_carries_amount_kind` and `::test_patch_tag_longer_than_the_slug_column_is_422` pass (the second seen red first: the long tag reached Postgres and raised a database error). The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -200,7 +200,7 @@ row's `created_at`. With `q` present, relevance rank always wins and
       "page_count": 2,
       "created_at": "2026-06-10T12:00:00Z", "updated_at": "2026-06-11T09:30:00Z",
       "has_searchable_pdf": true, "has_thumbnail": true,
-      "amount_total": "123.45", "currency": "EUR",
+      "amount_total": "123.45", "currency": "EUR", "amount_kind": "payment_due",
       "snippet": "uw <b>rekening</b> voor mei … totaal",
       "rank": 0.31
     }
@@ -221,7 +221,11 @@ populated only when `review_status` is `needs_review`, `[]` otherwise (the full
 provenance blob stays on the detail endpoint's `validation`, §1.4). It lets the
 dashboard and review queue show a short reason without a second request.
 `amount_total` (JSON string, preserves decimal precision) and `currency`
-(3-letter code) are `null` when not set on the document. The list item carries
+(3-letter code) are `null` when not set on the document. `amount_total` is
+always a magnitude; `amount_kind` says what it is (`payment_due`,
+`payment_made`, `assessment`, `refund` — money back, the one kind a total
+subtracts — `coverage_limit`, `balance`, `estimate`, `none`), or `null` while
+undecided ([charts.md](charts.md) has how totals use it). The list item carries
 all five document dates so the dashboard tiles can show any of them: the
 nullable `document_date`, `due_date` and `expiry_date`, plus the always-present
 `created_at` ("Date added to library") and `updated_at` ("Last edited") — see the
@@ -331,7 +335,7 @@ JSON body; only the fields present in the body change. Editable fields:
 | `kind_slug` | Must be an existing kind slug (`422` otherwise); `null` clears the kind |
 | `sender` | Sender **name**; upserted case-insensitively (same rule extraction uses); `null` clears |
 | `recipient` | Recipient **name**; upserted case-insensitively — a manual edit always creates the recipient if new (extraction only creates from a **high-confidence** document-stated name, see ingestion.md); `null` clears |
-| `tags` | **Full replacement** list of slugs; unknown slugs are created; `[]` clears; `null` is rejected |
+| `tags` | **Full replacement** list of slugs, each at most 64 characters (`422` otherwise); unknown slugs are created; `[]` clears; `null` is rejected |
 | `projects` | **Full replacement** list of project slugs *or names*; unknown identifiers are upserted (a name becomes a new project, slugified); `[]` clears membership; `null` is rejected. Also appends a `project_changed` ingestion event |
 | `matters` | **Full replacement** list of matter slugs *or names*; unknown identifiers are upserted (a name becomes a new matter, slugified); `[]` clears membership; `null` is rejected. Also appends a `matter_changed` ingestion event; the edit locks `matters` in `extra["user_edited_fields"]`, so the auto-classifier ([ingestion.md](ingestion.md), "Matter classification") never overwrites a hand-curated matter set |
 | `language` | `nld` / `eng` / `mixed` / `unknown`; `null` rejected |
