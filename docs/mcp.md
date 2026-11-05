@@ -150,7 +150,7 @@ clients are not supported.
 
 All tools require auth.
 
-**Errors.** Expected failures (unknown or deleted document, oversized
+**Errors.** Expected failures (unknown or deleted document, oversized upload
 file, unsupported type) come back as MCP tool errors whose text is
 written for the model and never points at the REST API, which an LLM
 connector cannot call; where the user has to act, the text says to open
@@ -217,8 +217,10 @@ tools answer it with an empty result whose `total` or `coverage.matched`
 is 0, which is a count, not a total that reads like an answer.
 
 `search_documents`, `semantic_search`, `get_document`,
-`get_library_context` and `money_query` declare their result type, so
-`tools/list` carries an `outputSchema` for each. The three document tools build their fields
+`get_library_context`, `money_query`, `create_note` and
+`get_document_file` declare their result type, so `tools/list` carries an
+`outputSchema` for each. `search_documents`, `semantic_search` and
+`get_document` build their document fields
 with `document_reads.list_item_fields`, the same function as the web
 app's list and detail views (`src/library/document_reads.py`).
 

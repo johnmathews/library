@@ -34,7 +34,7 @@ in W13.
   passes unchanged.
 - **`create_note`** (MCP): title (stripped, 1–200 characters, the web
   editor's cap) and a non-blank Markdown body; the uploader is the
-  connected user. It returns `{id, title, status, page_count, web_url}`. Its
+  connected user. It returns `{id, title, status, page_count, web_url}` (plus `warning`, added in §7). Its
   annotations say it adds but is not idempotent, because notes skip dedup.
   So the description and the server instructions tell the model to call it
   once per note and to search for the title before any retry.
@@ -86,12 +86,11 @@ in W13.
   is a name only; the server registers no MCP resources.
 - No short-lived signed download link: `download_url` relies on the user's
   web-app session.
-- `POST /api/notes` accepts any title length, but `original_filename` is
-  `{title}.md` in a 1024-character column, so a longer title is a database
-  error there (checked: a 1,100-character title raises asyncpg's
-  `StringDataRightTruncationError`, so it is an unhandled 500). Not changed
-  here, because REST behaviour is out of scope; the MCP tool caps titles at
-  200.
+- `POST /api/notes` accepted any title length, but `original_filename` is
+  `{title}.md` in a 1024-character column, so a longer title was a database
+  error (checked: a 1,100-character title raised asyncpg's
+  `StringDataRightTruncationError`, an unhandled 500). W11 left it alone as
+  out of scope; the review fixes in §7 cap it at 200 on create and edit.
 
 ## 6. W12: CI smoke test and tool metrics
 
