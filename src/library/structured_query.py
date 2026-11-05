@@ -23,6 +23,7 @@ from typing import Any, Literal, TypedDict
 from sqlalchemy import (
     CTE,
     ColumnElement,
+    FromClause,
     Integer,
     and_,
     case,
@@ -459,6 +460,7 @@ def _signed_amount(kinds: frozenset[AmountKind]) -> ColumnElement[Decimal]:
 def _payment_choices(
     candidates: Sequence[ColumnElement[bool]],
     group_key_id: InstrumentedAttribute[int | None] | None,
+    facts: FromClause = spend_facts,
 ) -> CTE:
     """One row per candidate document: which document carries its payment.
 
@@ -476,8 +478,9 @@ def _payment_choices(
     does).
 
     **The candidates** are the documents that pass every caller filter
-    EXCEPT the date window, and the earlier gates of ``sum_amount``; under a
-    facet filter, only their rows that carry it are joined. The view
+    EXCEPT the date window, and the earlier gates of ``sum_amount``. Under a
+    facet filter ``facts`` is the view's rows that carry it
+    (:func:`_facet_match`), so only those are ranked. The view
     ranks every live document archive-wide, so its ``is_canonical`` can name a
     twin a ``kind`` or tag filter leaves out, and a total gated on it drops
     that payment. Ranking within the filters fixes that. The date window is
@@ -498,10 +501,10 @@ def _payment_choices(
     """
     has_key: ColumnElement[bool] = group_key_id.isnot(None) if group_key_id is not None else true()
     window: dict[str, Any] = {
-        "partition_by": spend_facts.c.payment_id,
+        "partition_by": facts.c.payment_id,
         "order_by": (
             has_key.desc(),
-            func.bool_or(spend_facts.c.line_id.isnot(None)).desc(),
+            func.bool_or(facts.c.line_id.isnot(None)).desc(),
             func.coalesce(Document.amount_kind == AmountKind.PAYMENT_MADE.value, False).desc(),
             Document.id.asc(),
         ),
@@ -520,11 +523,11 @@ def _payment_choices(
             .label("chosen_currency"),
         )
         .select_from(Document)
-        .join(spend_facts, spend_facts.c.document_id == Document.id)
+        .join(facts, facts.c.document_id == Document.id)
         .where(*candidates)
         # `documents.id` is the primary key, so every `Document` column is
         # functionally dependent on it and may be read without aggregating.
-        .group_by(Document.id, spend_facts.c.payment_id)
+        .group_by(Document.id, facts.c.payment_id)
         .cte("payment_choices")
         .prefix_with("MATERIALIZED")
     )
@@ -532,37 +535,44 @@ def _payment_choices(
 
 def _facet_match(
     facets: Mapping[str, str],
-) -> tuple[list[ColumnElement[bool]], list[ColumnElement[bool]]]:
+) -> tuple[list[ColumnElement[bool]], FromClause, list[ColumnElement[bool]]]:
     """``sum_amount``'s facet filter: on its money rows, and on its documents.
 
-    The first list is for queries over ``spend_facts``: the row carries every
-    facet asked for (``labels @> facets``; one value per facet, so this is the
-    AND across facets, held on one row). The second is the document-level
-    ``matched`` test for coverage: a document matches if one of its money rows
-    does, or, having no amount and so no money row, if its own labels do. That
-    second arm is what keeps an amountless services document reported as
-    ``no_amount`` under services.
+    Three parts. The first is for the row query over ``spend_facts``: the row
+    carries every facet asked for (``labels @> facets``; one value per facet,
+    so this is the AND across facets, held on one row). The second is those
+    rows, as one ``MATERIALIZED`` CTE that ``_payment_choices`` ranks. The
+    third is the document-level ``matched`` test for coverage: a document
+    matches if it has one of those rows, or, having no amount and so no money
+    row, if its own labels match. That second arm is what keeps an amountless
+    services document reported as ``no_amount`` under services.
+
+    The coverage test reads the same CTE as the ranking, so the coverage
+    statement evaluates the view once, as it does unfiltered. A correlated
+    ``EXISTS`` on ``spend_facts`` re-ran the view's payment grouping per
+    document and made a faceted total about five times slower; a second,
+    uncorrelated read of the view still cost one extra evaluation.
 
     Deliberately not "its own labels match" for a document that has an
     amount: one labelled services whose every line is overridden to supplies
     has no services money, is no payment's candidate, and would land in no
     coverage reason, breaking ``included + excluded == matched``.
 
-    Both lists are empty without facets, so the unfaceted statements are
-    unchanged.
+    Without facets: no conditions and the view itself, so the unfaceted
+    statements are unchanged.
     """
     if not facets:
-        return [], []
+        return [], spend_facts, []
     carries = spend_facts.c.labels.contains(dict(facets))
-    money_row = (
-        select(1)
-        .select_from(spend_facts)
-        .where(spend_facts.c.document_id == Document.id, carries)
-        .correlate(Document)
-        .exists()
+    facts = (
+        select(spend_facts.c.document_id, spend_facts.c.payment_id, spend_facts.c.line_id)
+        .where(carries)
+        .cte("facet_facts")
+        .prefix_with("MATERIALIZED")
     )
+    money_row = Document.id.in_(select(facts.c.document_id))
     labelled = and_(*filter_conditions(DocumentFilters(facets=facets)))
-    return [carries], [or_(money_row, Document.amount_total.is_(None) & labelled)]
+    return [carries], facts, [or_(money_row, Document.amount_total.is_(None) & labelled)]
 
 
 def _chosen_in_window(choices: CTE, filters: DocumentFilters) -> ColumnElement[bool]:
@@ -686,21 +696,18 @@ async def sum_amount(
 
     # Facets select money ROWS, so they leave the document filter and test the
     # row's merged labels instead, in the candidates and in the counted rows
-    # alike. In the candidates, so the twin is chosen among the documents
-    # whose money carries the facet; in the rows, so only the matching lines
-    # of the chosen document are summed.
+    # alike. In the candidates (`facts`), so the twin is chosen among the
+    # documents whose money carries the facet; in the rows (`facet_rows`), so
+    # only the matching lines of the chosen document are summed.
     document_filters = replace(filters, facets={})
-    facet_rows, facet_match = _facet_match(filters.facets)
+    facet_rows, facts, facet_match = _facet_match(filters.facets)
 
     # Payment identity (see `_payment_choices`): ranked over every filter but
     # the date window, among the documents that passed every gate above.
     choices = _payment_choices(
-        [
-            *filter_conditions(replace(document_filters, date_from=None, date_to=None)),
-            *facet_rows,
-            include,
-        ],
+        [*filter_conditions(replace(document_filters, date_from=None, date_to=None)), include],
         key_id,
+        facts,
     )
 
     def member(condition: ColumnElement[bool]) -> ColumnElement[bool]:

@@ -1,13 +1,14 @@
 """Tests for structured/analytical queries over extracted metadata."""
 
 import hashlib
+import re
 from collections.abc import AsyncIterator, Sequence
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, event, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from library.charts.query import chart_series
@@ -1263,6 +1264,47 @@ async def test_sum_amount_line_facet_chooses_the_twin_whose_money_carries_it(
     assert {(row.currency, row.total) for row in result.rows} == {("EUR", "100.00")}
     assert result.rows[0].document_ids == [receipt]
     assert result.coverage == Coverage(matched=1, included=1, excluded={}, needs_review=0)
+
+
+#: A read of the ``spend_facts`` view in emitted SQL (not a column reference
+#: such as ``spend_facts.labels``).
+_VIEW_READ = re.compile(r"\b(?:FROM|JOIN)\s+spend_facts\b")
+
+
+async def test_sum_amount_facet_reads_the_view_no_more_often_than_unfaceted(
+    engine: AsyncEngine, session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """Each evaluation of ``spend_facts`` re-runs its payment grouping, which
+    is most of a money statement's cost. A facet filter must not add one:
+    the coverage test shares the ranking's ``facet_facts`` CTE.
+
+    Measured on 4,000 merged documents after ``ANALYZE``: a correlated
+    ``EXISTS`` on the view in the coverage statement took a faceted total
+    from 1.35 s to about 6.6 s, and an uncorrelated ``IN`` over a second read
+    of the view to about 2.0 s. Both read the view once more per statement
+    than this allows. Timings are not asserted; the statement shape is.
+    """
+    await _seed_line_facet_fixture(session)
+    statements: list[str] = []
+
+    def capture(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        if "spend_facts" in statement:
+            statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        await sum_amount(session, filters=DocumentFilters(**_FEB_2024))
+        plain = [len(_VIEW_READ.findall(statement)) for statement in statements]
+        statements.clear()
+        await sum_amount(
+            session, filters=DocumentFilters(facets={"category": "services"}, **_FEB_2024)
+        )
+        faceted = [len(_VIEW_READ.findall(statement)) for statement in statements]
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+
+    assert len(plain) == 2
+    assert faceted == plain
 
 
 async def test_sum_amount_facet_matches_a_document_by_its_money_not_its_label(

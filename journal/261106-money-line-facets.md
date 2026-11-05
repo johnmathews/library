@@ -76,7 +76,32 @@ Two of the tests are pins, green before the change: the amountless
 document reported as `no_amount`, and the twin chosen by its money's
 facet. The full backend suite passes.
 
-## 4. Still open
+## 4. Speed
+
+The first version tested coverage with a correlated `EXISTS` over
+`spend_facts`. The W7 timing probe caught it: the coverage statement
+re-ran the recursive payments view for each document, so facet-filtered
+`sum_amount` went from 1.35 s on `main` to 6.6 s, with 4,000 synthetic
+documents after `ANALYZE`. The previous run had removed every `EXISTS`
+on `spend_facts` for the same reason.
+
+The fix computes the facet's money rows once, as one `MATERIALIZED` CTE.
+The twin ranking and the coverage `IN` both read that CTE, so the faceted
+statement reads the view no more often than the unfiltered one.
+
+| Version | Faceted `sum_amount` |
+| --- | --- |
+| `main` | 1.35 s |
+| With the correlated `EXISTS` | 6.6 s |
+| `IN` over a second read of the view | 2.0 s |
+| Shared CTE | 1.36 s (three runs, 1.35–1.42 s) |
+
+`test_sum_amount_facet_reads_the_view_no_more_often_than_unfaceted`
+counts `spend_facts` reads per emitted statement, rather than timing
+anything. It is red under both slow versions, which every behaviour test
+had let through.
+
+## 5. Still open
 
 When only the *non-canonical* twin carries a facet, `sum_amount` counts the
 payment and the chart does not, because charts read the view's archive-wide
