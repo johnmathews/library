@@ -245,10 +245,14 @@ it and whether its details are trusted (`review_status`). Long documents
 come in pages: follow `next_start_page`. `list_kinds`, `list_senders`,
 `list_recipients`, `list_tags`, `list_projects`, and `list_matters` list
 filter values with document counts, and `library_stats` gives an
-overview. `get_document_file` returns the file itself (an image you can
-see, or the file as a resource) up to 2 MB; for a larger file it returns
-a `download_url` to give the user, which opens in their browser, where
-they are signed in to Library. Do not fetch that link yourself.
+overview. Call `get_document_file` whenever the user asks to see, show,
+open, download or be sent a document, whatever the file type. An image
+comes back as an image, and clients such as claude.ai show it to the user
+as well, so never tell the user it cannot be shown. A PDF or other file
+comes back as a resource the user may not see: give the user
+`download_url`, which opens in their browser, where they are signed in to
+Library (do not fetch it yourself). Files over 2 MB come back as the
+`download_url` alone.
 
 Amounts: `amount_total` is always a magnitude and `amount_kind` says what
 it is (paid, due, refunded, a coverage limit, ...). Do not add amounts up
@@ -261,17 +265,24 @@ is not empty or `needs_review` is above 0.
 
 To correct a document's details (title, kind, sender, dates, amount,
 tags, ...) use `update_document_metadata` in two steps: call it without
-`apply` to get a preview of the changes, show the user that preview,
-and only after they agree call it again with `apply=true` and the
-`preview_token` the preview returned. `add_comment` attaches a dated
+`apply` to get a preview of the changes and show the user that preview.
+Ask before applying whenever you chose the change yourself. If the user
+asked for exactly this change, that request is their agreement: apply
+with `apply=true` and the `preview_token` the preview returned. If the
+preview differs from what they asked (a different stored value, extra
+fields), ask first. `add_comment` attaches a dated
 note to a document (for example "this is our current house"); it is
 recorded as the connected user and becomes searchable.
 
 To file something new: `create_note` saves text you write (a summary of
 a call, what was agreed) as a new note, and `ingest_document` adds a
 file. Each `create_note` call makes another note, so call it once per
-note and never retry it blindly. Everything these tools change is
-recorded as the connected user.
+note and never retry it blindly. `ingest_document` is for clients that
+can read a file's bytes themselves (Claude Code, say). A file attached in
+a hosted chat (claude.ai, ChatGPT) does not reach it: do not transcribe it
+into base64, but ask the user to upload it in the Library web app or send
+it in by mail. Everything these tools change is recorded as the connected
+user.
 """
 
 
@@ -794,8 +805,10 @@ class DocumentFile(BaseModel):
     download_url: str | None = Field(
         description=(
             "The file's download link in the Library web app. It opens in the user's "
-            "browser, where they are signed in to Library: give it to the user, do not "
-            "fetch it. Null when the server has no public URL configured."
+            "browser, where they are signed in to Library. For a file that is not an "
+            "image (a PDF, anything else) the user may not see the returned content, so "
+            "give them this link; do not fetch it yourself. Null when the server has no "
+            "public URL configured."
         )
     )
     note: str | None = Field(
@@ -1457,21 +1470,25 @@ async def get_document_file(
         ),
     ] = "original",
 ) -> ToolResult:
-    """Retrieve a document's file itself, to look at it or hand it on.
+    """Retrieve a document's file itself. Call it whenever the user asks to
+    see, show, open, download or be sent a document, whatever the file type.
 
-    For a document's text, use get_document instead: this returns the
-    file. A JPEG, PNG, GIF or WebP image comes back as an image you can
-    see; a PDF or any other file as an embedded resource (text files as
-    text). Beside it is the metadata: filename, mime_type, size_bytes,
-    content_included and download_url.
+    A JPEG, PNG, GIF or WebP image comes back as an image. Clients such as
+    claude.ai show it to the user as well, so never tell the user it cannot
+    be shown. A PDF or any other file comes back as an embedded resource
+    (text files as text), which the user may not see: give the user
+    download_url too. It opens in their browser, where they are signed in
+    to Library. Do not fetch it yourself. Beside the file is the metadata:
+    filename, mime_type, size_bytes, content_included and download_url
+    (null when the server has no public URL).
 
     Files over 2 MB are not returned: the result is the metadata alone,
     with content_included false and a note saying why. That is not an
-    error. download_url is the file's link in the Library web app (null
-    when the server has no public URL). It opens in the user's browser,
-    where they are signed in to Library, so give the link to the user
-    rather than fetching it yourself. Errors if the document id is
+    error: give the user download_url. Errors if the document id is
     unknown or deleted, or the requested variant was never produced.
+
+    For a document's text rather than its file, get_document is the
+    better tool.
     """
     async with _session() as session:
         document = await _get_document(session, document_id)
@@ -1554,6 +1571,11 @@ async def ingest_document(
     ] = None,
 ) -> dict[str, Any]:
     """Add a new document to the archive (same pipeline as a web upload).
+
+    For clients that can read a file's bytes themselves, such as Claude Code
+    reading from disk. A file attached in a hosted chat (claude.ai, ChatGPT)
+    does not reach this tool: do not transcribe it into base64. Ask the user
+    to upload it in the Library web app, or to send it in by mail.
 
     The file is stored, deduplicated by content hash, and queued for OCR
     and metadata extraction; `source` is recorded as 'mcp' and the token's
@@ -1791,7 +1813,12 @@ async def update_document_metadata(
 
     Step 1, preview: call without `apply`. Nothing is written. Returns
     {document_id, applied: false, changes: {field: {current, proposed}},
-    preview_token}. Show the user the changes and ask whether to apply.
+    preview_token}. Show the user the changes. Ask whether to apply
+    whenever you chose the change yourself (inferred it, suggested it, or
+    went beyond what they asked). If the user asked for exactly this change,
+    that request is their agreement: show the preview and apply. If the
+    preview differs from what they asked (a different stored value, extra
+    fields), ask first.
 
     Step 2, apply: only once the user has agreed, call again with the SAME
     arguments plus `apply=true` and the `preview_token`. Returns

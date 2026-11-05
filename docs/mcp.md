@@ -1,8 +1,8 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.6: the four-path bypass, the Cloudflare Browser Integrity Check rule and the outside checks; §1.2: what claude.ai, ChatGPT and Claude Code were seen doing). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: live, scoped to §1.2 and §1.6. claude.ai, ChatGPT and Claude Code each connected through the bypass and called tools as their approver (server log, `/metrics` and the audit trail); the §1.6 `curl` checks were run from outside.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
+**Status:** active. **Last updated:** 2026-11-05 (§1.2: why a client's first `POST /mcp` can get a `400`, and the `mcp_rejected` log line; §1.2/§1.3: the file, ingest and edit tool text now tells hosted clients what to do). Earlier entries are in this file's history.
+**Last verified:** 2026-11-05 — method: verified by tests/test_mcp*.py (the 400 pin, the `mcp_rejected` line, the tool text); live client behaviour per journal 261105-mcp-live-connectors.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, src/library/mcp_rejected_log.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,
@@ -149,22 +149,38 @@ clients are not supported.
 ### What the clients do (seen 2026-11-05)
 
 - **All three connect by URL alone** and every call is attributed to the
-  user who approved them. A client's first `POST /mcp` in a new session
-  can get a `400`; the next request succeeds, and the user sees nothing.
+  user who approved them.
+- **A client's first `POST /mcp` can get a `400`, and that is expected.**
+  Clients that speak MCP 2026-07-28 open with a request carrying
+  `MCP-Protocol-Version: 2026-07-28`. The installed SDK supports up to
+  2025-11-25, so it answers `400` with JSON-RPC error `-32600`
+  (`Unsupported protocol version`), and the client then falls back to
+  `initialize`, as the spec's backward-compatibility section describes.
+  The user sees nothing. Each refused request logs one line, such as
+  `mcp_rejected status=400 method=tools/list protocol_version=2026-07-28
+  reason="…"` (no params or arguments; 401 challenges are not logged), and
+  a test pins the `400` so an SDK upgrade that changes it prompts a
+  re-read of this paragraph.
 - **Images:** claude.ai shows an `image` block from `get_document_file`
   to the user too, who can download it, even though the model may say
-  it cannot show it.
+  it cannot show it. The tool text says so.
 - **PDFs:** asked to "show" a PDF, claude.ai's model offered the text
-  without calling `get_document_file`. The `download_url` is the way to
-  open it.
+  without calling `get_document_file`. The tool text now leads with
+  "call it whenever the user asks to see, show, open, download or be
+  sent a document, whatever the file type", and says to give the user
+  `download_url` for a file that is not an image.
 - **Chat attachments cannot be ingested from claude.ai.** The file never
   reaches the tool: the model would have to copy it out as base64 in
   the call (a 68 KB PDF is about 91,000 characters), and it rightly
-  declines. Upload in the web app or by mail instead; `ingest_document`
-  suits clients that read files from disk, such as Claude Code.
+  declines. The `ingest_document` text says to ask the user to upload in
+  the web app or send it in by mail, and that the tool suits clients
+  that read files from disk, such as Claude Code.
 - **Edit confirmation is the model's call.** Library makes every applied
   edit match a fresh preview, but cannot tell whether a person saw it:
   an explicit "remove that tag" was applied straight after its preview.
+  The tool text now says that a user's explicit request for exactly that
+  change is their agreement, while a change the model chose itself, or a
+  preview that differs from the request, needs asking first.
 
 ## 1.3 Tools
 
@@ -382,8 +398,10 @@ writes on the first call. Without `apply` it returns the current value
 of every field it would change and the value applying would store, plus
 a `preview_token`;
 the tool description tells the model to show the user that preview and
-call again with `apply: true`, the same arguments and the token only
-after they agree. The fields and validators are the PATCH route's
+call again with `apply: true`, the same arguments and the token. It asks
+first whenever the model chose the change itself, or the preview differs
+from what the user asked; when the user asked for exactly this change,
+that request is the agreement. The fields and validators are the PATCH route's
 (`DocumentUpdate`); an omitted parameter leaves its field unchanged, and
 since `null` also means "unchanged" here, a field is emptied by naming
 it in `clear_fields` (lists are emptied with `[]`; `language` cannot be
@@ -461,7 +479,9 @@ characters of base64 in one result. Over 2 MB only the metadata comes back, with
 (or `/searchable.pdf`), the web app's own download link, `null` when the
 setting is unset. That route is behind the web app's sign-in, so the
 link works in the user's browser and not with an MCP token. The
-description tells the model to give it to the user and not fetch it.
+description tells the model to give it to the user and not fetch it:
+always for a file that is not an image, since the client may not show
+the returned content, and for a file over 2 MB.
 `note` points the user at the web app when there is no link.
 
 ## 1.4 Security notes
@@ -550,7 +570,10 @@ description tells the model to give it to the user and not fetch it.
 - **Monitoring:** every tool call is counted and timed by tool and
   outcome (`library_mcp_calls_total`, `library_mcp_duration_seconds`) and
   logged as one `mcp_call` line with the caller's user id, never with
-  arguments or results ([observability.md §3.1](observability.md)). CI's
+  arguments or results ([observability.md §3.1](observability.md)). A
+  request the transport refuses with a 4xx other than 401 logs one
+  `mcp_rejected` line (status, JSON-RPC method, protocol version, the
+  SDK's error message; never params), see §1.2. CI's
   `compose-smoke` job calls `library_stats` on the built image the way
   the reverse proxy forwards it ([deployment.md §1.4](deployment.md)).
 

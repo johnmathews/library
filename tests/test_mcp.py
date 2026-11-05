@@ -1564,3 +1564,154 @@ async def test_lifespan_disposes_shared_engine(mcp_connect: McpConnector) -> Non
         assert db.get_engine.cache_info().currsize == 1
     assert db.get_engine.cache_info().currsize == 0
     assert db.get_sessionmaker.cache_info().currsize == 0
+
+
+# --- client guidance in tool text ----------------------------------------------
+
+
+def _flat(text: str) -> str:
+    """Collapse the docstring line wrapping so phrases match across it."""
+    return " ".join(text.split())
+
+
+async def test_file_ingest_edit_descriptions_carry_client_guidance(
+    mcp_connect: McpConnector,
+) -> None:
+    """The three tools hosted clients misuse say what the clients need to know.
+
+    Live checks (journal 261105) found a client telling the user a PDF could
+    not be shown, another transcribing a chat attachment into base64, and a
+    third asking for confirmation of an edit the user had just spelled out.
+    The anchor phrases are the guidance; the instructions repeat them.
+    """
+    async with mcp_connect() as session:
+        tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+
+    file_text = _flat(tools["get_document_file"].description or "")
+    assert "show, open, download or be sent a document" in file_text
+    assert "whatever the file type" in file_text
+    assert "never tell the user it cannot be shown" in file_text
+    assert "give the user download_url" in file_text
+    # The text pointer comes after the lead, not before it.
+    assert file_text.index("whatever the file type") < file_text.index("get_document ")
+    file_schema = tools["get_document_file"].outputSchema
+    assert file_schema is not None
+    assert "not an image" in file_schema["properties"]["download_url"]["description"]
+
+    ingest_text = _flat(tools["ingest_document"].description or "")
+    assert "read a file's bytes themselves" in ingest_text
+    assert "attached in a hosted chat" in ingest_text
+    assert "do not transcribe it into base64" in ingest_text
+    assert "upload it in the Library web app" in ingest_text
+
+    edit_text = _flat(tools["update_document_metadata"].description or "")
+    assert "you chose the change yourself" in edit_text
+    assert "asked for exactly this change, that request is their agreement" in edit_text
+    assert "preview differs from what they asked" in edit_text
+
+    for phrase in (
+        "show, open, download or be sent a document",
+        "never tell the user it cannot be shown",
+        "give the user `download_url`",
+        "attached in a hosted chat",
+        "upload it in the Library web app",
+        "that request is their agreement",
+        "preview differs from what they asked",
+    ):
+        assert phrase in _flat(SERVER_INSTRUCTIONS), phrase
+
+
+# --- rejected requests are logged ------------------------------------------------
+
+#: Newer than the installed MCP SDK speaks (it tops out at 2025-11-25), so the
+#: SDK refuses it: this is the probe a 2026-07-28 client sends first.
+NEWER_PROTOCOL = "2026-07-28"
+PARAMS_MARKER = "distinctive-params-marker-7f3a"
+LIST_BODY: dict[str, Any] = {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/list",
+    "params": {"marker": PARAMS_MARKER},
+}
+
+
+def _rejected_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("mcp_rejected ")
+    ]
+
+
+async def test_newer_protocol_version_is_refused_with_400(
+    running_app: AppRunner, mcp_token: str
+) -> None:
+    """Pin: a first request carrying MCP-Protocol-Version 2026-07-28 gets a
+    400 / -32600 from the SDK, which a 2026-07-28 client reads as "fall back
+    to initialize" (docs/mcp.md 1.2). An SDK upgrade that changes this is the
+    cue to revisit that section."""
+    async with running_app() as app, _asgi_client(app, mcp_token) as client:
+        response = await client.post(
+            "/mcp/",
+            json=LIST_BODY,
+            headers={**MCP_HEADERS, "MCP-Protocol-Version": NEWER_PROTOCOL},
+        )
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["code"] == -32600
+    assert "Unsupported protocol version" in error["message"]
+
+
+@pytest.mark.parametrize("path", ["/mcp", "/mcp/"])
+async def test_rejected_request_logs_one_line_without_params(
+    running_app: AppRunner,
+    mcp_token: str,
+    caplog: pytest.LogCaptureFixture,
+    path: str,
+) -> None:
+    with caplog.at_level(logging.INFO):
+        async with running_app() as app, _asgi_client(app, mcp_token) as client:
+            response = await client.post(
+                path,
+                json=LIST_BODY,
+                headers={**MCP_HEADERS, "MCP-Protocol-Version": NEWER_PROTOCOL},
+            )
+    assert response.status_code == 400
+    lines = _rejected_lines(caplog)
+    assert len(lines) == 1, lines
+    assert lines[0].startswith(
+        f"mcp_rejected status=400 method=tools/list protocol_version={NEWER_PROTOCOL} reason="
+    )
+    assert "Unsupported protocol version" in lines[0]
+    everything = "\n".join(record.getMessage() for record in caplog.records)
+    assert PARAMS_MARKER not in everything
+    # The wrapper leaves the response alone.
+    assert response.json()["error"]["code"] == -32600
+
+
+async def test_rejected_line_without_a_readable_body_or_header(
+    running_app: AppRunner, mcp_token: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A non-JSON body and no protocol header log "-" for both."""
+    with caplog.at_level(logging.INFO):
+        async with running_app() as app, _asgi_client(app, mcp_token) as client:
+            response = await client.post("/mcp/", content=b"not json", headers=MCP_HEADERS)
+    assert 400 <= response.status_code < 500
+    lines = _rejected_lines(caplog)
+    assert len(lines) == 1, lines
+    assert f"status={response.status_code} method=- protocol_version=- reason=" in lines[0]
+
+
+async def test_accepted_and_unauthorised_requests_log_no_rejection(
+    running_app: AppRunner, mcp_token: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO):
+        async with running_app() as app:
+            async with _asgi_client(app, mcp_token) as client:
+                ok = await client.post("/mcp/", json=INITIALIZE_BODY, headers=MCP_HEADERS)
+            async with _asgi_client(app, token=None) as anonymous:
+                denied = await anonymous.post("/mcp/", json=INITIALIZE_BODY, headers=MCP_HEADERS)
+    assert ok.status_code == 200
+    assert denied.status_code == 401
+    assert "Bearer" in denied.headers["WWW-Authenticate"]
+    assert _rejected_lines(caplog) == []

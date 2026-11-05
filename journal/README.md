@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-210 entries.
+211 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -17,6 +17,7 @@ CI checks it is current.
 - **2026-11-05** — [MCP notes, file results, CI smoke test and tool metrics](261105-mcp-notes-and-files.md)
 - **2026-11-05** — [MCP connectors checked live: claude.ai, ChatGPT and Claude Code](261105-mcp-live-connectors.md)
 - **2026-11-05** — [MCP document reads, semantic search and money totals](261105-mcp-document-reads.md)
+- **2026-11-05** — [MCP tool guidance for hosted clients, and the first-request 400 explained](261105-mcp-client-guidance.md)
 - **2026-11-04** — [MCP OAuth consent page and rate limits](261104-mcp-oauth-consent-and-rate-limits.md)
 - **2026-11-04** — [MCP OAuth authorization server](261104-mcp-oauth-authorization-server.md)
 - **2026-11-04** — [MCP hardening foundation](261104-mcp-hardening-foundation.md)
