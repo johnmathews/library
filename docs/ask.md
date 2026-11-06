@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-06 (§1 item 3: `query_documents` refuses unknown filter values; *Where a money total comes from* and §1.10 item 11: a `facets` filter on `sum_amount` counts the money rows, document or line, that carry the facet, as a chart does). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to *Where a money total comes from*, §1.10 item 11 and §1 item 3. Read against `structured_query.sum_amount`; the line-facet tests in `tests/test_structured_query.py` pass, seen red on main first or killed by hand-made mutants. Also item 3's refusal, covered by the new `tests/test_ask_tool_filters.py` tests (seen red with the check disabled, green with it). The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-06 (*Where a money total comes from*: totals and charts read the same merged twin labels, migration 0041; a `facets` filter counts the money rows that carry the facet. §1 item 3: `query_documents` refuses unknown filter values). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: partial, scoped to *Where a money total comes from*, §1.10 item 11 and §1 item 3. Read against `structured_query.sum_amount` and migration 0041; the twin and line-facet tests in `tests/test_structured_query.py` were seen red first. Item 3's refusal is covered by `tests/test_ask_tool_filters.py` (seen red with the check disabled). The rest carries its earlier verifications forward.
 **Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, src/library/filter_vocabulary.py, .github/workflows/e2e-nightly.yml
 
 Ask lets you put a natural-language question to the archive and get a prose
@@ -318,7 +318,9 @@ amount at its own document date into a display currency:
   not by the view's archive-wide `is_canonical`: `kind='utility-bill'` still
   counts a bill whose receipt the view would have picked. The date window then
   applies to the chosen document, so month totals add up. The charts keep the
-  archive-wide flag.
+  archive-wide flag, and both read the canonical row's labels merged with its
+  twins' (migration 0041), so a facet total and a chart agree on which
+  document carries a payment and in which month.
 - **A facet counts the money that carries it.** A `facets` filter on
   `sum_amount` tests each view row's labels (a line's own over its
   document's), so an itemised invoice filtered to one category sums only its

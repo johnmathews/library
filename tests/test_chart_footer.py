@@ -287,6 +287,7 @@ async def test_every_kind_of_money_is_accounted_for_somewhere(session, document,
                 footer.unclassified,
                 footer.undated,
                 footer.uncategorised,
+                footer.conflicting,
                 # In the sum on purpose: the balance is only a safety net if the
                 # net catches money it did not expect. A bucket left out here
                 # would make an unforeseen shape read as a shortfall of unknown
@@ -615,3 +616,267 @@ async def test_an_empty_bucket_lists_nothing_rather_than_raising(session, facets
         facets_in_rule=set(),
     )
     assert rows == []
+
+
+# --- twins whose labels differ (migration 0041, docs/charts.md §2.2) ---------
+#
+# Two pairs recur below. The F4 pair: a bill labelled services and its
+# unlabelled receipt. The F5 pair: a bill labelled services and its receipt
+# labelled supplies. The receipt is `payment_made`, so it is the counted
+# document both times. Every pair names one sender and one reference, so rule
+# R2 merges it whatever the dates; `_one_payment` asserts the merge rather
+# than trusting it.
+
+TWIN_VENDOR = "Lyra Test Utilities"
+SERVICES = Rule(all=[Clause(facet="category", values=["services"])])
+NOT_SERVICES = Rule(all=[Clause(facet="category", op="not_in", values=["services"])])
+SUPPLIES = Rule(all=[Clause(facet="category", values=["supplies"])])
+
+
+async def _pair(
+    document,
+    reference: str,
+    *,
+    amount: str = "84.20",
+    bill_date: date = date(2026, 4, 3),
+    receipt_date: date = date(2026, 4, 10),
+    bill_labels: dict[str, str] | None = None,
+    receipt_labels: dict[str, str] | None = None,
+):
+    bill = await document(
+        amount_total=Decimal(amount),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        document_date=bill_date,
+        labels=bill_labels or {},
+        sender=TWIN_VENDOR,
+        reference=reference,
+    )
+    receipt = await document(
+        amount_total=Decimal(amount),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        document_date=receipt_date,
+        labels=receipt_labels or {},
+        sender=TWIN_VENDOR,
+        reference=reference,
+    )
+    return bill, receipt
+
+
+async def _one_payment(session, *document_ids: int) -> None:
+    result = await session.execute(
+        text("SELECT count(DISTINCT payment_id) FROM payments WHERE document_id = ANY(:ids)"),
+        {"ids": list(document_ids)},
+    )
+    assert result.scalar_one() == 1, "the pair must merge, or nothing below is about twins"
+
+
+async def _series(session, rule: Rule, since: date | None = None, until: date | None = None):
+    return await chart_series(
+        session, rule, grain=Grain.MONTH, split=None, currency="EUR", since=since, until=until
+    )
+
+
+async def _footer(session, rule: Rule, since: date | None = None, until: date | None = None):
+    facets_in_rule = {clause.facet for clause in rule.all}
+    return await chart_footer(
+        session, rule, currency="EUR", since=since, until=until, facets_in_rule=facets_in_rule
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_chart_counts_a_payment_whose_label_only_its_twin_carries(
+    session, document, facets
+) -> None:
+    """F4. Before 0041: total 0, the 84.20 under `uncategorised`. Now the
+    counted receipt carries the bill's services, so the chart counts it, and
+    it agrees with `sum_amount` for the same facet."""
+    from library.search import DocumentFilters
+    from library.structured_query import sum_amount
+
+    bill, receipt = await _pair(document, "F4-1", bill_labels={"category": "services"})
+    await _one_payment(session, bill.id, receipt.id)
+
+    series = await _series(session, SERVICES)
+    footer = await _footer(session, SERVICES)
+    money = await sum_amount(session, filters=DocumentFilters(facets={"category": "services"}))
+
+    assert (series.total, series.payments) == (Decimal("84.20"), 1)
+    assert footer.uncategorised is None and footer.conflicting is None
+    assert [(row.currency, Decimal(row.total)) for row in money.rows] == [("EUR", series.total)]
+
+
+@pytest.mark.asyncio
+async def test_a_payment_its_twins_label_differently_is_reported_not_dropped(
+    session, document, facets
+) -> None:
+    """F5. The receipt keeps supplies, so the services chart does not count
+    the payment; before 0041 its footer did not mention it either. Now it is
+    the `conflicting` group, which opens to the counted document, and the
+    supplies chart counts the payment exactly once."""
+    from library.charts.footer import chart_footer_documents
+
+    bill, receipt = await _pair(
+        document,
+        "F5-1",
+        bill_labels={"category": "services"},
+        receipt_labels={"category": "supplies"},
+    )
+    await _one_payment(session, bill.id, receipt.id)
+
+    services = await _series(session, SERVICES)
+    footer = await _footer(session, SERVICES)
+    listed = await chart_footer_documents(
+        session,
+        SERVICES,
+        bucket="conflicting",
+        amount_kind=None,
+        currency="EUR",
+        since=None,
+        until=None,
+        facets_in_rule={"category"},
+    )
+    supplies = await _series(session, SUPPLIES)
+    supplies_footer = await _footer(session, SUPPLIES)
+
+    assert services.total == Decimal("0")
+    assert footer.conflicting is not None
+    assert (footer.conflicting.amount_kind, footer.conflicting.amount) == (
+        "conflicting",
+        Decimal("84.20"),
+    )
+    assert footer.conflicting.documents == 1
+    assert footer.uncategorised is None and footer.unaccounted is None
+    assert [(row.document_id, row.amount) for row in listed] == [(receipt.id, Decimal("84.20"))]
+    assert (supplies.total, supplies.payments) == (Decimal("84.20"), 1)
+    # The chart that counted it owes no disclosure.
+    assert supplies_footer.conflicting is None
+
+
+@pytest.mark.asyncio
+async def test_a_conflict_is_reported_only_where_a_twins_label_would_have_matched(
+    session, document, facets
+) -> None:
+    """Not noise: the F5 pair disagrees about services and supplies, so a
+    software chart has nothing to say about it. A bucket gated on the flag
+    alone would put this payment in every category chart's footer."""
+    await _pair(
+        document,
+        "F5-2",
+        bill_labels={"category": "services"},
+        receipt_labels={"category": "supplies"},
+    )
+    software = Rule(all=[Clause(facet="category", values=["software"])])
+    footer = await _footer(session, software)
+    assert footer.conflicting is None
+    assert footer.uncategorised is None
+
+
+@pytest.mark.asyncio
+async def test_a_payment_crossing_a_month_lands_in_the_counted_documents_month(
+    session, document, facets
+) -> None:
+    """A bill of 28 January labelled services, its unlabelled receipt of 3
+    February. One payment, drawn once, in February (the counted receipt's
+    date); January draws nothing, and the months add up to the whole."""
+    bill, receipt = await _pair(
+        document,
+        "F4-X",
+        bill_date=date(2026, 1, 28),
+        receipt_date=date(2026, 2, 3),
+        bill_labels={"category": "services"},
+    )
+    await _one_payment(session, bill.id, receipt.id)
+
+    whole = await _series(session, SERVICES, date(2026, 1, 1), date(2026, 2, 28))
+    january = await _series(session, SERVICES, date(2026, 1, 1), date(2026, 1, 31))
+    february = await _series(session, SERVICES, date(2026, 2, 1), date(2026, 2, 28))
+
+    assert [(cell.period, cell.total) for cell in whole.cells] == [
+        (date(2026, 2, 1), Decimal("84.20"))
+    ]
+    assert sum((cell.total for cell in whole.cells), Decimal(0)) == whole.total
+    assert (january.total, february.total) == (Decimal("0"), Decimal("84.20"))
+    assert january.total + february.total == whole.total
+
+
+@pytest.mark.asyncio
+async def test_relabelling_a_twin_there_and_back_restores_every_answer(
+    session, document, facets
+) -> None:
+    """A -> B -> A on the bill's label (the receipt is unlabelled), read
+    through the in chart, the not_in chart and the footer each time."""
+    from library.facets.vocabulary import set_document_label
+
+    bill, receipt = await _pair(document, "ABA-1", bill_labels={"category": "services"})
+    await _one_payment(session, bill.id, receipt.id)
+
+    async def answers() -> tuple[Decimal, Decimal, Decimal, object]:
+        footer = await _footer(session, SERVICES)
+        return (
+            (await _series(session, SERVICES)).total,
+            (await _series(session, NOT_SERVICES)).total,
+            (await _series(session, SUPPLIES)).total,
+            footer.conflicting,
+        )
+
+    first = await answers()
+    await set_document_label(session, bill.id, "category", "supplies")
+    await session.commit()
+    moved = await answers()
+    await set_document_label(session, bill.id, "category", "services")
+    await session.commit()
+    back = await answers()
+
+    assert first == (Decimal("84.20"), Decimal("0"), Decimal("0"), None)
+    assert moved == (Decimal("0"), Decimal("84.20"), Decimal("84.20"), None)
+    assert back == first
+
+
+@pytest.mark.asyncio
+async def test_in_plus_not_in_is_all_spending_with_both_twin_shapes(
+    session, document, facets
+) -> None:
+    """The promise D1 kept (docs/charts.md §3): each payment is counted once,
+    in one place, so a rule and its complement add up to all spending. The
+    fixture holds both twin shapes, a plain labelled document and an
+    unlabelled one, so the complement has every way to double count or drop."""
+    await _pair(document, "MIX-F4", bill_labels={"category": "services"})
+    await _pair(
+        document,
+        "MIX-F5",
+        amount="51.00",
+        bill_labels={"category": "services"},
+        receipt_labels={"category": "supplies"},
+    )
+    # The F5 shape reversed: counted as services, its bill says supplies.
+    await _pair(
+        document,
+        "MIX-F5R",
+        amount="13.50",
+        bill_labels={"category": "supplies"},
+        receipt_labels={"category": "services"},
+    )
+    await document(
+        amount_total=Decimal("40.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        document_date=date(2026, 4, 5),
+        labels={"category": "software"},
+    )
+    await document(
+        amount_total=Decimal("7.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        document_date=date(2026, 4, 6),
+    )
+
+    everything = await _series(session, Rule())
+    inside = await _series(session, SERVICES)
+    outside = await _series(session, NOT_SERVICES)
+
+    assert everything.total == Decimal("195.70")
+    assert inside.total + outside.total == everything.total
+    assert inside.payments + outside.payments == everything.payments == 5
+    # F4 (84.20) and the reversed F5 (13.50) are services; F5 is not.
+    assert inside.total == Decimal("97.70")
+    # Each chart discloses the one pair whose twin would have put it there.
+    assert (await _footer(session, SERVICES)).conflicting.amount == Decimal("51.00")
+    assert (await _footer(session, NOT_SERVICES)).conflicting.amount == Decimal("13.50")

@@ -413,3 +413,177 @@ async def test_a_refund_lowers_the_total_of_the_category_it_belongs_to(
         labels={"category": "services"},
     )
     assert await _signed_totals_by(session, "category") == {"services": Decimal("151.00")}
+
+
+# --- a payment's counted row carries its twins' labels (migration 0041) ------
+
+
+async def _row(session: AsyncSession, document_id: int) -> dict[str, Any]:
+    """The one `spend_facts` row of an unsplit document."""
+    rows = [row for row in await _facts(session) if row["document_id"] == document_id]
+    assert len(rows) == 1
+    return rows[0]
+
+
+@pytest.mark.asyncio
+async def test_the_counted_row_inherits_a_label_only_its_twin_carries(
+    session: AsyncSession, document: DocumentFactory, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """F4: the bill is labelled, the receipt (canonical: `payment_made`) is not.
+    The receipt's row takes the bill's label; the bill's own row is unchanged,
+    and nothing disagrees, so there is no conflict."""
+    bill = await document(
+        amount_total=Decimal("84.20"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        labels={"category": "services"},
+        sender=VENDOR,
+    )
+    receipt = await document(
+        amount_total=Decimal("84.20"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        labels={"scope": "business"},
+        sender=VENDOR,
+    )
+    assert await _payment_group_count(session) == 1
+
+    counted, twin = await _row(session, receipt.id), await _row(session, bill.id)
+    assert counted["is_canonical"] is True
+    assert counted["labels"] == {"category": "services", "scope": "business"}
+    assert counted["label_conflict"] is False
+    assert counted["twin_labels"] == [{"category": "services"}]
+    assert twin["is_canonical"] is False
+    assert twin["labels"] == {"category": "services"}
+    assert twin["label_conflict"] is False
+    assert twin["twin_labels"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_counted_rows_own_label_wins_and_the_disagreement_is_flagged(
+    session: AsyncSession, document: DocumentFactory, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """F5: bill services, receipt supplies. The receipt keeps supplies, and the
+    flag plus the twin's labels are what lets a services chart's footer say
+    where the payment went."""
+    bill = await document(
+        amount_total=Decimal("84.20"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        labels={"category": "services", "scope": "business"},
+        sender=VENDOR,
+    )
+    receipt = await document(
+        amount_total=Decimal("84.20"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "supplies"},
+        sender=VENDOR,
+    )
+    counted, twin = await _row(session, receipt.id), await _row(session, bill.id)
+    # Its own category, and the scope only the bill carries.
+    assert counted["labels"] == {"category": "supplies", "scope": "business"}
+    assert counted["label_conflict"] is True
+    assert counted["twin_labels"] == [{"category": "services", "scope": "business"}]
+    assert twin["labels"] == {"category": "services", "scope": "business"}
+    assert twin["label_conflict"] is False
+
+
+@pytest.mark.asyncio
+async def test_twins_that_tie_on_rank_are_decided_by_the_lower_id(
+    session: AsyncSession, document: DocumentFactory, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """Three documents of one payment (one reference, rule R2): a receipt and
+    two `payment_due` twins equal on every ranking key but the id, which
+    disagree on a facet the receipt leaves blank. The lower id wins, as it does
+    for `is_canonical`. Adversarial: the lower-id twin is the LATER-dated one
+    and `jsonb_object_agg` keeps the last of duplicate keys, so neither "the
+    newest" nor "whatever the aggregate saw last" passes by luck."""
+    first = await document(
+        amount_total=Decimal("30.00"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        labels={"scope": "personal"},
+        document_date=date(2026, 3, 20),
+        sender=VENDOR,
+        reference="TIE-1",
+    )
+    second = await document(
+        amount_total=Decimal("30.00"),
+        amount_kind=AmountKind.PAYMENT_DUE,
+        labels={"scope": "business"},
+        document_date=date(2026, 3, 2),
+        sender=VENDOR,
+        reference="TIE-1",
+    )
+    receipt = await document(
+        amount_total=Decimal("30.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        document_date=date(2026, 3, 25),
+        sender=VENDOR,
+        reference="TIE-1",
+    )
+    assert first.id < second.id
+    assert await _payment_group_count(session) == 1
+
+    counted = await _row(session, receipt.id)
+    assert counted["labels"] == {"scope": "personal"}
+    # The twins disagree among themselves: the business chart misses it.
+    assert counted["label_conflict"] is True
+    assert counted["twin_labels"] == [{"scope": "personal"}, {"scope": "business"}]
+
+
+@pytest.mark.asyncio
+async def test_a_twins_document_label_reaches_every_line_and_its_line_labels_do_not(
+    session: AsyncSession, document: DocumentFactory, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """Lines. The canonical invoice is itemised, and its lines take the
+    receipt's document labels under their document's and their own: a line's
+    override still wins, and a line override is not a disagreement between
+    documents. A twin's LINE labels describe that twin's split, not the
+    payment, so they stay on the twin."""
+    invoice = await document(
+        amount_total=Decimal("100.00"), amount_kind=AmountKind.PAYMENT_DUE, sender=VENDOR
+    )
+    other = await document(
+        amount_total=Decimal("100.00"), amount_kind=AmountKind.PAYMENT_DUE, sender=VENDOR
+    )
+    receipt = await document(
+        amount_total=Decimal("100.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "services", "scope": "business"},
+        sender=VENDOR,
+    )
+    await _allocate(
+        session, invoice.id, [(Decimal("60.00"), {}), (Decimal("40.00"), {"scope": "personal"})]
+    )
+    # Itemised too, so it ranks with the invoice and loses only on id.
+    await _allocate(session, other.id, [(Decimal("100.00"), {"cost_type": "usage"})])
+    assert await _payment_group_count(session) == 1
+
+    rows = [row for row in await _facts(session) if row["document_id"] == invoice.id]
+    assert all(row["is_canonical"] for row in rows)
+    assert [row["labels"] for row in rows] == [
+        {"category": "services", "scope": "business"},
+        {"category": "services", "scope": "personal"},
+    ]
+    assert {row["label_conflict"] for row in rows} == {False}
+    # Only the receipt has document labels; the other invoice's line label
+    # neither travels nor appears as a twin label set.
+    assert [row["twin_labels"] for row in rows] == [
+        [{"category": "services", "scope": "business"}]
+    ] * 2
+    assert receipt.id not in {row["document_id"] for row in rows}
+
+
+@pytest.mark.asyncio
+async def test_an_unmerged_document_is_unchanged_by_the_merge(
+    session: AsyncSession, document: DocumentFactory, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """A payment of one document has no twins: its own labels, no flag."""
+    alone = await document(
+        amount_total=Decimal("12.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    row = await _row(session, alone.id)
+    assert (row["labels"], row["label_conflict"], row["twin_labels"]) == (
+        {"category": "software"},
+        False,
+        [],
+    )

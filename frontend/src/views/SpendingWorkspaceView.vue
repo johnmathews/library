@@ -344,6 +344,7 @@ const BUCKET_LABELS: Record<FooterBucket, string> = {
   excluded: 'Excluded',
   unclassified: 'Unclassified',
   uncategorised: 'Uncategorised',
+  conflicting: 'Labelled differently',
   undated: 'Undated',
   unaccounted: 'Unaccounted',
 }

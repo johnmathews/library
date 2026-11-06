@@ -1,7 +1,7 @@
 # The chart engine
 
-**Status:** active. **Last updated:** 2026-11-04 (§10.1: PATCH and Ask now share `documents_service.edit_document`, and the MCP edit tool is a sixth `amount_total` writer that refuses an allocated amount with the same wording). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §10.1's PATCH, Ask and MCP rows, read against `edit_document` in `src/library/documents_service.py` and the edit tool in `src/library/mcp_server.py`; `test_edit_apply_allocated_amount_refused` (MCP) and the existing allocation-refusal tests are green. Other sections carry forward their 2026-09-02 verification.
+**Status:** active. **Last updated:** 2026-11-06 (§2, §2.2, §7: a payment's counted row carries its twins' labels (migration 0041), and the footer's ninth field, `conflicting`, reports a payment its documents label differently). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: partial, scoped to §2, §2.2 and §7, read against migration `0041_spend_facts_twin_labels.py`, `charts/footer.py` and `charts/rule.py`; the twin cases in `tests/test_spend_facts.py`, `tests/test_chart_footer.py` and `tests/test_api_spending.py` and `test_0041_downgrade_restores_the_exact_0040_view` are green, and were red on the 0040 view. Other sections carry forward their earlier verification.
 **Covers:** src/library/charts/, src/library/api/spending.py, src/library/spend_lines.py, migrations/versions/0035_spend_facts.py, migrations/versions/0036_charts.py, migrations/versions/0037_split_colour.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
@@ -36,7 +36,7 @@ on accountancy per year, and what it spends charging the car.
 ## 2. `spend_facts`: one relation, not scattered `COALESCE`s
 
 Every chart query reads exactly one relation, the `spend_facts` view
-(migration `0035`), and the chart engine's own SQL against it lives in
+(migration `0035`, recreated by `0041` to merge twin labels, §2.2), and the chart engine's own SQL against it lives in
 `src/library/charts/query.py` and `src/library/charts/footer.py`.
 
 The view is **not** exclusive to the chart engine, and reading this section as
@@ -61,6 +61,8 @@ spend_facts (view)
   sender_id   | date    | amount     | currency
   amount_kind | reference
   labels  jsonb   -- {"category":"accountancy","scope":"business"}
+  label_conflict  boolean   -- canonical row only (§2.2)
+  twin_labels     jsonb[]   -- canonical row only (§2.2)
 ```
 
 The view is a `UNION ALL` of two arms: **unsplit documents**, which contribute
@@ -128,6 +130,40 @@ without the `COALESCE` an undecided document outranks a receipt, becomes
 canonical, and the whole payment is represented by a kind that is never summed.
 The money vanishes from every chart with nothing reporting it. Confirmed red
 under mutation (`tests/test_spend_facts.py`).
+
+**The canonical row carries its twins' labels** (migration `0041`). A bill
+labelled `services` merged with an unlabelled receipt is counted on the
+receipt, so with only the receipt's own labels the payment was in no
+`services` chart, its footer called it `uncategorised`, and
+`/api/facets/counts` never offered `services` at all. The merge rule:
+
+- On each facet the canonical document has **no** value for, its row takes the
+  value its twins carry. Where twins disagree, the best-ranked twin wins, by the
+  ranking above.
+- On a facet the canonical document **does** carry, its own value wins.
+- Only **document-level** labels travel. A receipt labels the payment, not a
+  line, so on an itemised canonical invoice the layers are: the twins' labels,
+  then the invoice's own, then the line's (`inherited || document || line`). A
+  twin's own line labels stay on that twin.
+- Non-canonical rows keep their own labels.
+
+Counting the payment once, in one place, is what keeps stacked series and a
+rule plus its complement adding up to all spending (§3, §4); choosing a twin
+inside each chart's filter, as an earlier option did, would put one payment in
+two series. The cost is a payment whose documents **disagree**: a bill saying
+`services` and a receipt saying `supplies` stays `supplies`, and the `services`
+chart does not count it. Two columns let the footer say so (§7):
+
+- `label_conflict`: on the canonical row, true when two documents of the
+  payment give one facet different document-level values (the canonical
+  against a twin, or two twins against each other).
+- `twin_labels`: on the canonical row, each twin's document labels in ranking
+  order. Empty everywhere else.
+
+`structured_query.sum_amount` reads the same merged labels, so a facet total
+and a chart over the same facet agree, including the month a payment dated
+across a month boundary lands in (the canonical document's) —
+[money-facts.md](money-facts.md) §5.2.
 
 ### 2.3 Soft deletes: the filter and the join are mutually redundant
 
@@ -318,7 +354,7 @@ uncategorised, so it appears in `Series.documents` *and* in a footer group.
 > **`Series.documents` and the footer's `documents` are not a partition of the
 > archive and must never be added together.**
 
-## 7. The footer: eight categories, and why a refund is netted
+## 7. The footer: nine categories, and why a refund is netted
 
 `src/library/charts/footer.py` is the most important module in the feature, and
 it is deliberately separate from the query. It answers the opposite question —
@@ -342,11 +378,12 @@ written correctly.
 | `excluded` | a kind that never enters a total | `excluded` (one group per kind) |
 | `unclassified` | `amount_kind IS NULL` — *not yet decided* | `unclassified` |
 | `undated` | summable, but no date to bucket it by | `undated` |
+| `conflicting` | summable, fails the rule, but a twin's label would pass it | `conflicting` |
 | `uncategorised` | summable, unlabelled for a facet the rule names | `uncategorised` |
 | `outside` | dated outside the chart's window | — not this chart's claim |
 | `unaccounted` | the `ELSE`: a shape nobody predicted | `unaccounted` |
 
-Plus `unconvertible` (§5), merged with the query's own list. **Eight fields, all
+Plus `unconvertible` (§5), merged with the query's own list. **Nine fields, all
 always present on the wire.** An absent field and an empty one are different
 claims, and only one of them is "nothing was excluded".
 
@@ -370,6 +407,19 @@ have, and both exist because money was falling through.**
   null. If it is not, the classification has a hole and this is the money in
   it.**
 
+**`conflicting` is the disclosure the twin-label merge needs** (§2.2). A
+payment whose counted document is labelled `supplies` while its bill says
+`services` is labelled, so it is not `uncategorised`, and before this bucket the
+`services` chart's footer did not mention it at all. A canonical row lands here
+when `label_conflict` is set, the rule fails it, and the rule would pass
+`sf.labels || twin` for some entry of `twin_labels`, that is, had that twin's
+document labels won. It reads the row's own array (`unnest`), never the view a
+second time. The rule test keeps it from being noise: the same payment is not
+reported by a `software` chart, which neither document would have put it in.
+The UI calls it *Labelled differently on a matching document*, under *needs
+attention*, and it drills like any other bucket (§7.1), listing the counted
+document.
+
 **A refund is netted, not excluded.** It *is* in the total and the point of a
 signed `amount_kind` is that it lowers it, so it is reported in the header block
 beside the total (`including 1 refund netted off −EUR 49.00`) as a positive
@@ -381,8 +431,8 @@ refund the chart could **not** convert is not netted off anything and is left to
 `unconvertible` instead.
 
 **Touched, not merely matching.** The rows the footer considers are those the
-rule matches *or* that are missing a label for a facet the rule names
-(`NOT (sf.labels ?& CAST(:facets AS text[]))`). Restricting to matches alone
+rule matches, that are missing a label for a facet the rule names
+(`NOT (sf.labels ?& CAST(:facets AS text[]))`), or that are `conflicting`. Restricting to matches alone
 would hide every unlabelled row behind the very label it is missing — which is
 the gap; widening to the whole archive would make every chart report money
 belonging to a different question. The consequence is intended: unlabelled
@@ -392,9 +442,11 @@ window contains it.
 Branch order inside the `CASE` is load-bearing: `outside` first but only for
 rows that *have* a date (an undated row sits in no window, so no window may drop
 it); kind before rule, so a coverage limit is reported as excluded rather than
-competing with the label branches; and rule before `uncategorised`, so an
-unlabelled row a `not_in` rule already counted (§3) is not *also* reported as a
-gap the chart did not have. Counted money is not missing money.
+competing with the label branches; rule before `conflicting` and
+`uncategorised`, so an unlabelled row a `not_in` rule already counted (§3) is
+not *also* reported as a gap the chart did not have; and `conflicting` before
+`uncategorised`, the more specific reason when both hold. Counted money is not
+missing money.
 
 The set of facets the rule names is supplied by the **router**, not derived in
 `footer.py` — which trusts its caller. Passing an empty set for a facet-bearing
@@ -412,7 +464,7 @@ with nowhere to go, and `uncategorised` in particular is described in §7 as
 The footer's per-row classify/convert/sign step is shared, not duplicated:
 `_accounted_rows` is the **one** execution of the footer's `CASE` statement
 and the one conversion/sign step, called by both `chart_footer` (which
-aggregates its output into `Footer`'s eight fields) and
+aggregates its output into `Footer`'s nine fields) and
 `chart_footer_documents` (which filters and deduplicates the same output into
 a document list). There is exactly one classification to disagree with
 itself, which is what makes "the panel must add up to the bar" true of the
@@ -714,7 +766,7 @@ nothing underneath it can be:
    quietly answers a different question. `/data` also **echoes the resolved**
    `grain`, `split`, `currency`, `since` and `until` so a client can drill with
    them verbatim.
-3. **All eight footer fields** (§7). A serialiser written from a minimal reading
+3. **All nine footer fields** (§7). A serialiser written from a minimal reading
    drops `unclassified` and `unaccounted` and silently restores the bugs they
    were added for.
 4. **An empty rule means all spending** (§9).

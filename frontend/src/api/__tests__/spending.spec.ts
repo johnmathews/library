@@ -46,6 +46,7 @@ describe('spending API', () => {
       excluded: [],
       unclassified: null,
       uncategorised: null,
+      conflicting: null,
       undated: null,
       unaccounted: null,
       unconvertible: [],

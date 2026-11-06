@@ -82,6 +82,7 @@ const PREVIEW: ChartData = {
     excluded: [],
     unclassified: null,
     uncategorised: null,
+    conflicting: null,
     undated: null,
     unaccounted: null,
     unconvertible: [],

@@ -29,7 +29,7 @@ Four things this module is responsible for that nothing underneath it can be:
   and `chart_cell` share their predicate internally, but only if they are given
   the same arguments. The argument set is built once per request and unpacked
   into both, so a drift is a type error rather than a wrong panel.
-* **The whole footer** (`_footer_out`). Eight fields, including `unclassified`
+* **The whole footer** (`_footer_out`). Nine fields, including `unclassified`
   (money with an amount and an undecided kind) and `unaccounted` (the live
   `ELSE`). Dropping either restores the bug it was added for: money that appears
   in no line of the accounting at all.
@@ -53,6 +53,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.charts.draft import MAX_QUESTION_CHARS, DraftError, draft_rule
 from library.charts.footer import (
+    CONFLICTING,
     UNACCOUNTED,
     UNCATEGORISED,
     UNCLASSIFIED,
@@ -215,7 +216,7 @@ class UnconvertibleOut(BaseModel):
 
 class ExcludedGroupOut(BaseModel):
     """Money the total did not count, and why. `amount_kind` is the reason, not
-    always a kind: `unclassified`, `undated`, `uncategorised` and `unaccounted`
+    always a kind: `unclassified`, `undated`, `uncategorised`, `conflicting` and `unaccounted`
     name their own group."""
 
     amount_kind: str
@@ -224,7 +225,7 @@ class ExcludedGroupOut(BaseModel):
 
 
 class FooterOut(BaseModel):
-    """§9.4's accounting, in full. All eight fields, always present.
+    """§9.4's accounting, in full. All nine fields, always present.
 
     An absent footer field and an empty one are different claims, and only one
     of them is "nothing was excluded", so the keys are never conditional.
@@ -234,6 +235,10 @@ class FooterOut(BaseModel):
     an undecided kind or a missing label means "not yet decided". `unaccounted`
     should always be null; if it is not, the classification has a hole and this
     is the money in it.
+
+    `conflicting` is money a matching document labels differently: the payment
+    is counted under its counted document's label, which fails this rule, while
+    a twin's label would pass it (docs/charts.md §2.2).
     """
 
     netted_refunds: Decimal
@@ -241,6 +246,7 @@ class FooterOut(BaseModel):
     excluded: list[ExcludedGroupOut]
     unclassified: ExcludedGroupOut | None
     uncategorised: ExcludedGroupOut | None
+    conflicting: ExcludedGroupOut | None
     undated: ExcludedGroupOut | None
     unaccounted: ExcludedGroupOut | None
     unconvertible: list[UnconvertibleOut]
@@ -839,6 +845,7 @@ def _footer_out(footer: Footer, from_total: list[Unconvertible]) -> FooterOut:
         ],
         unclassified=_group(footer.unclassified),
         uncategorised=_group(footer.uncategorised),
+        conflicting=_group(footer.conflicting),
         undated=_group(footer.undated),
         unaccounted=_group(footer.unaccounted),
         unconvertible=_merge_unconvertible(from_total, footer.unconvertible),
@@ -1169,7 +1176,9 @@ async def chart_cell_data(
 #: `_CLASSIFY_SQL` bucket at all but a merge of two separately-reported lists
 #: (docs/charts.md §5), so listing its documents would need `Unconvertible` to
 #: carry document ids — an engine change, out of scope.
-_FOOTER_BUCKETS = frozenset({"excluded", UNCLASSIFIED, UNCATEGORISED, UNDATED, UNACCOUNTED})
+_FOOTER_BUCKETS = frozenset(
+    {"excluded", UNCLASSIFIED, UNCATEGORISED, CONFLICTING, UNDATED, UNACCOUNTED}
+)
 
 
 class FooterDocumentOut(BaseModel):

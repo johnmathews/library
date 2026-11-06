@@ -668,7 +668,7 @@ def test_a_saved_chart_returns_data_with_its_footer(api_client: TestClient) -> N
     assert body["footer"]["netted_refunds"] == "0.00"
 
 
-def test_the_footer_carries_all_eight_fields_including_unclassified(
+def test_the_footer_carries_all_nine_fields_including_unclassified(
     api_client: TestClient, api_database_url: str
 ) -> None:
     """MUTATION: drop `unclassified` (or `unaccounted`) from `_footer_out` and
@@ -689,6 +689,7 @@ def test_the_footer_carries_all_eight_fields_including_unclassified(
         "excluded",
         "unclassified",
         "uncategorised",
+        "conflicting",
         "undated",
         "unaccounted",
         "unconvertible",
@@ -706,6 +707,7 @@ def test_the_footer_carries_all_eight_fields_including_unclassified(
     # the strength of the keys existing.
     assert footer["undated"] == {"amount_kind": "undated", "amount": "15.00", "documents": 1}
     assert footer["uncategorised"] is None
+    assert footer["conflicting"] is None
     assert footer["unaccounted"] is None
 
 
@@ -1541,6 +1543,7 @@ def test_a_preview_carries_the_full_footer(api_client: TestClient, api_database_
         "excluded",
         "unclassified",
         "uncategorised",
+        "conflicting",
         "undated",
         "unaccounted",
         "unconvertible",
@@ -2059,6 +2062,45 @@ def test_the_footer_route_lists_the_documents_behind_a_count(
     assert listed[document_id]["amount"] == "89.20"
 
 
+def test_a_payment_its_twin_labels_differently_is_a_drillable_conflicting_bucket(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """F5 over HTTP: a bill labelled software and its receipt labelled
+    services (same sender, amount and day, so rule R1 merges them). The
+    receipt is counted and keeps services, so the software chart does not
+    count the payment; `/data` must say where it went, and `/footer/conflicting`
+    must open it like every other bucket."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="47.30",
+        kind=AmountKind.PAYMENT_DUE,
+        labels={"category": "software"},
+        sender="Example Twin Vendor",
+    )
+    receipt = _seed_document(
+        api_database_url,
+        amount="47.30",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "services"},
+        sender="Example Twin Vendor",
+    )
+    chart_id = _save_chart(api_client, "api-footer-conflicting", SOFTWARE_RULE)
+    data = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    assert data["total"] == "0.00"
+    assert data["footer"]["conflicting"] == {
+        "amount_kind": "conflicting",
+        "amount": "47.30",
+        "documents": 1,
+    }
+    body = api_client.get(
+        f"/api/spending/{chart_id}/footer/conflicting", params={"currency": data["currency"]}
+    ).json()
+    assert body["total"] == 1
+    assert [(d["id"], d["amount"]) for d in body["documents"]] == [(receipt, "47.30")]
+
+
 def test_an_unknown_footer_bucket_is_a_422_naming_it(api_client: TestClient) -> None:
     chart_id = _save_chart(api_client, "api-footer-bucket-422", {})
     response = api_client.get(f"/api/spending/{chart_id}/footer/nonsense")
@@ -2254,6 +2296,32 @@ def test_a_merged_pair_counts_once(api_client: TestClient, api_database_url: str
 
     alpha = next(c for c in counts if c["facet_key"] == facet)
     assert alpha["documents"] == 1, "two documents, one payment, one canonical row"
+
+
+def test_a_value_only_a_twin_carries_is_counted(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """F17: a bill labelled alpha and its unlabelled receipt are one payment,
+    counted on the receipt. Before migration 0041 the receipt's row carried no
+    label, so alpha had no canonical row and the empty state could never
+    propose it. The counted row now inherits its twin's label, and the count
+    picks that up from the view with no change to `_FACET_COUNTS_SQL`."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha",))
+    name = f"Example Twin Vendor {uuid.uuid4()}"
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_DUE,
+        labels={facet: "alpha"},
+        sender=name,
+    )
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE, sender=name)
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    mine = [(c["value_key"], c["documents"]) for c in counts if c["facet_key"] == facet]
+    assert mine == [("alpha", 1)], "one payment, counted once, under its twin's label"
 
 
 def test_a_split_document_counts_once_in_facet_counts(

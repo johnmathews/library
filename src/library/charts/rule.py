@@ -52,8 +52,16 @@ class Rule(BaseModel):
     all: list[Clause] = []
 
 
-def rule_predicate(rule: Rule) -> tuple[str, dict[str, object]]:
-    """Translate a rule into a SQL fragment over the alias ``sf``."""
+def rule_predicate(rule: Rule, *, labels: str = "sf.labels") -> tuple[str, dict[str, object]]:
+    """Translate a rule into a SQL fragment over the alias ``sf``.
+
+    ``labels`` is the jsonb expression the clauses test, ``sf.labels`` unless a
+    caller asks about a hypothetical label set: the footer's conflicting-labels
+    bucket tests ``sf.labels || tw.labels``, a row with one twin's labels
+    winning. It is always a literal written in this package, never input. The
+    binds are named by clause position alone, so two fragments built from one
+    rule bind the same names to the same values and can share one params dict.
+    """
     if not rule.all:
         return "TRUE", {}
     fragments: list[str] = []
@@ -64,7 +72,7 @@ def rule_predicate(rule: Rule) -> tuple[str, dict[str, object]]:
         facet_key, values_key = f"f{index}", f"v{index}"
         params[facet_key] = clause.facet
         params[values_key] = list(clause.values)
-        member = f"sf.labels->>:{facet_key} = ANY(:{values_key})"
+        member = f"{labels}->>:{facet_key} = ANY(:{values_key})"
         if clause.op == "in":
             fragments.append(f"({member})")
         else:
@@ -72,5 +80,5 @@ def rule_predicate(rule: Rule) -> tuple[str, dict[str, object]]:
             # and NULL <> ANY(...) is NULL rather than TRUE. Without the
             # explicit IS NULL arm an unlabelled row satisfies neither a
             # `not_in` rule nor its complement, and disappears from both.
-            fragments.append(f"(sf.labels->>:{facet_key} IS NULL OR NOT ({member}))")
+            fragments.append(f"({labels}->>:{facet_key} IS NULL OR NOT ({member}))")
     return " AND ".join(fragments), params

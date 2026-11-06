@@ -165,12 +165,13 @@ AMOUNT_SIGN: Mapping[AmountKind, int] = MappingProxyType(
 SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(AMOUNT_SIGN)
 
 
-#: The ``spend_facts`` view (migration 0035) as a composable selectable.
+#: The ``spend_facts`` view (migration 0035, recreated by 0041) as a composable selectable.
 #:
 #: A lightweight ``table()`` rather than a ``Table`` on ``Base.metadata``,
 #: deliberately: this is a **view**, and putting it in the metadata would offer
 #: it to ``create_all``/``drop_all`` and to Alembic's autogenerate as though it
-#: were a table the ORM owns. Migration 0035 is the one definition of its shape.
+#: were a table the ORM owns. The latest migration that creates it (0041) is the
+#: one definition of its shape.
 #:
 #: The view's other readers — ``library.charts.query``, ``library.charts.footer``
 #: and ``library.api.facets`` — reach it through ``text()`` SQL, which is right
@@ -198,7 +199,8 @@ spend_facts = table(
     # Written by 0033 as `sa.Enum(..., native_enum=False)`, i.e. a VARCHAR with
     # a CHECK — so it compares against `AmountKind`'s *values*, not the enum.
     column("amount_kind", String),
-    # The row's merged facet labels: a line's own over its document's.
+    # The row's merged facet labels: a line's own over its document's, and on
+    # the canonical row over its twins' document labels (0041).
     column("labels", JSONB),
 )
 

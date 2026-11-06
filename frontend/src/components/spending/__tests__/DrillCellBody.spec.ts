@@ -45,6 +45,7 @@ const BASE_FOOTER: Footer = {
   excluded: [],
   unclassified: null,
   uncategorised: null,
+  conflicting: null,
   undated: null,
   unaccounted: null,
   unconvertible: [],
