@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -16,6 +17,7 @@ from library.config import Settings, get_settings
 from library.models import AmountKind, Document, DocumentSource, DocumentStatus
 from library.money import backfill as backfill_module
 from library.money.backfill import documents_needing_amount_kind, run_amount_backfill
+from library.money.statistics import MONEY_TABLES
 
 pytestmark = pytest.mark.integration
 
@@ -140,6 +142,63 @@ def test_a_classification_error_does_not_abort_the_run(
     assert skipped >= 1
     assert classified >= 1
     assert empty == 0
+
+
+async def _backfill_statements(
+    database_url: str, monkeypatch: pytest.MonkeyPatch, *, kind: str | None
+) -> tuple[list[str], tuple[int, int, int]]:
+    """Run the backfill with a stub classifier; return the SQL it executed."""
+
+    async def stub(*_args: Any, **_kwargs: Any) -> tuple[str | None, str | None, int, int]:
+        return kind, None, 1, 1
+
+    monkeypatch.setattr(backfill_module, "classify_amount", stub)
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    seen: list[str] = []
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _capture(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        seen.append(statement)
+
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            counts = await run_amount_backfill(session, get_settings(), limit=None)
+    finally:
+        await engine.dispose()
+    return seen, counts
+
+
+def test_backfill_analyses_the_money_tables_once_after_its_last_commit(
+    api_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The decided amounts are what the money views join on, and fresh rows have
+    no planner statistics: unanalysed, a money question over 4,000 documents ran
+    past 120 s (1.34 s after ANALYZE)."""
+    _seed(api_database_url, [(Decimal("10.00"), None), (Decimal("20.00"), None)])
+    seen, (classified, _empty, _skipped) = asyncio.run(
+        _backfill_statements(api_database_url, monkeypatch, kind="payment_due")
+    )
+    assert classified == 2
+    analyses = [i for i, s in enumerate(seen) if s.lstrip().upper().startswith("ANALYZE")]
+    assert len(analyses) == 1
+    for table in MONEY_TABLES:
+        assert table in seen[analyses[0]]
+    writes = [i for i, s in enumerate(seen) if s.lstrip().upper().startswith("UPDATE")]
+    assert writes
+    assert analyses[0] > max(writes), "ANALYZE must follow the last write"
+
+
+def test_backfill_that_writes_nothing_does_not_analyse(
+    api_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(api_database_url, [(Decimal("10.00"), None)])
+    # The model could not decide: the row stays NULL, nothing is written.
+    seen, (classified, empty, _skipped) = asyncio.run(
+        _backfill_statements(api_database_url, monkeypatch, kind=None)
+    )
+    assert classified == 0
+    assert empty >= 1
+    assert not [s for s in seen if "ANALYZE" in s.upper()]
 
 
 # --- the amount classifier's response handling -------------------------------

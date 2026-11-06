@@ -20,6 +20,7 @@ from library.extraction.schema import MAX_REFERENCE_CHARS, normalize_amount_kind
 from library.llm import subscription
 from library.llm.envelope import strip_json_envelope
 from library.models import AmountKind, Document, Kind, Sender
+from library.money.statistics import analyze_money_tables
 
 logger = logging.getLogger(__name__)
 
@@ -295,4 +296,8 @@ async def run_amount_backfill(
             empty += 1
             continue
         classified += 1
+    if classified:
+        # The decided amounts are what the money views join on; without fresh
+        # statistics the first money question can hang (money/statistics.py).
+        await analyze_money_tables(session)
     return classified, empty, skipped
