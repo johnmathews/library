@@ -1,7 +1,7 @@
 # Deployment
 
 **Status:** active. **Last updated:** 2026-11-06 (§1.7.2 point 5: WUD deploys each new `:latest`; `scripts/deploy.sh` verifies by default and `--deploy` migrates once under a host lock). Earlier: 2026-11-06 (§1.7.2: the deploy prunes old images). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to the `compose-smoke` paragraph of §1.4: the steps ran against a locally built image (green), and red against builds with the MCP mount moved, the strict Host guard on, and the API log handler removed. The rest carries forward the 2026-11-04 check of §1.5 and §1.5.1.
+**Last verified:** 2026-11-07 — method: partial, scoped to §1.7.2 point 5: read on the host after the 00:12 CET role apply (`/srv/apps/wud-deploy-library.sh` takes the `/srv/apps` lock, runs `compose run --rm -T library-migrate` once, then `up -d --no-deps`), WUD's own log for the 2026-11-06 race, and `tests/test_deploy_script.py` (seen red). The rest carries forward the 2026-11-05 `compose-smoke` check of §1.4 and the 2026-11-04 check of §1.5.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
