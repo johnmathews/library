@@ -143,3 +143,20 @@ def test_every_job_has_a_time_limit() -> None:
     unlimited = [name for name, job in _jobs().items() if "timeout-minutes" not in job]
 
     assert not unlimited, f"jobs without timeout-minutes: {unlimited}"
+
+
+@pytest.mark.parametrize(
+    "step_name", ["Install OCR system packages", "Install Playwright system dependencies"]
+)
+def test_apt_steps_use_the_retry_script(step_name: str) -> None:
+    """Both apt steps share scripts/ci_apt_retry.sh (retry + mirror switch), not a private loop."""
+    runs = [
+        step["run"]
+        for job in _jobs().values()
+        for step in job.get("steps", [])
+        if step.get("name") == step_name
+    ]
+
+    assert len(runs) == 1, f"expected one '{step_name}' step, found {len(runs)}"
+    assert "scripts/ci_apt_retry.sh" in runs[0], runs[0]
+    assert "for attempt in" not in runs[0], "the retry loop belongs in the script"
