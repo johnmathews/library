@@ -672,3 +672,47 @@ def test_check_constraint_names_match_the_naming_convention(
     by_table = dict(checks)
     assert by_table["charts"] == "ck_charts_default_grain"
     assert by_table["spend_lines"] == "ck_spend_lines_origin"
+
+
+#: `spend_facts` as Postgres stores it: its columns with their types, and the
+#: deparsed definition. `pg_get_viewdef` normalises whitespace and drops
+#: comments, so equal definitions compare equal however the SQL was written.
+_SPEND_FACTS_COLUMNS = """
+SELECT column_name, data_type, ordinal_position
+FROM information_schema.columns
+WHERE table_name = 'spend_facts'
+ORDER BY ordinal_position
+"""
+_SPEND_FACTS_VIEWDEF = "SELECT pg_get_viewdef('spend_facts'::regclass, true)"
+
+
+def test_0041_downgrade_restores_the_exact_0040_view(admin_database_url: str) -> None:
+    """0041 replaces `spend_facts`, and its downgrade carries a copy of 0035's
+    SQL. A copy can drift from what it copied, so rather than assert a few
+    remembered properties this diffs the downgraded view against a database
+    migrated straight to 0040, then upgrades again.
+
+    The head side is asserted too: 0041 keeps every 0040 column, in its place,
+    and adds exactly `label_conflict` and `twin_labels` after them."""
+    original = create_database(admin_database_url, "library_spend_facts_at_0040")
+    command.upgrade(alembic_config(original), "0040")
+
+    roundtrip = create_database(admin_database_url, "library_spend_facts_roundtrip")
+    config = alembic_config(roundtrip)
+    command.upgrade(config, "0041")
+    at_0041 = fetch_all(roundtrip, _SPEND_FACTS_COLUMNS)
+    command.downgrade(config, "0040")
+
+    before = fetch_all(original, _SPEND_FACTS_COLUMNS)
+    assert before, "no spend_facts at 0040; the diff would pass vacuously"
+    assert fetch_all(roundtrip, _SPEND_FACTS_COLUMNS) == before
+    assert fetch_all(roundtrip, _SPEND_FACTS_VIEWDEF) == fetch_all(original, _SPEND_FACTS_VIEWDEF)
+
+    assert at_0041[: len(before)] == before
+    assert [(name, kind) for name, kind, _ in at_0041[len(before) :]] == [
+        ("label_conflict", "boolean"),
+        ("twin_labels", "ARRAY"),
+    ]
+
+    command.upgrade(config, "head")
+    assert fetch_all(roundtrip, _SPEND_FACTS_COLUMNS) == at_0041

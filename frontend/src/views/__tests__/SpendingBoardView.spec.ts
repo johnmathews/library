@@ -100,6 +100,7 @@ function emptyData(chartId: number): ChartData {
       excluded: [],
       unclassified: null,
       uncategorised: null,
+      conflicting: null,
       undated: null,
       unaccounted: null,
       unconvertible: [],

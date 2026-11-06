@@ -1,7 +1,7 @@
 # Frontend
 
-**Status:** active. **Last updated:** 2026-11-04 (new `OAuthConsentView` at `/oauth/consent`, rendered without the shell via `meta.bare`, §1.3 and §1.5; Settings gains a **Connected apps** tab, and its tablist now scrolls sideways on phones). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to the §1.3 `App.vue` branch, the `OAuthConsentView` row and the `SettingsView` row's Connected apps sentences. Unit specs (`OAuthConsentView.spec.ts`, `SettingsView.spec.ts`, `guard.spec.ts`, `App.spec.ts`) seen red first, then green with the full suite; the page and tab screenshotted at 375 px and 1280 px against a local server, which also measured the tablist scroll. Other sections carry their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-06 (`SpendingFooter` and `SpendingCard` gain the "labelled differently" needs-attention row; `SpendingWorkspaceView` titles its drill panel). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: partial, scoped to the `SpendingFooter.vue` and `SpendingCard.vue` paragraphs. Read both components and their specs (`SpendingFooter.spec.ts` and `SpendingCard.spec.ts`, seen red first); the paragraphs' claims (three blocks, refund netted, needs-attention line) still hold. The rest carries its 2026-11-04 verification forward.
 **Covers:** frontend/src/views/, frontend/src/router/index.ts, frontend/src/components/, frontend/src/spending/, frontend/src/composables/, frontend/src/utils/contentDisposition.ts
 
 The Library web UI: a Vue 3 single-page app styled with the **Mosaic** design

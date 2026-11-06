@@ -48,6 +48,7 @@ function emptyFooter(overrides: Partial<Footer> = {}): Footer {
     excluded: [],
     unclassified: null,
     uncategorised: null,
+    conflicting: null,
     undated: null,
     unaccounted: null,
     unconvertible: [],
@@ -249,11 +250,12 @@ describe('SpendingCard', () => {
     expect(attention(mountCard(CLEAN)).exists()).toBe(false)
   })
 
-  // Each of the four needs-attention buckets gets its own case: a bug that
+  // Each of the five needs-attention buckets gets its own case: a bug that
   // mislabels one (e.g. rendering `unclassified` under the `undated` name)
   // would pass a test that only ever exercises `uncategorised`.
   it.each([
     ['unclassified', { unclassified: { amount_kind: 'unclassified', amount: '12.00', documents: 2 } }, '2 documents unclassified'],
+    ['conflicting', { conflicting: { amount_kind: 'conflicting', amount: '84.20', documents: 1 } }, '1 document labelled differently'],
     ['undated', { undated: { amount_kind: 'undated', amount: '18.00', documents: 5 } }, '5 documents undated'],
     ['unaccounted', { unaccounted: { amount_kind: 'unaccounted', amount: '9.00', documents: 1 } }, '1 document unaccounted'],
   ] as const)('names the %s bucket in the needs-attention line', (_bucket, footer, expected) => {

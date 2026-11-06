@@ -1194,8 +1194,9 @@ async def test_sum_amount_line_facet_total_equals_the_chart_over_the_same_rows(
     ``spend_facts.labels`` per row (``charts/rule.py``) and keeps the view's
     archive-wide twin, ``sum_amount`` chooses the twin within the filter. Here
     the two choices coincide (the itemised invoice wins both ways), which is
-    what makes agreement the expected answer. A fixture where they differ is
-    W5's (``docs/money-facts.md`` §5.2).
+    what makes agreement the expected answer. The twin cases below, where the
+    two choices could differ, hold because the view merges a payment's labels
+    onto its canonical row (migration 0041).
     """
     await _seed_line_facet_fixture(session)
 
@@ -1219,20 +1220,22 @@ async def test_sum_amount_line_facet_total_equals_the_chart_over_the_same_rows(
 async def test_sum_amount_line_facet_chooses_the_twin_whose_money_carries_it(
     session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
 ) -> None:
-    """The twin is chosen among the documents whose money carries the facet.
+    """A twin's label reaches the canonical document, which then carries it.
 
     An itemised invoice with unlabelled lines and its receipt, labelled
-    supplies, are one 100.00 payment. Archive-wide the invoice ranks first
-    (it has lines), but none of its rows is supplies; the receipt's is. So a
-    supplies total is carried by the receipt: 100.00, the receipt included,
-    and the invoice not matched at all. Choosing the twin before applying the
-    facet picks the invoice, sums none of its rows, and reports the receipt as
-    a ``duplicate_payment`` of a payment the rows never counted.
+    supplies, are one 100.00 payment. The invoice ranks first (it has lines),
+    and since migration 0041 its lines inherit the receipt's supplies
+    (``docs/money-facts.md`` §5.2: a payment's counted row carries its twins'
+    labels). So both documents' money carries supplies, both are candidates,
+    and the invoice carries the payment, as it does in every chart: 100.00,
+    cited to the invoice, with the receipt reported as its
+    ``duplicate_payment``.
 
-    The chart reads the archive-wide twin and answers 0.00 here; that is
-    W5's item (``docs/money-facts.md`` §5.2), not asserted.
+    Before 0041 only the receipt's row carried supplies, so the receipt was
+    the one candidate and was cited instead. Either way the total is 100.00;
+    what this pins is that the cited document is the one charts count.
     """
-    await seed(
+    invoice = await seed(
         session,
         "unlabelled-lines",
         sender_name="Example Builder",
@@ -1244,7 +1247,7 @@ async def test_sum_amount_line_facet_chooses_the_twin_whose_money_carries_it(
         reference="EB-305",
         lines=[("70.00", None), ("30.00", None)],
     )
-    receipt = await seed(
+    await seed(
         session,
         "labelled-receipt",
         sender_name="Example Builder",
@@ -1262,8 +1265,218 @@ async def test_sum_amount_line_facet_chooses_the_twin_whose_money_carries_it(
     )
 
     assert {(row.currency, row.total) for row in result.rows} == {("EUR", "100.00")}
+    assert result.rows[0].document_ids == [invoice]
+    assert result.coverage == Coverage(
+        matched=2, included=1, excluded={"duplicate_payment": 1}, needs_review=0
+    )
+
+
+async def _chart_total(
+    session: AsyncSession, value: str, since: date | None, until: date | None
+) -> Decimal:
+    series = await chart_series(
+        session,
+        Rule(all=[Clause(facet="category", values=[value])]),
+        grain=Grain.MONTH,
+        split=None,
+        currency="EUR",
+        since=since,
+        until=until,
+    )
+    return series.total
+
+
+async def _bill_and_receipt(
+    session: AsyncSession,
+    reference: str,
+    *,
+    bill_date: date,
+    receipt_date: date,
+    bill_labels: dict[str, str] | None = None,
+    receipt_labels: dict[str, str] | None = None,
+) -> tuple[int, int]:
+    """One 84.20 payment documented twice: a bill and its receipt (rule R2).
+
+    The receipt is ``payment_made``, so it is the canonical document."""
+    bill = await seed(
+        session,
+        f"{reference}-bill",
+        sender_name="Example Water",
+        kind_slug="utility-bill",
+        document_date=bill_date,
+        amount="84.20",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        reference=reference,
+        labels=bill_labels,
+    )
+    receipt = await seed(
+        session,
+        f"{reference}-receipt",
+        sender_name="Example Water",
+        kind_slug="receipt",
+        document_date=receipt_date,
+        amount="84.20",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference=reference,
+        labels=receipt_labels,
+    )
+    return bill, receipt
+
+
+async def test_sum_amount_counts_a_payment_whose_label_only_its_bill_carries(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """F4, same month: the bill is labelled services, the canonical receipt is
+    not. The total was right before 0041 too; what changes is that the receipt
+    now carries services as well, so it is the counted document (as in the
+    chart) and the bill is its ``duplicate_payment``."""
+    _bill, receipt = await _bill_and_receipt(
+        session,
+        "EW-1",
+        bill_date=date(2024, 2, 5),
+        receipt_date=date(2024, 2, 12),
+        bill_labels={"category": "services"},
+    )
+
+    result = await sum_amount(
+        session, filters=DocumentFilters(facets={"category": "services"}, **_FEB_2024)
+    )
+
+    assert [(row.currency, row.total) for row in result.rows] == [("EUR", "84.20")]
     assert result.rows[0].document_ids == [receipt]
-    assert result.coverage == Coverage(matched=1, included=1, excluded={}, needs_review=0)
+    assert result.coverage == Coverage(
+        matched=2, included=1, excluded={"duplicate_payment": 1}, needs_review=0
+    )
+    assert await _chart_total(
+        session, "services", _FEB_2024["date_from"], _FEB_2024["date_to"]
+    ) == Decimal("84.20")
+
+
+async def test_sum_amount_lands_a_cross_month_payment_in_the_charts_month(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """F4 across a month boundary: a bill of 28 January labelled services, its
+    unlabelled receipt of 3 February. The receipt is canonical, so the chart
+    draws the payment in February; the services total must say February too,
+    and January and February must add up to the whole."""
+    await _bill_and_receipt(
+        session,
+        "EW-2",
+        bill_date=date(2024, 1, 28),
+        receipt_date=date(2024, 2, 3),
+        bill_labels={"category": "services"},
+    )
+    january = {"date_from": date(2024, 1, 1), "date_to": date(2024, 1, 31)}
+    services = {"category": "services"}
+
+    jan = await sum_amount(session, filters=DocumentFilters(facets=services, **january))
+    feb = await sum_amount(session, filters=DocumentFilters(facets=services, **_FEB_2024))
+    whole = await sum_amount(session, filters=DocumentFilters(facets=services))
+
+    assert jan.rows == []
+    assert jan.coverage.excluded == {"payment_dated_elsewhere": 1}
+    assert [(row.currency, row.total) for row in feb.rows] == [("EUR", "84.20")]
+    assert [(row.currency, row.total) for row in whole.rows] == [("EUR", "84.20")]
+    assert await _chart_total(
+        session, "services", january["date_from"], january["date_to"]
+    ) == Decimal("0")
+    assert await _chart_total(
+        session, "services", _FEB_2024["date_from"], _FEB_2024["date_to"]
+    ) == Decimal("84.20")
+
+
+async def test_sum_amount_does_not_count_an_itemised_payment_twice_across_facets(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """An unlabelled invoice itemised 60.00 + 40.00 (supplies), and its receipt
+    labelled services. Before 0041 the services total was the receipt's whole
+    100.00 and the supplies total the invoice's 40.00 line: 140.00 for one
+    100.00 payment. Now the invoice's 60.00 line inherits services, the
+    invoice carries the payment for both facets, and the two add up to 100.00."""
+    invoice = await seed(
+        session,
+        "it-invoice",
+        sender_name="Example Builder",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 5),
+        amount="100.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        reference="EB-410",
+        lines=[("60.00", None), ("40.00", {"category": "supplies"})],
+    )
+    await seed(
+        session,
+        "it-receipt",
+        sender_name="Example Builder",
+        kind_slug="receipt",
+        document_date=date(2024, 2, 12),
+        amount="100.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        reference="EB-410",
+        labels={"category": "services"},
+    )
+
+    totals = {}
+    for value in ("services", "supplies"):
+        result = await sum_amount(
+            session, filters=DocumentFilters(facets={"category": value}, **_FEB_2024)
+        )
+        assert [row.document_ids for row in result.rows] == [[invoice]]
+        totals[value] = Decimal(result.rows[0].total)
+        assert totals[value] == await _chart_total(
+            session, value, _FEB_2024["date_from"], _FEB_2024["date_to"]
+        )
+
+    assert totals == {"services": Decimal("60.00"), "supplies": Decimal("40.00")}
+
+
+async def test_sum_amount_uses_the_canonical_amount_of_an_unequal_manual_merge(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """A hand merge (no rule requires equal amounts there): an invoice of
+    100.00 labelled services and an unlabelled receipt of 90.00. The receipt
+    is canonical and inherits services, so the services total is the
+    receipt's 90.00, the figure every chart shows, not the invoice's 100.00."""
+    invoice = await seed(
+        session,
+        "mm-invoice",
+        sender_name="Example Garage",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 5),
+        amount="100.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        labels={"category": "services"},
+    )
+    receipt = await seed(
+        session,
+        "mm-receipt",
+        sender_name="Example Garage",
+        kind_slug="receipt",
+        document_date=date(2024, 2, 12),
+        amount="90.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+    await session.execute(
+        text("INSERT INTO payment_overrides (kind, doc_a, doc_b) VALUES ('MERGE', :a, :b)"),
+        {"a": min(invoice, receipt), "b": max(invoice, receipt)},
+    )
+    await session.commit()
+
+    result = await sum_amount(
+        session, filters=DocumentFilters(facets={"category": "services"}, **_FEB_2024)
+    )
+
+    assert [(row.currency, row.total) for row in result.rows] == [("EUR", "90.00")]
+    assert result.rows[0].document_ids == [receipt]
+    assert await _chart_total(
+        session, "services", _FEB_2024["date_from"], _FEB_2024["date_to"]
+    ) == Decimal("90.00")
 
 
 #: A read of the ``spend_facts`` view in emitted SQL (not a column reference

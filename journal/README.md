@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-216 entries.
+217 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -18,6 +18,7 @@ CI checks it is current.
 - **2026-11-06** — [The deploy prunes old images](261106-deploy-prunes-old-images.md)
 - **2026-11-06** — [CI time limits, apt retries, and no e2e on docs-only changes](261106-ci-time-limits-and-docs-only-e2e.md)
 - **2026-11-06** — [CI apt retries switch away from the slow mirror](261106-ci-apt-mirror-fallback.md)
+- **2026-11-06** — [A payment's counted row carries its twins' labels](261106-charts-twin-labels.md)
 - **2026-11-06** — [Ask refuses filter values the archive does not have](261106-ask-filter-vocabulary.md)
 - **2026-11-05** — [MCP notes, file results, CI smoke test and tool metrics](261105-mcp-notes-and-files.md)
 - **2026-11-05** — [MCP connectors checked live: claude.ai, ChatGPT and Claude Code](261105-mcp-live-connectors.md)

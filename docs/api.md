@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.17: a note title is at most 200 characters on create and edit; earlier the same day, §1.3.2 `amount_kind` and §1.5's 64-character tag slug). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §1.17's title limit. `tests/test_notes_api.py::test_create_and_patch_reject_an_overlong_title` passes, seen red first (a 1,100-character title raised a database error, a 500 over HTTP). The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-06 (§1.23.5: a value only a payment's non-canonical twin carries is now counted, through the canonical row's merged labels; the spending footer drill accepts `bucket=conflicting`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: partial, scoped to §1.23.5 and the `/footer/{bucket}` row. `tests/test_api_spending.py::test_a_value_only_a_twin_carries_is_counted` and `::test_a_payment_its_twin_labels_differently_is_a_drillable_conflicting_bucket` pass, seen red on the 0040 view first. The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -1780,7 +1780,11 @@ label can put a moneyless proposal in front of the owner — a value with no
 qualifying document is simply absent from the response, not present with
 `documents: 0`. `is_canonical` is the one filter that is not free and so is
 explicit in the query: a merged twin (two documents recognised as one real
-payment) is a second row for money already counted once.
+payment) is a second row for money already counted once. Filtering to the
+canonical row loses no label: since migration 0041 it carries the labels its
+twins carry on facets it has none for ([charts.md](charts.md) §2.2), so a value
+only a bill carries is counted through its receipt. A value a twin carries
+where the canonical document has a different one is not counted.
 
 The query joins `spend_facts` to `jsonb_each_text(sf.labels)` and counts
 `DISTINCT sf.document_id` per `(facet_key, value_key)` pair, which guards a
@@ -1899,7 +1903,7 @@ level of detail this document gives every other endpoint.
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/spending/{id}` | One saved question by id: `{id, name, question_text, rule, default_grain, default_split, display_currency, ordinal}` — the same shape as one element of `GET /api/spending`. `404` unknown id. Exists so the workspace can load a chart directly rather than paging the list, which stops finding a chart once there are more of them than `limit`. |
-| GET | `/api/spending/{id}/footer/{bucket}` | The documents behind one footer count (charts.md §7.1). `bucket` is one of `excluded`, `unclassified`, `uncategorised`, `undated`, `unaccounted`; an unrecognised name is a `422` naming it. Query: `?from&to&currency` (resolved exactly as `/data`'s, against the chart's *default* split — `split` itself is not accepted here, `chart_footer_documents` takes no split axis), `?amount_kind` (selects one group out of `excluded`; ignored for every other bucket; `422` naming the requirement if `bucket=excluded` and `amount_kind` is omitted, since an unmatched `excluded` row would otherwise render as an indistinguishable empty page), `?limit` (≤ 100, default 100) and `?offset`. Returns `{bucket, total, documents: [{id, title, date, amount, currency, amount_kind}, ...]}`. `total` is the bucket's **full size before paging** — a bucket bigger than `limit` still returns one page, and without `total` a client cannot tell a complete list of 3 from the first 100 of 340 (`uncategorised` calls this "a visible task" in charts.md §7 precisely because it tends to be large). A document's `amount` is the **sum of its rows in this bucket**: a spend-line-split document can contribute more than one row to the same bucket (charts.md §7.1), and the list deduplicates by document id. `404` unknown chart id. |
+| GET | `/api/spending/{id}/footer/{bucket}` | The documents behind one footer count (charts.md §7.1). `bucket` is one of `excluded`, `unclassified`, `uncategorised`, `conflicting`, `undated`, `unaccounted`; an unrecognised name is a `422` naming it. Query: `?from&to&currency` (resolved exactly as `/data`'s, against the chart's *default* split — `split` itself is not accepted here, `chart_footer_documents` takes no split axis), `?amount_kind` (selects one group out of `excluded`; ignored for every other bucket; `422` naming the requirement if `bucket=excluded` and `amount_kind` is omitted, since an unmatched `excluded` row would otherwise render as an indistinguishable empty page), `?limit` (≤ 100, default 100) and `?offset`. Returns `{bucket, total, documents: [{id, title, date, amount, currency, amount_kind}, ...]}`. `total` is the bucket's **full size before paging** — a bucket bigger than `limit` still returns one page, and without `total` a client cannot tell a complete list of 3 from the first 100 of 340 (`uncategorised` calls this "a visible task" in charts.md §7 precisely because it tends to be large). A document's `amount` is the **sum of its rows in this bucket**: a spend-line-split document can contribute more than one row to the same bucket (charts.md §7.1), and the list deduplicates by document id. `404` unknown chart id. |
 
 `unconvertible` is deliberately not one of the bucket names above: it is not
 one of `_CLASSIFY_SQL`'s categories but a merge of two separately-reported

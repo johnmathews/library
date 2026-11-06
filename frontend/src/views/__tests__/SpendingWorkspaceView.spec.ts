@@ -160,6 +160,7 @@ const FOOTER: Footer = {
   excluded: [],
   unclassified: { amount_kind: 'unclassified', amount: '10.00', documents: 2 },
   uncategorised: null,
+  conflicting: null,
   undated: null,
   unaccounted: null,
   unconvertible: [],

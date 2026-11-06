@@ -59,6 +59,9 @@ export interface Footer {
   excluded: ExcludedGroup[]
   unclassified: ExcludedGroup | null
   uncategorised: ExcludedGroup | null
+  /** Money a matching document labels differently: the counted document's
+   * label fails the rule, a twin's would pass it (docs/charts.md §2.2). */
+  conflicting: ExcludedGroup | null
   undated: ExcludedGroup | null
   unaccounted: ExcludedGroup | null
   unconvertible: Unconvertible[]
@@ -132,7 +135,14 @@ export interface Draft {
   preview: ChartData | null
 }
 
-export const FOOTER_BUCKETS = ['excluded', 'unclassified', 'uncategorised', 'undated', 'unaccounted'] as const
+export const FOOTER_BUCKETS = [
+  'excluded',
+  'unclassified',
+  'uncategorised',
+  'conflicting',
+  'undated',
+  'unaccounted',
+] as const
 export type FooterBucket = (typeof FOOTER_BUCKETS)[number]
 
 /** The window arguments `/data` and `/cell` must agree on. */

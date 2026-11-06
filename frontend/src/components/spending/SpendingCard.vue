@@ -272,28 +272,31 @@ function onReset(): void {
 // --- Needs-attention line --------------------------------------------------
 
 interface AttentionRow {
-  bucket: string
+  /** How the line reads after "N documents": the bucket name, except for
+   * `conflicting`, which is not a word that says what happened. */
+  phrase: string
   documents: number
 }
 
-// Same four buckets `SpendingFooter` lists under "needs attention" —
+// Same five buckets `SpendingFooter` lists under "needs attention" —
 // `excluded` is correctly-not-spending and never appears here, and
 // `unaccounted` should always be empty but is not hidden if it is not.
 const attentionRows = computed<AttentionRow[]>(() => {
   const footer = props.data?.footer
   if (!footer) return []
   const rows: AttentionRow[] = []
-  if (footer.unclassified) rows.push({ bucket: 'unclassified', documents: footer.unclassified.documents })
-  if (footer.uncategorised) rows.push({ bucket: 'uncategorised', documents: footer.uncategorised.documents })
-  if (footer.undated) rows.push({ bucket: 'undated', documents: footer.undated.documents })
-  if (footer.unaccounted) rows.push({ bucket: 'unaccounted', documents: footer.unaccounted.documents })
+  if (footer.unclassified) rows.push({ phrase: 'unclassified', documents: footer.unclassified.documents })
+  if (footer.uncategorised) rows.push({ phrase: 'uncategorised', documents: footer.uncategorised.documents })
+  if (footer.conflicting) rows.push({ phrase: 'labelled differently', documents: footer.conflicting.documents })
+  if (footer.undated) rows.push({ phrase: 'undated', documents: footer.undated.documents })
+  if (footer.unaccounted) rows.push({ phrase: 'unaccounted', documents: footer.unaccounted.documents })
   return rows
 })
 
 const attentionText = computed<string | null>(() => {
   if (attentionRows.value.length === 0) return null
   return attentionRows.value
-    .map((row) => `${row.documents} document${row.documents === 1 ? '' : 's'} ${row.bucket}`)
+    .map((row) => `${row.documents} document${row.documents === 1 ? '' : 's'} ${row.phrase}`)
     .join(', ')
 })
 

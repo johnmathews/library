@@ -12,6 +12,7 @@ const BASE_FOOTER: Footer = {
   excluded: [],
   unclassified: null,
   uncategorised: null,
+  conflicting: null,
   undated: null,
   unaccounted: null,
   unconvertible: [],
@@ -47,6 +48,13 @@ const FULL = chartData({
   unclassified: { amount_kind: 'unclassified', amount: '80.00', documents: 2 },
   uncategorised: { amount_kind: 'uncategorised', amount: '65.00', documents: 4 },
   unconvertible: [{ currency: 'JPY', amount: '3000.00', documents: 1 }],
+})
+
+// A bill labelled one way and its counted receipt another: the chart's rule
+// fails the receipt's label but would have passed the bill's.
+const WITH_CONFLICTING = chartData({
+  uncategorised: { amount_kind: 'uncategorised', amount: '65.00', documents: 4 },
+  conflicting: { amount_kind: 'conflicting', amount: '84.20', documents: 1 },
 })
 
 const WITH_UNACCOUNTED = chartData({
@@ -167,6 +175,36 @@ describe('SpendingFooter', () => {
     expect(wrapper.emitted('bucket')![1]).toEqual(['undated', undefined])
     await bucketButton(wrapper, 'unaccounted').trigger('click')
     expect(wrapper.emitted('bucket')![2]).toEqual(['unaccounted', undefined])
+  })
+
+  // The money is not lost, just counted under another label: it belongs
+  // beside uncategorised under needs attention, never under excluded, and
+  // says in plain words what happened rather than printing the bucket name.
+  it('renders conflicting labels under needs attention, in plain words, with its money', () => {
+    const wrapper = mountFooter(WITH_CONFLICTING)
+    const row = bucketButton(wrapper, 'conflicting')
+    expect(row.element.tagName).toBe('BUTTON')
+    expect(row.text()).toContain('Labelled differently on a matching document')
+    expect(row.text()).toContain('1 document')
+    expect(row.text()).toContain('84.20')
+    expect(row.text()).not.toContain('conflicting')
+    expect(attentionBlock(wrapper).text()).toContain('Labelled differently')
+    expect(excludedBlock(wrapper).text()).not.toContain('Labelled differently')
+    // Beside uncategorised, the other label problem, and after it.
+    const order = attentionBlock(wrapper)
+      .findAll('button')
+      .map((b) => b.attributes('data-testid'))
+    expect(order).toEqual(['spending-footer-bucket-uncategorised', 'spending-footer-bucket-conflicting'])
+  })
+
+  it('opens the conflicting bucket like any other', async () => {
+    const wrapper = mountFooter(WITH_CONFLICTING)
+    await bucketButton(wrapper, 'conflicting').trigger('click')
+    expect(wrapper.emitted('bucket')![0]).toEqual(['conflicting', undefined])
+  })
+
+  it('renders no conflicting row when the group is null', () => {
+    expect(mountFooter(FULL).find('[data-testid="spending-footer-bucket-conflicting"]').exists()).toBe(false)
   })
 
   // An absent field and an empty one are different claims, and only one of

@@ -15,10 +15,13 @@
  *    total and lowers it — so it belongs in the header line, not in
  *    "excluded from the total", which would read as the opposite of what
  *    happened.
- * 2. Lump `unclassified` / `uncategorised` / `undated` / `unaccounted` in
- *    with `excluded`. `excluded` means correctly-not-spending (a rule
- *    matched and said "not this"); the other four mean not-yet-decided or
- *    (for `unaccounted`) a hole in the classification. They render under
+ * 2. Lump `unclassified` / `uncategorised` / `conflicting` / `undated` /
+ *    `unaccounted` in with `excluded`. `excluded` means correctly-not-spending
+ *    (a rule matched and said "not this"); the other five mean
+ *    not-yet-decided, labels that disagree (`conflicting`: the payment is
+ *    counted under its counted document's label, while a matching document's
+ *    label would have put it in this chart), or (for `unaccounted`) a hole in
+ *    the classification. They render under
  *    "needs attention" instead, and `unaccounted` carries that meaning
  *    explicitly — it should always be empty.
  * 3. Hide a block because its groups are null. An absent group and an
@@ -29,8 +32,8 @@
  *
  * `refund_count` and `unconvertible[].documents` are plain figures, never
  * buttons: neither has a bucket route (§2.4) and wiring one to
- * `/footer/{bucket}` is a 422. The five drillable counts — `excluded`'s
- * per-kind groups, `unclassified`, `uncategorised`, `undated`,
+ * `/footer/{bucket}` is a 422. The six drillable counts — `excluded`'s
+ * per-kind groups, `unclassified`, `uncategorised`, `conflicting`, `undated`,
  * `unaccounted` — are real `<button>`s so they stay keyboard- and
  * screen-reader-operable.
  *
@@ -43,14 +46,15 @@
  * TESTID INVARIANT: `spending-footer-bucket-${token}` is shared by two
  * different token vocabularies — `group.amount_kind` for excluded rows (an
  * open-ended value from the backend's closed `AmountKind` enum) and
- * `row.bucket` (one of the four fixed attention names: `unclassified` /
- * `uncategorised` / `undated` / `unaccounted`) for needs-attention rows. The
+ * `row.bucket` (one of the five fixed attention names: `unclassified` /
+ * `uncategorised` / `conflicting` / `undated` / `unaccounted`) for
+ * needs-attention rows. The
  * scheme is unambiguous only because those two vocabularies never overlap —
  * `AmountKind` is a closed enum on the backend and none of its members is
  * spelled like an attention bucket. `FooterBucket` (`@/api/spending`) is
  * itself a bare `string` for `amount_kind`'s half, so nothing in the type
  * system enforces this; if a future `AmountKind` value collided with one of
- * the four names, a test targeting `spending-footer-bucket-undated` would
+ * the five names, a test targeting `spending-footer-bucket-undated` would
  * silently resolve to the wrong row (or both), and `wrapper.get(...)` would
  * throw on an ambiguous match rather than naming the real defect.
  */
@@ -98,14 +102,15 @@ interface AttentionRow {
   group: ExcludedGroup
 }
 
-// Only `excluded`, `unclassified`, `uncategorised`, `undated` and
-// `unaccounted` are in FOOTER_BUCKETS / drillable — this list is exactly
-// the needs-attention four, in the order the spec's diagram gives them.
+// Every FOOTER_BUCKETS entry but `excluded` — the needs-attention five, in
+// the order the spec's diagram gives them, with `conflicting` beside
+// `uncategorised` (both are label problems).
 const attentionRows = computed<AttentionRow[]>(() => {
   const footer = props.data.footer
   const rows: AttentionRow[] = []
   if (footer.unclassified) rows.push({ bucket: 'unclassified', group: footer.unclassified })
   if (footer.uncategorised) rows.push({ bucket: 'uncategorised', group: footer.uncategorised })
+  if (footer.conflicting) rows.push({ bucket: 'conflicting', group: footer.conflicting })
   if (footer.undated) rows.push({ bucket: 'undated', group: footer.undated })
   if (footer.unaccounted) rows.push({ bucket: 'unaccounted', group: footer.unaccounted })
   return rows
@@ -121,6 +126,12 @@ const sortedUnconvertible = computed<Unconvertible[]>(() =>
     return a.currency.localeCompare(b.currency)
   }),
 )
+
+/** A row's name. The engine's bucket names read fine as words except
+ * `conflicting`, which needs saying in full to mean anything. */
+function attentionLabel(bucket: FooterBucket): string {
+  return bucket === 'conflicting' ? 'Labelled differently on a matching document' : bucket
+}
 
 function onExcludedClick(group: ExcludedGroup): void {
   emit('bucket', 'excluded', group.amount_kind)
@@ -211,7 +222,7 @@ function onAttentionClick(bucket: FooterBucket): void {
             :data-testid="`spending-footer-bucket-${row.bucket}`"
             @click="onAttentionClick(row.bucket)"
           >
-            <span class="text-gray-800 dark:text-gray-100">{{ row.bucket }} &middot; {{ documentLabel(row.group.documents) }}</span>
+            <span class="text-gray-800 dark:text-gray-100">{{ attentionLabel(row.bucket) }} &middot; {{ documentLabel(row.group.documents) }}</span>
             <span class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100">{{ money(row.group.amount) }}</span>
           </button>
         </li>

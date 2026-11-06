@@ -24,19 +24,31 @@ buckets:
 | `excluded` | a kind that never enters a total | `excluded` |
 | `unclassified` | `amount_kind IS NULL` — *not yet decided* (§8.1.1) | `unclassified` |
 | `undated` | summable, but no date to bucket it by | `undated` |
+| `conflicting` | summable, fails the rule, but a twin's own label would pass it | `conflicting` |
 | `uncategorised` | summable, unlabelled for a facet the rule names | `uncategorised` |
 | `outside` | dated outside the chart's window | — not this chart's claim |
 | `unaccounted` | the `ELSE`: a shape nobody predicted | `unaccounted` |
 
 A row labelled for a *different* value never reaches the `CASE` at all — the
-outer `WHERE` admits only rows the rule matches or that are missing one of its
-labels — so it is a different chart's business, not an unaccounted one.
+outer `WHERE` admits only rows the rule matches, that are missing one of its
+labels, or whose payment's documents disagree in a way that matters here — so
+it is a different chart's business, not an unaccounted one.
+
+**`conflicting` is the price of counting a payment once** (docs/charts.md
+§2.2). The view gives a payment's counted row its twins' labels where it has
+none, but where a bill says `services` and its receipt says `supplies` the
+counted receipt keeps `supplies`. The `services` chart then does not count the
+payment, and without this bucket it would not mention it either: the row is
+labelled, so it is not `uncategorised`. The test is "would this chart have
+counted the row had one twin's labels won?", evaluated over `sf.twin_labels`
+(each twin's document labels, carried on the counted row by migration 0041) as
+`sf.labels || twin`, so it needs no second read of the view.
 
 `unaccounted` is reported rather than filtered out, and that is the difference
 between a safety net and a decoration. It is unreachable today (the outer
-`WHERE` guarantees that arm 5's rule or arm 6's unlabelled test fires, and a
-NULL rule with a FALSE unlabelled test keeps the row out of `classified`
-entirely), which is exactly why no test would catch it being dropped — so the
+`WHERE` guarantees that the rule, the conflicting test or the unlabelled test
+fires, and a NULL rule with the other two FALSE keeps the row out of
+`classified` entirely), which is exactly why no test would catch it being dropped — so the
 `ELSE` must surface, in its own group, under its own name. Calling it
 `uncategorised` would misdescribe the one row that gets there: by definition
 nobody predicted it.
@@ -85,6 +97,7 @@ UNCLASSIFIED = "unclassified"
 #: field names the group's reason, which is what the renderer prints.
 UNDATED = "undated"
 UNCATEGORISED = "uncategorised"
+CONFLICTING = "conflicting"
 UNACCOUNTED = "unaccounted"
 
 # One statement, one CASE, one bucket per row.
@@ -102,6 +115,10 @@ UNACCOUNTED = "unaccounted"
 # * rule before `uncategorised`, so an unlabelled row that a `not_in` rule
 #   *already counted* (see `rule.py`: NULL satisfies the negation) is not also
 #   reported as a gap the chart did not have.
+# * rule before `conflicting`, which is only for rows the chart did NOT count;
+#   `conflicting` before `uncategorised`, because "a matching document labels
+#   it differently" is the more specific reason when both hold (a row missing
+#   one rule facet whose twin carries every one of them).
 #
 # `is_canonical` matches `query.py`: a merged pair contributes one row, so the
 # footer never reports the same money twice under two documents.
@@ -118,11 +135,12 @@ WITH classified AS (
            WHEN sf.date IS NULL THEN 'undated'
            WHEN ({rule}) THEN
                 CASE WHEN sf.amount_kind = :refund THEN 'netted_refund' ELSE 'counted' END
+           WHEN {conflicting} THEN 'conflicting'
            WHEN {unlabelled} THEN 'uncategorised'
            ELSE 'unaccounted'
          END AS bucket
   FROM spend_facts sf
-  WHERE sf.is_canonical AND (({rule}) OR {unlabelled})
+  WHERE sf.is_canonical AND (({rule}) OR {unlabelled} OR {conflicting})
 )
 SELECT document_id, amount, currency, date, amount_kind, bucket
 FROM classified
@@ -136,6 +154,14 @@ WHERE bucket NOT IN ('counted', 'outside')
 #: whether jsonb holds *all* of a `text[]`; the explicit CAST is what tells
 #: Postgres the bind is that array rather than leaving it to inference.
 _UNLABELLED = "NOT (sf.labels ?& CAST(:facets AS text[]))"
+
+#: True for a counted row whose payment's documents disagree on a label and
+#: that the rule would match had one twin's document labels won. `unnest` over
+#: the row's own array column: no second read of `spend_facts`, whose payment
+#: grouping is the expensive part of every chart statement. `{twin_rule}` is
+#: `rule_predicate` over `(sf.labels || tw.labels)`.
+_CONFLICTING = """(sf.label_conflict AND EXISTS (
+             SELECT 1 FROM unnest(sf.twin_labels) AS tw(labels) WHERE {twin_rule}))"""
 
 #: A rule naming no facet cannot have a label gap, so nothing is unlabelled
 #: with respect to it — and `?&` against an empty array is true for every row,
@@ -173,6 +199,9 @@ class Footer(BaseModel):
     excluded: list[ExcludedGroup]
     unclassified: ExcludedGroup | None
     uncategorised: ExcludedGroup | None
+    #: Money a matching document labels differently: the counted document's
+    #: label fails the rule, a twin's would pass it (docs/charts.md §2.2).
+    conflicting: ExcludedGroup | None
     undated: ExcludedGroup | None
     #: Money that reached the `CASE`'s `ELSE`. Always `None` today; if it is
     #: ever not, the classification has a hole and this is the money in it.
@@ -216,7 +245,9 @@ _NETTED_REFUND = "netted_refund"
 #: while the drill route returned nothing for it — the one bucket whose whole
 #: reason to be drillable is the shape nobody predicted, going silent in
 #: exactly that shape.
-_KNOWN_BUCKETS = frozenset({_NETTED_REFUND, "excluded", UNCLASSIFIED, UNDATED, UNCATEGORISED})
+_KNOWN_BUCKETS = frozenset(
+    {_NETTED_REFUND, "excluded", UNCLASSIFIED, UNDATED, CONFLICTING, UNCATEGORISED}
+)
 
 
 def _resolved_bucket(row_bucket: str, amount_kind: str | None) -> str:
@@ -291,13 +322,19 @@ async def _accounted_rows(
     unconvertible line (Task 10).
     """
     fragment, params = rule_predicate(rule)
+    # Same rule, same bind names and values (`rule_predicate` names binds by
+    # clause position), so the second params dict adds nothing new.
+    twin_fragment, _ = rule_predicate(rule, labels="(sf.labels || tw.labels)")
+    conflicting = _CONFLICTING.format(twin_rule=twin_fragment)
     unlabelled = _UNLABELLED if facets_in_rule else _NEVER_UNLABELLED
     params["facets"] = sorted(facets_in_rule)
     params["summable"] = sorted(kind.value for kind in SUMMABLE_AMOUNT_KINDS)
     params["refund"] = AmountKind.REFUND.value
     params["since"] = since
     params["until"] = until
-    statement = text(_CLASSIFY_SQL.format(rule=fragment, unlabelled=unlabelled))
+    statement = text(
+        _CLASSIFY_SQL.format(rule=fragment, unlabelled=unlabelled, conflicting=conflicting)
+    )
     rows = (await session.execute(statement, params)).all()
 
     accounted: list[_AccountedRow] = []
@@ -462,6 +499,7 @@ async def chart_footer(
 
     excluded: dict[str, _Group] = {}
     unclassified, uncategorised, undated = _Group(), _Group(), _Group()
+    conflicting = _Group()
     unaccounted = _Group()
     refunds = _Group()
 
@@ -481,6 +519,8 @@ async def chart_footer(
             undated.add(row.amount, row.document_id)
         elif resolved == UNCATEGORISED:
             uncategorised.add(row.amount, row.document_id)
+        elif resolved == CONFLICTING:
+            conflicting.add(row.amount, row.document_id)
         else:
             # `_resolved_bucket` returns `UNACCOUNTED` for anything none of the
             # arms above claimed, so this is reached only by that bucket —
@@ -498,6 +538,7 @@ async def chart_footer(
         ],
         unclassified=unclassified.rendered(UNCLASSIFIED),
         uncategorised=uncategorised.rendered(UNCATEGORISED),
+        conflicting=conflicting.rendered(CONFLICTING),
         undated=undated.rendered(UNDATED),
         unaccounted=unaccounted.rendered(UNACCOUNTED),
         unconvertible=[

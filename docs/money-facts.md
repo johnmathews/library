@@ -1,7 +1,7 @@
 # Money facts and payment identity
 
-**Status:** active. **Last updated:** 2026-11-06 (§6.2: the amount backfill and the import analyse the money tables; §5.2: a `facets` filter on a money total counts the money rows, document or line, that carry the facet). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to §5.2 and §6.2. §5.2: read `structured_query.sum_amount` and `_facet_match` against migration 0035's row `labels`; the line-facet tests in `tests/test_structured_query.py` were seen red first or killed by mutants. §6.2: read `money/statistics.py` and its callers; the ANALYZE tests and the view-table pin in `tests/test_money_statistics.py` were seen red. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-06 (§5.2: a payment's counted row carries its twins' labels (migration 0041), and totals and charts read the same merged labels; a `facets` filter counts the money rows that carry the facet. §6.2: the amount backfill and the import analyse the money tables). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: partial, scoped to §5.2 and §6.2. §5.2: read migration 0041's view, `structured_query._facet_match` and `charts/footer.py`; the twin and line-facet tests in `tests/test_structured_query.py` and `tests/test_chart_footer.py` were seen red first. §6.2: read `money/statistics.py` and its callers; its tests and the view-table pin were seen red. The rest carries its earlier verifications forward.
 **Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, src/library/llm/envelope.py, src/library/structured_query.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
@@ -450,11 +450,38 @@ choice has an undecided or non-summable kind (an undecided document with
 the lowest id beats a `payment_due`) used to contribute nothing; its
 summable twin now counts.
 
-**The charts still have the old behaviour.** `charts/query.py`,
-`charts/footer.py` and `api/facets.py` filter `sf.is_canonical`, so a chart
-rule that matches only a payment's non-canonical twin (a label on the bill
-but not the receipt) leaves that payment out. Moving them onto the same
-within-filter choice is a recorded follow-up.
+**A payment's counted row carries its twins' labels** (migration 0041,
+[charts.md](charts.md) §2.2). The charts, `api/facets.py` and this total
+all read the same merged `labels`. The rule:
+
+- On each facet the canonical document has no value for, its rows take the
+  value the payment's other documents carry; where those disagree, the
+  best-ranked one (the view's ordering) wins.
+- On a facet the canonical document carries, its own value wins.
+- Only document-level labels travel. A line still overrides what it
+  inherits, and a twin's own line labels stay on that twin.
+
+So a chart rule that matches a label only the bill carries counts the
+payment through the receipt, and a facet total names the same carrying
+document. Consequences for totals, all of them the charts' answer too:
+
+- A bill labelled services and its unlabelled receipt: both are candidates
+  and the receipt carries the payment, so the bill is its
+  `duplicate_payment`. The total is unchanged.
+- Dated either side of a month boundary, the payment lands in the receipt's
+  month, as in the chart, rather than the bill's.
+- An unlabelled itemised invoice whose receipt is labelled services: its
+  unlabelled lines inherit services and the invoice carries the payment
+  under every facet. Before, services read the receipt's whole amount and a
+  line's own facet read that line, counting the payment more than once.
+- A hand-merged pair with unequal amounts is counted at the carrying
+  document's amount.
+
+Documents that **disagree** on a facet keep the canonical value. A chart
+for the other value does not count the payment and reports it in the
+footer's `conflicting` group instead ([charts.md](charts.md) §7). A total
+still chooses within the filter, so it counts the payment under either
+value, through the twin carrying it: such totals must not be added either.
 
 **Facets select money rows, not documents.** A total's `facets` filter
 tests each `spend_facts` row's `labels`: a line's own labels over the ones
