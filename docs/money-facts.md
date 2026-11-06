@@ -2,7 +2,7 @@
 
 **Status:** active. **Last updated:** 2026-11-06 (§5.2: a payment's counted row carries its twins' labels (migration 0041), and totals and charts read the same merged labels; a `facets` filter counts the money rows that carry the facet. §6.2: the amount backfill and the import analyse the money tables). Earlier entries are in this file's history.
 **Last verified:** 2026-11-06 — method: partial, scoped to §5.2 and §6.2. §5.2: read migration 0041's view, `structured_query._facet_match` and `charts/footer.py`; the twin and line-facet tests in `tests/test_structured_query.py` and `tests/test_chart_footer.py` were seen red first. §6.2: read `money/statistics.py` and its callers; its tests and the view-table pin were seen red. The rest carries its earlier verifications forward.
-**Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, src/library/llm/envelope.py, src/library/structured_query.py
+**Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, migrations/versions/0041_spend_facts_twin_labels.py, src/library/llm/envelope.py, src/library/structured_query.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
 > reference number below is invented.

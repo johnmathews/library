@@ -2,7 +2,7 @@
 
 **Status:** active. **Last updated:** 2026-11-06 (§2, §2.2, §7: a payment's counted row carries its twins' labels (migration 0041), and the footer's ninth field, `conflicting`, reports a payment its documents label differently). Earlier entries are in this file's history.
 **Last verified:** 2026-11-06 — method: partial, scoped to §2, §2.2 and §7, read against migration `0041_spend_facts_twin_labels.py`, `charts/footer.py` and `charts/rule.py`; the twin cases in `tests/test_spend_facts.py`, `tests/test_chart_footer.py` and `tests/test_api_spending.py` and `test_0041_downgrade_restores_the_exact_0040_view` are green, and were red on the 0040 view. Other sections carry forward their earlier verification.
-**Covers:** src/library/charts/, src/library/api/spending.py, src/library/spend_lines.py, migrations/versions/0035_spend_facts.py, migrations/versions/0036_charts.py, migrations/versions/0037_split_colour.py
+**Covers:** src/library/charts/, src/library/api/spending.py, src/library/spend_lines.py, migrations/versions/0035_spend_facts.py, migrations/versions/0036_charts.py, migrations/versions/0037_split_colour.py, migrations/versions/0041_spend_facts_twin_labels.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
 > reference number below is invented.
