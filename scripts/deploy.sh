@@ -189,6 +189,11 @@ remove_compose_leftovers() {
 # (or re-running) the one-shot `library-migrate` service. `run -T </dev/null`
 # matters: this script reaches the host on bash's stdin, and `compose run`
 # attaches stdin by default, so it would swallow the lines after it.
+# `--no-deps`: the db is already running. Without it, `run` starts its
+# dependency, and when the host's compose (2.39) and WUD's (5.6) disagree on
+# the config hash it RECREATES library-db under the running app (WUD's first
+# locked deploy, 2026-11-06). A db that is down fails the migration instead,
+# which stops before web and worker: the safe outcome.
 manual_deploy_steps() {
   cat <<EOF
 set -euo pipefail
@@ -207,7 +212,7 @@ clear_leftovers() {
 }
 clear_leftovers
 docker compose pull $MIGRATE_SVC $APP_SVCS
-docker compose run --rm -T $MIGRATE_SVC </dev/null || exit 3
+docker compose run --rm --no-deps -T $MIGRATE_SVC </dev/null || exit 3
 if ! docker compose up -d --no-deps $APP_SVCS; then
   echo "docker compose up failed; removing compose leftovers and retrying once." >&2
   clear_leftovers

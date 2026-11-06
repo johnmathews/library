@@ -1,7 +1,7 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-11-06 (§1.7.2 point 5: WUD deploys each new `:latest`; `scripts/deploy.sh` verifies by default and `--deploy` migrates once under a host lock). Earlier: 2026-11-06 (§1.7.2: the deploy prunes old images). Earlier entries are in this file's history.
-**Last verified:** 2026-11-07 — method: partial, scoped to §1.7.2 point 5: read on the host after the 00:12 CET role apply (`/srv/apps/wud-deploy-library.sh` takes the `/srv/apps` lock, runs `compose run --rm -T library-migrate` once, then `up -d --no-deps`), WUD's own log for the 2026-11-06 race, and `tests/test_deploy_script.py` (seen red). The rest carries forward the 2026-11-05 `compose-smoke` check of §1.4 and the 2026-11-04 check of §1.5.
+**Status:** active. **Last updated:** 2026-11-07 (§1.7.2 point 5: WUD deploys each new `:latest`; `scripts/deploy.sh` verifies by default and `--deploy` migrates once with `compose run --no-deps` under a host lock). Earlier: 2026-11-06 (§1.7.2: the deploy prunes old images). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to §1.7.2 point 5: read on the host after the 00:12 CET WUD role apply, the verify run against production after WUD deployed `045b235`, and WUD's log of that deploy. The rest carries forward the 2026-11-05 `compose-smoke` check of §1.4 and the 2026-11-04 check of §1.5.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
@@ -503,7 +503,7 @@ image; proxmox-setup owns how it is run. Concrete details:
    checks the DB revision against the image's Alembic head, removes compose
    leftovers and prunes the old images. `scripts/deploy.sh --deploy` is the
    manual deploy for when WUD is paused: under a host lock WUD's script also
-   takes, it pulls, runs the migration once (`docker compose run --rm -T
+   takes, it pulls, runs the migration once (`docker compose run --rm --no-deps -T
    library-migrate`) and then `up -d --no-deps library-webserver
    library-worker` (never `stop` the db). Two deployers at once ran the
    migration twice on 2026-11-06. See the focused
