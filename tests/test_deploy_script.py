@@ -294,7 +294,10 @@ def test_manual_deploy_runs_the_migration_once_under_the_lock(host: Path) -> Non
     assert len(locks) == 1
     assert str(host / "srv") in locks[0].split()
     runs = _calls(host, "docker compose run")
-    assert runs == ["docker compose run --rm -T library-migrate"]
+    # --no-deps: `run` would otherwise start (and, when the host's compose and
+    # WUD's disagree on the config hash, RECREATE) library-db: a Postgres restart
+    # under the running app, seen on WUD's first locked deploy (2026-11-06).
+    assert runs == ["docker compose run --rm --no-deps -T library-migrate"]
     ups = _calls(host, "docker compose up")
     assert len(ups) == 1
     assert "--no-deps" in ups[0].split()

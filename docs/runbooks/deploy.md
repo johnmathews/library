@@ -1,7 +1,7 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-11-06 (WUD deploys every new `:latest`; `scripts/deploy.sh` now verifies by default, and `--deploy` is the manual deploy under a host lock with one migration run: §1.1, §1.3, §1.4, §1.6, §1.7). Earlier: 2026-11-06 (§1.2 apt retries; §1.3 image prune). **Supersedes:** none.
-**Last verified:** 2026-11-06 — method: partial. §1.3: `tests/test_deploy_script.py` against a fake ssh/docker/flock (new tests seen red on the old script), the `--deploy` host steps run through `bash -s` on a local copy of the prod compose shape with a pending migration (one run), and WUD's own log on the host for the race. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-07 (§1.3: `--deploy` runs the migration with `compose run --no-deps`, so it cannot recreate the running `library-db`). Earlier: 2026-11-06 (WUD deploys every new `:latest`; the script verifies by default; §1.2 apt retries; §1.3 image prune). **Supersedes:** none.
+**Last verified:** 2026-11-07 — method: partial. §1.3: `tests/test_deploy_script.py` against a fake ssh/docker/flock (seen red), the default verify run against production after WUD deployed `045b235` (passed: HEAD live, `alembic_version` = image head, no stray), and WUD's own log of that deploy, which showed `compose run` without `--no-deps` recreating `library-db`. The rest carries its earlier verifications forward.
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh, scripts/ci_apt_retry.sh
 
 How to ship a merged change to the live `documents` LXC. This is the focused
@@ -155,7 +155,7 @@ transactional). WUD's log shows the collision on both deploys that day.
 under a **host lock**, `flock` on `/srv/apps` itself; WUD's deploy script takes
 the same lock, so the two can never overlap (it waits up to 15 minutes for a
 running WUD deploy): remove compose leftovers; `docker compose pull`; **run the
-migration once** with `docker compose run --rm -T library-migrate`, aborting
+migration once** with `docker compose run --rm --no-deps -T library-migrate` (`--no-deps`, or `run` may recreate the running `library-db`), aborting
 before web and worker if it fails; then `docker compose up -d --no-deps
 library-webserver library-worker` (on failure: remove leftovers, retry once).
 Then the six checks above.
