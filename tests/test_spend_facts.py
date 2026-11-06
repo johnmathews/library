@@ -587,3 +587,52 @@ async def test_an_unmerged_document_is_unchanged_by_the_merge(
         False,
         [],
     )
+
+
+# --- `twin_rank`: the twin order as a column (migration 0042) -----------------
+
+
+@pytest.mark.asyncio
+async def test_twin_rank_is_the_views_twin_order_on_every_row_of_a_document(
+    session: AsyncSession, document: DocumentFactory
+) -> None:
+    """Five documents of one payment (rule R2: one sender, amount and
+    reference), created so that id order is the REVERSE of rank order
+    wherever a key above the id decides:
+
+    * the itemised `payment_due` invoice, highest id: rank 1 (lines first);
+    * the `payment_made` receipt, next highest: rank 2;
+    * an undecided document and two `payment_due` ones tie on both keys (an
+      undecided kind is not `payment_made`), so the id decides: 3, 4, 5.
+
+    `twin_rank` is the same on each of the invoice's line rows, `twin_rank = 1`
+    is exactly `is_canonical`, and a payment of one document ranks 1."""
+    shared: dict[str, Any] = {
+        "amount_total": Decimal("30.00"),
+        "sender": VENDOR,
+        "reference": "TR-42",
+    }
+    undecided = await document(amount_kind=None, **shared)
+    due_low = await document(amount_kind=AmountKind.PAYMENT_DUE, **shared)
+    due_high = await document(amount_kind=AmountKind.PAYMENT_DUE, **shared)
+    receipt = await document(amount_kind=AmountKind.PAYMENT_MADE, **shared)
+    invoice = await document(amount_kind=AmountKind.PAYMENT_DUE, **shared)
+    await _allocate(session, invoice.id, [Decimal("10.00"), Decimal("20.00")])
+    alone = await document(amount_total=Decimal("12.00"), amount_kind=AmountKind.PAYMENT_MADE)
+    assert undecided.id < due_low.id < due_high.id < receipt.id < invoice.id
+    assert await _payment_group_count(session) == 2
+
+    rows = await _facts(session)
+    ranks: dict[int, set[int]] = {}
+    for row in rows:
+        ranks.setdefault(row["document_id"], set()).add(row["twin_rank"])
+        assert (row["twin_rank"] == 1) is row["is_canonical"], row
+    assert len([row for row in rows if row["document_id"] == invoice.id]) == 2
+    assert ranks == {
+        invoice.id: {1},
+        receipt.id: {2},
+        undecided.id: {3},
+        due_low.id: {4},
+        due_high.id: {5},
+        alone.id: {1},
+    }

@@ -1,8 +1,8 @@
 # Money facts and payment identity
 
-**Status:** active. **Last updated:** 2026-11-06 (§5.2: a payment's counted row carries its twins' labels (migration 0041), and totals and charts read the same merged labels; a `facets` filter counts the money rows that carry the facet. §6.2: the amount backfill and the import analyse the money tables). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to §5.2 and §6.2. §5.2: read migration 0041's view, `structured_query._facet_match` and `charts/footer.py`; the twin and line-facet tests in `tests/test_structured_query.py` and `tests/test_chart_footer.py` were seen red first. §6.2: read `money/statistics.py` and its callers; its tests and the view-table pin were seen red. The rest carries its earlier verifications forward.
-**Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, migrations/versions/0041_spend_facts_twin_labels.py, src/library/llm/envelope.py, src/library/structured_query.py
+**Status:** active. **Last updated:** 2026-11-07 (§5.2: the twin order lives in the view only, as `spend_facts.twin_rank` (migration 0042), and `sum_amount` ranks the twins within its filter by it). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to §5.2. Read migration 0042's view and `structured_query._payment_choices` and `_facet_match`; the twin-order pins in `tests/test_structured_query.py` passed on the old three-term order and on `twin_rank`, and were seen red with the order reversed, with the group key dropped and with the view's rank replaced. The rest carries its earlier verifications forward.
+**Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, migrations/versions/0041_spend_facts_twin_labels.py, migrations/versions/0042_spend_facts_twin_rank.py, src/library/llm/envelope.py, src/library/structured_query.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
 > reference number below is invented.
@@ -403,23 +403,34 @@ layer, and neither is claimed here.
 
 ### 5.2 Which document counts: archive-wide for charts, within the filter for totals
 
-The view's `is_canonical` ranks **every** live document of a payment:
-a line-bearing document first, then a `payment_made`, then the lowest id.
-That is right for a query over the whole archive and wrong for a narrower
-one. A water bill (`payment_due`, kind `utility-bill`) merged with its
-receipt (`payment_made`, kind `receipt`) has the receipt as its canonical
-row, so a total filtered to `kind='utility-bill'` that gates on
-`is_canonical` matches the bill, drops it as not canonical, and reports a
-payment it never counted. A tag only the bill carries does the same.
+The view ranks **every** live document of a payment: a line-bearing
+document first, then a `payment_made`, then the lowest id. The order is
+written once, in the view, and exposed as `twin_rank` (migration 0042): one
+value per document per payment, the same on each of its line rows, and 1
+exactly where `is_canonical` is true. Using `is_canonical` alone is right
+for a query over the whole archive and wrong for a narrower one. A water
+bill (`payment_due`, kind `utility-bill`) merged with its receipt
+(`payment_made`, kind `receipt`) has the receipt as its canonical row, so
+a total filtered to `kind='utility-bill'` that gates on `is_canonical`
+matches the bill, drops it as not canonical, and reports a payment it never
+counted. A tag only the bill carries does the same.
 
 `structured_query.sum_amount` therefore does not read `is_canonical`.
-`_payment_choices` ranks, with the view's ordering (and, when grouping,
-having the group key first), the documents that pass **every filter
-except the date window** and the earlier gates (an amount, not a quote, a
-summable kind). The first of each payment carries it. **The rule:** the
-filters other than dates decide which document carries a payment; the
-date window then decides whether that document, and so the payment, is in
-the total. Consequences:
+`_payment_choices` ranks the documents that pass **every filter except the
+date window** and the earlier gates (an amount, not a quote, a summable
+kind) by the view's `twin_rank` (and, when grouping, by having the group
+key first). It does not restate the order. The first of each payment
+carries it. Ranking the survivors by an archive-wide order picks the same
+document as re-ranking them by the same keys, because the order is total
+(the id breaks every tie). The one key that could differ is `has_lines`
+under a facet filter, which keeps only some of a document's rows. It
+cannot differ: a document's rows are either its one unsplit row or only its
+line rows, so a document with any row left has the same `has_lines` as in
+the view.
+
+**The rule:** the filters other than dates decide which document carries a
+payment; the date window then decides whether that document, and so the
+payment, is in the total. Consequences:
 
 - When both twins pass, the carrying one is the one the view picks, so a
   total over the whole archive is unchanged.

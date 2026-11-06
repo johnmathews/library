@@ -1,6 +1,7 @@
 """Tests for structured/analytical queries over extracted metadata."""
 
 import hashlib
+import itertools
 import re
 from collections.abc import AsyncIterator, Sequence
 from datetime import date
@@ -1699,3 +1700,359 @@ async def test_sum_amount_grouped_by_sender_still_partitions_with_the_new_reason
         result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
     )
     assert {(row.key, row.total) for row in result.rows} == {("Acme", "25.00")}
+
+
+# --- Pins for the twin ranking -------------------------------------------------
+#
+# `_payment_choices` ranks the candidates of each payment by the view's order
+# (line-bearing first, then `payment_made`, then the lowest id), with the group
+# key in front when grouping. Each case below merges three documents by hand
+# into one payment, with three DIFFERENT amounts, so the total alone says
+# which document carried it. In every case a filter drops the view's
+# archive-wide canonical twin, and the order among the twins that remain is
+# the opposite of their ids, so ranking the survivors backwards, by id, or by
+# the canonical flag alone gives a different number. Every amount and name is
+# invented.
+
+_TWIN_TAG = "twin-rank-pin"
+
+
+async def _merge(session: AsyncSession, *document_ids: int) -> None:
+    """Record hand MERGEs chaining ``document_ids`` into one payment.
+
+    Unequal amounts keep every automatic rule silent (each needs equal
+    amounts), so the overrides alone decide the grouping."""
+    for first, second in itertools.pairwise(document_ids):
+        await session.execute(
+            text("INSERT INTO payment_overrides (kind, doc_a, doc_b) VALUES ('MERGE', :a, :b)"),
+            {"a": min(first, second), "b": max(first, second)},
+        )
+    await session.commit()
+
+
+async def _tag(session: AsyncSession, document_id: int, slug: str) -> None:
+    await session.execute(
+        text("INSERT INTO tags (slug, name) VALUES (:slug, :slug) ON CONFLICT (slug) DO NOTHING"),
+        {"slug": slug},
+    )
+    await session.execute(
+        text(
+            "INSERT INTO document_tags (document_id, tag_id) "
+            "SELECT :document_id, id FROM tags WHERE slug = :slug"
+        ),
+        {"document_id": document_id, "slug": slug},
+    )
+    await session.commit()
+
+
+async def _view_canonical(session: AsyncSession, document_ids: Sequence[int]) -> set[int]:
+    rows = await session.execute(
+        text(
+            "SELECT DISTINCT document_id FROM spend_facts "
+            "WHERE is_canonical AND document_id = ANY(:ids)"
+        ),
+        {"ids": list(document_ids)},
+    )
+    return set(rows.scalars())
+
+
+async def _answer(
+    session: AsyncSession, filters: DocumentFilters, group_by: Any = None
+) -> tuple[set[tuple[str | None, str]], list[int], Coverage]:
+    """A total's rows as ``(key, total)``, its cited documents, its coverage."""
+    result = await sum_amount(session, filters=filters, group_by=group_by)
+    rows = {(row.key, row.total) for row in result.rows}
+    cited = sorted(i for row in result.rows for i in row.document_ids)
+    return rows, cited, result.coverage
+
+
+async def test_twin_pin_a_kind_filter_dropping_the_canonical_twin(
+    session: AsyncSession,
+) -> None:
+    """A receipt and two invoices, all itemised, so ``has_lines`` ties
+    everywhere and never decides. The receipt is canonical archive-wide
+    (``payment_made``, lowest id). ``kind='invoice'`` drops it; of the two
+    invoices the ``payment_made`` one carries the payment although its id is
+    higher. Its March date then puts the payment outside February, so a
+    February invoice total counts nothing and names its twin
+    ``payment_dated_elsewhere``: the chosen document's date is read off the
+    same order."""
+    receipt = await seed(
+        session,
+        "tr-kind-receipt",
+        sender_name="Example Pin Works",
+        kind_slug="receipt",
+        document_date=date(2024, 2, 10),
+        amount="103.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        lines=[("60.00", None), ("43.00", None)],
+    )
+    due = await seed(
+        session,
+        "tr-kind-invoice-due",
+        sender_name="Example Pin Works",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 5),
+        amount="101.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        lines=[("50.00", None), ("51.00", None)],
+    )
+    made = await seed(
+        session,
+        "tr-kind-invoice-made",
+        sender_name="Example Pin Works",
+        kind_slug="invoice",
+        document_date=date(2024, 3, 4),
+        amount="102.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        lines=[("50.00", None), ("52.00", None)],
+    )
+    await _merge(session, receipt, due, made)
+    assert receipt < due < made
+    assert await _view_canonical(session, [receipt, due, made]) == {receipt}
+
+    rows, cited, coverage = await _answer(session, DocumentFilters())
+    assert (rows, cited) == ({(None, "103.00")}, [receipt])
+    assert coverage == Coverage(
+        matched=3, included=1, excluded={"duplicate_payment": 2}, needs_review=0
+    )
+
+    rows, cited, coverage = await _answer(session, DocumentFilters(kind_slug="invoice"))
+    assert (rows, cited) == ({(None, "102.00")}, [made])
+    assert coverage == Coverage(
+        matched=2, included=1, excluded={"duplicate_payment": 1}, needs_review=0
+    )
+
+    rows, cited, coverage = await _answer(
+        session, DocumentFilters(kind_slug="invoice", **_FEB_2024)
+    )
+    assert (rows, cited) == (set(), [])
+    assert coverage == Coverage(
+        matched=1, included=0, excluded={"payment_dated_elsewhere": 1}, needs_review=0
+    )
+
+    rows, cited, _ = await _answer(session, DocumentFilters(kind_slug="receipt"))
+    assert (rows, cited) == ({(None, "103.00")}, [receipt])
+
+
+async def test_twin_pin_a_tag_filter_dropping_the_canonical_twin(
+    session: AsyncSession,
+) -> None:
+    """The canonical twin is an itemised bill with the HIGHEST id (lines
+    outrank everything). A tag only the other two carry drops it; neither of
+    those has lines, so ``has_lines`` ties at false and ``payment_made``
+    decides, for the higher id again."""
+    due = await seed(
+        session,
+        "tr-tag-due",
+        sender_name="Example Pin Water",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 6),
+        amount="201.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+    )
+    made = await seed(
+        session,
+        "tr-tag-made",
+        sender_name="Example Pin Water",
+        kind_slug="receipt",
+        document_date=date(2024, 2, 7),
+        amount="202.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+    bill = await seed(
+        session,
+        "tr-tag-bill",
+        sender_name="Example Pin Water",
+        kind_slug="utility-bill",
+        document_date=date(2024, 2, 8),
+        amount="211.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        lines=[("200.00", None), ("11.00", None)],
+    )
+    await _tag(session, due, _TWIN_TAG)
+    await _tag(session, made, _TWIN_TAG)
+    await _merge(session, due, made, bill)
+    assert due < made < bill
+    assert await _view_canonical(session, [due, made, bill]) == {bill}
+
+    rows, cited, _ = await _answer(session, DocumentFilters())
+    assert (rows, cited) == ({(None, "211.00")}, [bill])
+
+    rows, cited, coverage = await _answer(session, DocumentFilters(tag_slugs=[_TWIN_TAG]))
+    assert (rows, cited) == ({(None, "202.00")}, [made])
+    assert coverage == Coverage(
+        matched=2, included=1, excluded={"duplicate_payment": 1}, needs_review=0
+    )
+
+
+async def test_twin_pin_a_facet_its_line_bearing_twins_lines_override(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """The case where ``has_lines`` over the FILTERED rows could differ from
+    the view's: the canonical invoice is labelled services, but both its
+    lines are overridden to supplies, so under services it has no money row
+    at all and is no candidate (nor matched). The two unsplit twins carry
+    services; ``payment_made`` wins for the higher id. Under supplies only the
+    invoice's lines match, and it carries the payment."""
+    due = await seed(
+        session,
+        "tr-facet-due",
+        sender_name="Example Pin Builder",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 9),
+        amount="82.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        labels={"category": "services"},
+    )
+    made = await seed(
+        session,
+        "tr-facet-made",
+        sender_name="Example Pin Builder",
+        kind_slug="receipt",
+        document_date=date(2024, 2, 11),
+        amount="81.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "services"},
+    )
+    invoice = await seed(
+        session,
+        "tr-facet-invoice",
+        sender_name="Example Pin Builder",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 12),
+        amount="80.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        labels={"category": "services"},
+        lines=[("50.00", {"category": "supplies"}), ("30.00", {"category": "supplies"})],
+    )
+    await _merge(session, due, made, invoice)
+    assert due < made < invoice
+    assert await _view_canonical(session, [due, made, invoice]) == {invoice}
+
+    rows, cited, _ = await _answer(session, DocumentFilters())
+    assert (rows, cited) == ({(None, "80.00")}, [invoice])
+
+    services = DocumentFilters(facets={"category": "services"}, **_FEB_2024)
+    supplies = DocumentFilters(facets={"category": "supplies"}, **_FEB_2024)
+    for filters in (services, supplies, services):
+        rows, cited, coverage = await _answer(session, filters)
+        if filters is services:
+            assert (rows, cited) == ({(None, "81.00")}, [made])
+            assert coverage == Coverage(
+                matched=2, included=1, excluded={"duplicate_payment": 1}, needs_review=0
+            )
+        else:
+            assert (rows, cited) == ({(None, "80.00")}, [invoice])
+            assert coverage == Coverage(matched=1, included=1, excluded={}, needs_review=0)
+
+
+async def test_twin_pin_a_facet_only_some_of_the_canonical_twins_lines_carry(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """The other side of the facet case: the itemised invoice keeps ONE line
+    under services (inherited from its receipt) and loses the other to
+    supplies. It still ranks as line-bearing among the filtered rows, so it
+    beats the ``payment_made`` receipt with the lower id, and only the
+    matching line is summed."""
+    receipt = await seed(
+        session,
+        "tr-partial-receipt",
+        sender_name="Example Pin Joinery",
+        kind_slug="receipt",
+        document_date=date(2024, 2, 13),
+        amount="71.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "services"},
+    )
+    invoice = await seed(
+        session,
+        "tr-partial-invoice",
+        sender_name="Example Pin Joinery",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 14),
+        amount="70.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        lines=[("40.00", None), ("30.00", {"category": "supplies"})],
+    )
+    await _merge(session, receipt, invoice)
+    assert receipt < invoice
+    assert await _view_canonical(session, [receipt, invoice]) == {invoice}
+
+    rows, cited, coverage = await _answer(
+        session, DocumentFilters(facets={"category": "services"}, **_FEB_2024)
+    )
+    assert (rows, cited) == ({(None, "40.00")}, [invoice])
+    assert coverage == Coverage(
+        matched=2, included=1, excluded={"duplicate_payment": 1}, needs_review=0
+    )
+
+    rows, cited, _ = await _answer(
+        session, DocumentFilters(facets={"category": "supplies"}, **_FEB_2024)
+    )
+    assert (rows, cited) == ({(None, "30.00")}, [invoice])
+
+
+async def test_twin_pin_grouping_puts_the_key_before_the_views_order(
+    session: AsyncSession,
+) -> None:
+    """Grouped by sender, a twin with a sender carries the payment before a
+    better-ranked one without. The canonical invoice is itemised and
+    senderless, so ranking by the view's order alone would choose it and
+    land the payment in no row (``no_sender`` for all three). Of the two
+    with the sender, ``payment_made`` wins for the higher id; the senderless
+    invoice is a ``duplicate_payment`` because a twin with the key carries
+    its payment."""
+    invoice = await seed(
+        session,
+        "tr-key-invoice",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 15),
+        amount="91.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        lines=[("50.00", None), ("41.00", None)],
+    )
+    due = await seed(
+        session,
+        "tr-key-due",
+        sender_name="Example Pin Garage",
+        kind_slug="invoice",
+        document_date=date(2024, 2, 16),
+        amount="92.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_DUE,
+    )
+    made = await seed(
+        session,
+        "tr-key-made",
+        sender_name="Example Pin Garage",
+        kind_slug="receipt",
+        document_date=date(2024, 2, 17),
+        amount="93.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+    await _merge(session, invoice, due, made)
+    assert invoice < due < made
+    assert await _view_canonical(session, [invoice, due, made]) == {invoice}
+
+    rows, cited, _ = await _answer(session, DocumentFilters())
+    assert (rows, cited) == ({(None, "91.00")}, [invoice])
+
+    rows, cited, coverage = await _answer(session, DocumentFilters(), group_by="sender")
+    assert (rows, cited) == ({("Example Pin Garage", "93.00")}, [made])
+    assert coverage == Coverage(
+        matched=3, included=1, excluded={"duplicate_payment": 2}, needs_review=0
+    )

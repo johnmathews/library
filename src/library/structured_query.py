@@ -470,12 +470,21 @@ def _payment_choices(
     lands: in which date window, whether in any grouped row at all, and in
     which row.
 
-    **The ordering** is the ``spend_facts`` view's own (migration 0035): a
+    **The ordering** is the ``spend_facts`` view's own, read from its
+    ``twin_rank`` column (migration 0042) rather than restated here: a
     line-bearing document first, so an itemised invoice keeps its split; then
     a ``payment_made``; then the lowest id. When grouping, having the group
-    key comes before all three, so a payment is carried by a twin that can
-    appear in a row whenever it has one (``chosen_has_key`` false means none
-    does).
+    key comes before it, so a payment is carried by a twin that can appear in
+    a row whenever it has one (``chosen_has_key`` false means none does).
+
+    ``twin_rank`` ranks the payment's documents archive-wide, and ordering the
+    candidates by it picks the same document as re-ranking only them by the
+    same keys would: the keys are a total order (the id breaks every tie), and
+    a total order restricted to a subset keeps its order. ``has_lines`` is the
+    one key that could differ under a facet filter, which keeps only some of a
+    document's rows, and it cannot: a document's ``spend_facts`` rows are
+    either its one unsplit row or only its line rows, so a document with any
+    row left has the same ``has_lines`` as in the view.
 
     **The candidates** are the documents that pass every caller filter
     EXCEPT the date window, and the earlier gates of ``sum_amount``. Under a
@@ -491,8 +500,8 @@ def _payment_choices(
     (``payment_dated_elsewhere``).
 
     One row per document, not per ``spend_facts`` row: grouped by document,
-    so a document with spend lines is ranked once (``has_lines`` is
-    ``bool_or`` over its rows).
+    so a document with spend lines is ranked once (``twin_rank`` is the same
+    on each of its rows, so ``min`` reads that one value).
 
     A ``MATERIALIZED`` CTE: the row query and the coverage query each test
     several memberships against it, and computing the ranking once per
@@ -502,12 +511,7 @@ def _payment_choices(
     has_key: ColumnElement[bool] = group_key_id.isnot(None) if group_key_id is not None else true()
     window: dict[str, Any] = {
         "partition_by": facts.c.payment_id,
-        "order_by": (
-            has_key.desc(),
-            func.bool_or(facts.c.line_id.isnot(None)).desc(),
-            func.coalesce(Document.amount_kind == AmountKind.PAYMENT_MADE.value, False).desc(),
-            Document.id.asc(),
-        ),
+        "order_by": (has_key.desc(), func.min(facts.c.twin_rank).asc()),
     }
     return (
         select(
@@ -565,7 +569,7 @@ def _facet_match(
         return [], spend_facts, []
     carries = spend_facts.c.labels.contains(dict(facets))
     facts = (
-        select(spend_facts.c.document_id, spend_facts.c.payment_id, spend_facts.c.line_id)
+        select(spend_facts.c.document_id, spend_facts.c.payment_id, spend_facts.c.twin_rank)
         .where(carries)
         .cte("facet_facts")
         .prefix_with("MATERIALIZED")
