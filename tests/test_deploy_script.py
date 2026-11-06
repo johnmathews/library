@@ -1,4 +1,13 @@
-"""Tests for scripts/deploy.sh's handling of compose's leftover containers.
+"""Tests for scripts/deploy.sh: verifying WUD's deploys, and the manual deploy.
+
+What's Up Docker deploys every new ``:latest`` on the host by itself, so the
+script's default action only verifies: it waits for ``/healthz`` to report
+HEAD's commit, then checks the stack. Running a second deploy beside WUD's ran
+the migration twice at once (2026-11-06, both deploys). ``--deploy`` is the
+manual deploy for when WUD is paused: it takes the host lock WUD also takes and
+runs the migration exactly once, with ``compose run``.
+
+Compose's leftover containers:
 
 `docker compose up` recreates a container by first renaming the old one to
 ``<12 hex>_<name>``. When that dance is interrupted it leaves the temporary
@@ -20,6 +29,9 @@ from pathlib import Path
 import pytest
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "deploy.sh"
+_HEAD = subprocess.run(
+    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True, cwd=_SCRIPT.parent
+).stdout.strip()
 
 _FAKE_SSH = """#!/usr/bin/env bash
 # Drop ssh options and the host, run the remote command locally.
@@ -48,6 +60,17 @@ if [[ "$1" == "rm" ]]; then
   done
   exit 0
 fi
+if [[ "$1" == "compose" && "$2" == "pull" ]]; then
+  exit 0
+fi
+if [[ "$1" == "compose" && "$2" == "run" ]]; then
+  exit "${FAKE_MIGRATE_EXIT:-0}"
+fi
+if [[ "$1" == "buildx" ]]; then
+  echo "Name: fake"
+  echo "Digest: sha256:0123"
+  exit 0
+fi
 if [[ "$1" == "compose" && "$2" == "up" ]]; then
   if [[ -f "$FAKE_UP_FAILS_ONCE" ]]; then
     stray="$(cat "$FAKE_UP_FAILS_ONCE")"
@@ -62,12 +85,12 @@ if [[ "$1" == "compose" && "$2" == "up" ]]; then
   fi
   exit 0
 fi
-if [[ "$1" == "inspect" ]]; then
-  echo "${FAKE_MIGRATE_EXIT:-0}"
-  exit 0
-fi
 if [[ "$1" == "compose" && "$2" == "exec" ]]; then
-  echo '{"status":"ok"}'
+  case "$*" in
+    *psql*) echo "${FAKE_DB_REV:-0041}" ;;
+    *"alembic heads"*) echo "${FAKE_HEAD_REV:-0041} (head)" ;;
+    *) printf '{"status":"ok","git_sha":"%s"}\n' "${FAKE_GIT_SHA:-}" ;;
+  esac
   exit 0
 fi
 if [[ "$1" == "image" && "$2" == "prune" ]]; then
@@ -77,6 +100,15 @@ if [[ "$1" == "image" && "$2" == "prune" ]]; then
   exit 0
 fi
 exit 0
+"""
+
+
+# The host's util-linux flock, logged: `flock [-w N] [-E N] <path> <cmd...>`.
+_FAKE_FLOCK = """#!/usr/bin/env bash
+echo "flock $*" >> "$FAKE_DOCKER_LOG"
+while [[ "$1" == -* ]]; do shift 2; done
+shift
+exec "$@"
 """
 
 
@@ -91,6 +123,7 @@ def host(tmp_path: Path) -> Path:
     bin_dir.mkdir()
     _executable(bin_dir / "ssh", _FAKE_SSH)
     _executable(bin_dir / "docker", _FAKE_DOCKER)
+    _executable(bin_dir / "flock", _FAKE_FLOCK)
     (tmp_path / "srv").mkdir()
     (tmp_path / "docker.log").write_text("")
     return tmp_path
@@ -110,6 +143,9 @@ def _run(host: Path, call: str) -> subprocess.CompletedProcess[str]:
         "FAKE_DOCKER_LOG": str(host / "docker.log"),
         "FAKE_UP_FAILS_ONCE": str(host / "up-fails-once"),
         "FAKE_PRUNE_FAILS": str(host / "prune-fails"),
+        "FAKE_GIT_SHA": _HEAD,
+        "LIBRARY_VERIFY_INTERVAL": "0",
+        "LIBRARY_VERIFY_TIMEOUT": "2",
     }
     return subprocess.run(
         ["bash", "-c", f'source "{_SCRIPT}"; {call}'],
@@ -156,22 +192,30 @@ def test_leftovers_are_removed_and_nothing_else(host: Path) -> None:
     )
 
 
+def _log(host: Path) -> list[str]:
+    return (host / "docker.log").read_text().splitlines()
+
+
+def _calls(host: Path, prefix: str) -> list[str]:
+    return [line for line in _log(host) if line.startswith(prefix)]
+
+
 def test_failed_up_is_cleaned_and_retried_once(host: Path) -> None:
     _containers(host, *HEALTHY)
     (host / "up-fails-once").write_text("0d400af8e750_library-worker")
-    result = _run(host, "compose_up")
+    result = _run(host, "SKIP_PROMOTE_CHECK=1 deploy")
     assert result.returncode == 0, result.stderr
     assert "0d400af8e750_library-worker" not in _names(host)
-    ups = [line for line in (host / "docker.log").read_text().splitlines() if "compose up" in line]
-    assert len(ups) == 2
+    assert len(_calls(host, "docker compose up")) == 2
 
 
 def test_up_failing_twice_fails_the_deploy(host: Path) -> None:
     # A leftover that rm cannot clear (re-added by every up) must not loop.
     _containers(host, *HEALTHY)
     (host / "up-fails-once").write_text("0d400af8e750_library-worker")
-    result = _run(host, "remove_compose_leftovers() { :; }; compose_up")
+    result = _run(host, 'LEFTOVER_RE="^never$" SKIP_PROMOTE_CHECK=1 deploy')
     assert result.returncode != 0
+    assert len(_calls(host, "docker compose up")) == 2
 
 
 def test_a_created_container_after_up_fails_loudly(host: Path) -> None:
@@ -227,9 +271,83 @@ def test_a_failed_prune_does_not_fail_the_deploy(host: Path) -> None:
     assert _prune_calls(host) == ["docker image prune -f"]
 
 
-def test_a_failed_migration_stops_before_pruning(host: Path) -> None:
+def test_a_failed_migration_stops_before_web_and_worker(host: Path) -> None:
     _containers(host, *HEALTHY)
     result = _run(host, "FAKE_MIGRATE_EXIT=1 SKIP_PROMOTE_CHECK=1 deploy")
     assert result.returncode != 0
     assert "migrations FAILED" in result.stderr
+    assert _calls(host, "docker compose up") == []
     assert _prune_calls(host) == []
+
+
+# --- The manual deploy: one migration run, under the lock WUD takes. --------
+
+
+def test_manual_deploy_runs_the_migration_once_under_the_lock(host: Path) -> None:
+    _containers(host, *HEALTHY)
+    result = _run(host, "SKIP_PROMOTE_CHECK=1 deploy")
+    assert result.returncode == 0, result.stderr
+    log = _log(host)
+    # The lock is the compose directory itself: WUD mounts it read-only, so a
+    # lock file could not be created there, and a directory can be locked.
+    locks = _calls(host, "flock")
+    assert len(locks) == 1
+    assert str(host / "srv") in locks[0].split()
+    runs = _calls(host, "docker compose run")
+    assert runs == ["docker compose run --rm -T library-migrate"]
+    ups = _calls(host, "docker compose up")
+    assert len(ups) == 1
+    assert "--no-deps" in ups[0].split()
+    assert "library-migrate" not in ups[0].split()
+    # Order: pull, then the migration, then web/worker.
+    order = [
+        i
+        for i, line in enumerate(log)
+        if line.startswith(("docker compose pull", "docker compose run", "docker compose up"))
+    ]
+    assert [log[i].split()[2] for i in order] == ["pull", "run", "up"]
+
+
+def test_manual_deploy_checks_the_migration_by_state_not_by_container(host: Path) -> None:
+    # The migrate job ran under `compose run --rm`, so no `library-migrate`
+    # container holds its exit code; the DB's revision must match the image's.
+    _containers(host, *HEALTHY)
+    result = _run(host, "FAKE_DB_REV=0040 FAKE_HEAD_REV=0041 SKIP_PROMOTE_CHECK=1 deploy")
+    assert result.returncode != 0
+    assert "0040" in result.stderr and "0041" in result.stderr
+    assert _prune_calls(host) == []
+
+
+# --- The default: WUD deploys, the script verifies. -------------------------
+
+
+def test_verify_never_deploys(host: Path) -> None:
+    _containers(host, *HEALTHY)
+    result = _run(host, "verify")
+    assert result.returncode == 0, result.stderr
+    assert "verified" in result.stdout.lower()
+    for mutating in ("docker compose up", "docker compose run", "docker compose pull", "flock"):
+        assert _calls(host, mutating) == [], mutating
+
+
+def test_verify_waits_for_heads_commit_and_times_out_naming_the_manual_deploy(host: Path) -> None:
+    _containers(host, *HEALTHY)
+    result = _run(host, "FAKE_GIT_SHA=0000000000000000000000000000000000000000 verify")
+    assert result.returncode != 0
+    assert "--deploy" in result.stderr
+    assert _prune_calls(host) == []
+
+
+def test_verify_fails_when_the_db_is_behind_the_image(host: Path) -> None:
+    _containers(host, *HEALTHY)
+    result = _run(host, "FAKE_DB_REV=0040 FAKE_HEAD_REV=0041 verify")
+    assert result.returncode != 0
+    assert "0040" in result.stderr and "0041" in result.stderr
+
+
+def test_verify_removes_a_stray_and_prunes(host: Path) -> None:
+    _containers(host, *HEALTHY, "cb8ba3b95f13_library-migrate exited")
+    result = _run(host, "verify")
+    assert result.returncode == 0, result.stderr
+    assert "cb8ba3b95f13_library-migrate" not in _names(host)
+    assert _prune_calls(host) == ["docker image prune -f"]

@@ -1,6 +1,6 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-11-06 (§1.7.2 point 5: `scripts/deploy.sh` prunes old images after a healthy deploy). Earlier: 2026-11-05 (§1.4: `compose-smoke` now also calls the MCP endpoint the way the reverse proxy forwards it, and checks the call log and `/metrics`). Earlier entries are in this file's history.
+**Status:** active. **Last updated:** 2026-11-06 (§1.7.2 point 5: WUD deploys each new `:latest`; `scripts/deploy.sh` verifies by default and `--deploy` migrates once under a host lock). Earlier: 2026-11-06 (§1.7.2: the deploy prunes old images). Earlier entries are in this file's history.
 **Last verified:** 2026-11-05 — method: partial, scoped to the `compose-smoke` paragraph of §1.4: the steps ran against a locally built image (green), and red against builds with the MCP mount moved, the strict Host guard on, and the API log handler removed. The rest carries forward the 2026-11-04 check of §1.5 and §1.5.1.
 
 How to run Library in production: a single `docker compose up` on any
@@ -495,13 +495,20 @@ image; proxmox-setup owns how it is run. Concrete details:
    in the service's `environment:` block in the compose file, **not** in `.env`.
    So the Anthropic key for Ask must be set on `library-webserver`'s
    `environment:`, not `.env`.
-5. **Deploy command** (routine code changes): `cd /srv/apps && docker compose
-   up -d --pull always library-migrate library-webserver library-worker`
-   (never `stop` the db; always include `library-migrate`). This is automated by
-   **`scripts/deploy.sh`** (run `make deploy` from the repo root), which also
-   verifies the migrate exit code and `/healthz` and then prunes the old
-   images — see the focused [deploy runbook](runbooks/deploy.md). The root
-   disk is only 16G, and each deploy's leftover image is 1.4GB.
+5. **Deploys are automatic.** What's Up Docker (`wud`, configured by the
+   proxmox-setup role) polls ghcr every minute and deploys each new `:latest`
+   with `/srv/apps/wud-deploy-library.sh`: pull, migrate, start web + worker,
+   wait for health. **`scripts/deploy.sh`** (`make deploy`) therefore verifies
+   by default rather than deploying: it waits for `/healthz` to report HEAD,
+   checks the DB revision against the image's Alembic head, removes compose
+   leftovers and prunes the old images. `scripts/deploy.sh --deploy` is the
+   manual deploy for when WUD is paused: under a host lock WUD's script also
+   takes, it pulls, runs the migration once (`docker compose run --rm -T
+   library-migrate`) and then `up -d --no-deps library-webserver
+   library-worker` (never `stop` the db). Two deployers at once ran the
+   migration twice on 2026-11-06. See the focused
+   [deploy runbook](runbooks/deploy.md). The root disk is only 16G, and each
+   deploy's leftover image is 1.4GB.
 
 ## 1.8 Troubleshooting
 
