@@ -30,6 +30,7 @@ from library.document_reads import document_text, load_comments
 from library.documents_service import DocumentEditError, edit_document, preview_update
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
+from library.filter_vocabulary import unknown_filter_values
 from library.llm import subscription
 from library.models import Document, ReviewStatus
 from library.schemas import DocumentUpdate
@@ -700,6 +701,24 @@ async def _run_query_documents(
             )
         }
     filters = _filters_from_args(args)
+    # A tag, project, matter, kind or facet the archive lacks would total to 0,
+    # which reads like an answer. semantic_search stays permissive on purpose.
+    unknown = await unknown_filter_values(session, filters)
+    if unknown:
+        phrases = list(unknown.others)
+        if unknown.kind is not None:
+            hint = (
+                f" (did you mean kind={unknown.kind_suggestion!r}?)"
+                if unknown.kind_suggestion
+                else ""
+            )
+            phrases.insert(0, f"unknown kind {unknown.kind!r}{hint}")
+        return {
+            "error": (
+                "; ".join(phrases) + ". The Archive context block in the system prompt "
+                "lists the valid kinds, tags, projects, matters and facet values."
+            )
+        }
     result = await query_documents(
         session,
         filters=filters,

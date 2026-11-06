@@ -126,20 +126,16 @@ from library.documents_service import (
     preview_update,
 )
 from library.embedding import EmbeddingError, embed_query
+from library.filter_vocabulary import unknown_filter_values
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
 from library.models import (
     Document,
     DocumentLanguage,
     DocumentSource,
     DocumentStatus,
-    Facet,
-    FacetValue,
     IngestionEvent,
     Kind,
-    Matter,
-    Project,
     ReviewStatus,
-    Tag,
     User,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
@@ -165,7 +161,6 @@ from library.search import (
 from library.spend_lines import AllocationError
 from library.storage import derived_path, path_for
 from library.structured_query import (
-    CONCEPT_TO_KIND,
     COVERAGE_GUIDE,
     SUM_AMOUNT_GUIDE,
     Aggregate,
@@ -926,8 +921,9 @@ FacetsFilter = Annotated[
     dict[FilterText, FilterText] | None,
     Field(
         description=(
-            "Facet labels as {facet_key: value_key}, e.g. {'category': 'energy'}; a "
-            "document must carry ALL of them (it holds one value per facet). "
+            "Facet labels as {facet_key: value_key}, e.g. {'category': 'energy'}; all "
+            "must match, each on the same document label (search) or the same money row "
+            "(money_query: a whole document, or one line of an itemised one). "
             "get_library_context lists the facets and their values."
         )
     ),
@@ -1315,42 +1311,6 @@ MONEY_QUERY_DESCRIPTION: str = (
 )
 
 
-async def _unknown_filter_values(session: AsyncSession, filters: DocumentFilters) -> list[str]:
-    """One phrase per tag, project or matter slug and facet key/value pair in
-    ``filters`` that the archive does not have, in argument order.
-
-    Only money_query asks: such a filter matches nothing, and a total over
-    nothing is a 0 that reads like an answer. The search tools return an empty
-    result whose counts already say nothing matched.
-    """
-    unknown: list[str] = []
-    for label, model, slugs in (
-        ("tag", Tag, filters.tag_slugs),
-        ("project", Project, filters.project_slugs),
-        ("matter", Matter, filters.matter_slugs),
-    ):
-        if not slugs:
-            continue
-        known = set((await session.scalars(select(model.slug).where(model.slug.in_(slugs)))).all())
-        unknown.extend(f"unknown {label} '{slug}'" for slug in slugs if slug not in known)
-    if filters.facets:
-        pairs = (
-            await session.execute(
-                select(Facet.key, FacetValue.key)
-                .outerjoin(FacetValue, FacetValue.facet_id == Facet.id)
-                .where(Facet.key.in_(list(filters.facets)))
-            )
-        ).all()
-        facets = {facet for facet, _ in pairs}
-        values = set(pairs)
-        for facet, value in filters.facets.items():
-            if facet not in facets:
-                unknown.append(f"unknown facet '{facet}'")
-            elif (facet, value) not in values:
-                unknown.append(f"unknown facet value {facet}='{value}'")
-    return unknown
-
-
 @mcp.tool(title="Money query", annotations=READ_ONLY, description=MONEY_QUERY_DESCRIPTION)
 async def money_query(
     aggregate: Annotated[
@@ -1404,18 +1364,19 @@ async def money_query(
         review_status=review_status,
     )
     async with _session() as session:
-        if kind is not None:
-            known = await session.scalar(select(Kind.id).where(Kind.slug == kind))
-            if known is None:
-                # A kind that matches nothing makes a total of 0 that reads
-                # like a real answer; a concept word is the usual cause.
-                suggestion = CONCEPT_TO_KIND.get(kind.strip().lower())
-                hint = f"; did you mean kind='{suggestion}'?" if suggestion else "."
-                raise ToolError(f"unknown kind '{kind}'{hint} list_kinds lists the kind slugs.")
-        unknown = await _unknown_filter_values(session, filters)
-        if unknown:
+        unknown = await unknown_filter_values(session, filters)
+        if unknown.kind is not None:
+            # A kind that matches nothing makes a total of 0 that reads like a
+            # real answer; a concept word is the usual cause.
+            hint = (
+                f"; did you mean kind='{unknown.kind_suggestion}'?"
+                if unknown.kind_suggestion
+                else "."
+            )
+            raise ToolError(f"unknown kind '{unknown.kind}'{hint} list_kinds lists the kind slugs.")
+        if unknown.others:
             raise ToolError(
-                "; ".join(unknown) + ". get_library_context lists the tags, projects, "
+                "; ".join(unknown.others) + ". get_library_context lists the tags, projects, "
                 "matters and facet values the filters take; list_tags, list_projects and "
                 "list_matters list them with document counts."
             )
