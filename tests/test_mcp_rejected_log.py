@@ -12,6 +12,7 @@ from collections.abc import Callable
 import pytest
 from starlette.types import Message, Receive, Scope, Send
 
+from library import mcp_rejected_log
 from library.mcp_rejected_log import McpRejectedLog
 
 LOGGER = "library.mcp_rejected_log"
@@ -199,3 +200,47 @@ async def test_logged_even_when_the_app_raises_after_responding(
     with caplog.at_level(logging.INFO, logger=LOGGER), pytest.raises(RuntimeError):
         await _run(app, [b"{}"])
     assert len(_lines(caplog)) == 1
+
+
+async def test_deeply_nested_body_logs_a_dash_and_never_raises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``json.loads`` raises RecursionError (not a ValueError) on deep nesting.
+
+    The line is written from a ``finally`` after the response went out, so an
+    exception there would drop the connection and lose the line.
+    """
+    nested = b"[" * 60_000
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await _run(_responder(400, nested), [nested])
+    (line,) = _lines(caplog)
+    assert " method=- " in line
+
+
+async def test_control_characters_never_reach_the_log(caplog: pytest.LogCaptureFixture) -> None:
+    """ESC and NUL are not whitespace to ``str.split``; a terminal reading the
+    log would act on them."""
+    body = json.dumps({"method": "tools/\x1b[2Jlist\x00"}).encode()
+    headers = [(b"mcp-protocol-version", b"2026\x1b[31m-07-28")]
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await _run(_responder(400, b"{}"), [body], headers=headers)
+    (line,) = _lines(caplog)
+    assert "\x1b" not in line and "\x00" not in line
+    assert " method=tools/_[2Jlist_ " in line
+    assert " protocol_version=2026_[31m-07-28 " in line
+
+
+async def test_a_fault_while_logging_never_reaches_the_request(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The line is a side channel: if building it fails, the request is untouched."""
+
+    def broken(body: bytes) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(mcp_rejected_log, "_reason", broken)
+    with caplog.at_level(logging.DEBUG, logger=LOGGER):
+        sent = await _run(_responder(400, b"{}"), [b"{}"])
+    assert sent[0]["status"] == 400
+    assert [r for r in caplog.records if r.name == LOGGER and r.levelno >= logging.INFO] == []
+    assert any("could not write" in r.getMessage() for r in caplog.records)
