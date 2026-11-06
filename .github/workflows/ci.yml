@@ -138,27 +138,20 @@ jobs:
           enable-cache: true
       # The runner's apt mirror is sometimes slow enough to stall a download
       # for many minutes (median 25 s here; 615, 714 and 804 s seen). So: up to
-      # 3 attempts of at most 300 s each. `timeout` runs under sudo so it can
-      # kill root's apt-get, and it kills the whole process group, so the
-      # `bash -c` children go too. `dpkg --configure -a` finishes any unpack a
-      # killed attempt interrupted. A retry reuses the .debs already fetched
-      # into /var/cache/apt/archives. The step limit is a backstop.
+      # 3 attempts of at most 300 s each, via scripts/ci_apt_retry.sh. It runs
+      # `timeout` under sudo so it can kill root's apt-get, finishes any unpack
+      # a killed attempt interrupted (`dpkg --configure -a`), and switches the
+      # runner's mirror list from azure.archive.ubuntu.com to archive.ubuntu.com
+      # before each retry, because retrying the same slow mirror failed all
+      # three times. A retry reuses the .debs already fetched into
+      # /var/cache/apt/archives. The step limit is a backstop.
       - name: Install OCR system packages
         timeout-minutes: 16
         run: |
-          for attempt in 1 2 3; do
-            if sudo timeout --kill-after=30 300 bash -c '
-              apt-get update &&
-              apt-get install -y --no-install-recommends \
-                tesseract-ocr tesseract-ocr-nld tesseract-ocr-eng ghostscript unpaper'
-            then
-              exit 0
-            fi
-            echo "::warning::OCR apt install attempt $attempt of 3 failed or ran over 300 s"
-            sudo dpkg --configure -a || true
-          done
-          echo "::error::OCR apt install failed 3 times; usually a slow apt mirror, so rerun the job"
-          exit 1
+          scripts/ci_apt_retry.sh "OCR apt install" bash -c '
+            apt-get update &&
+            apt-get install -y --no-install-recommends \
+              tesseract-ocr tesseract-ocr-nld tesseract-ocr-eng ghostscript unpaper'
       - name: Install dependencies
         run: uv sync --locked
       # The golden corpus is 15 real financial/personal documents, so it lives in
@@ -546,7 +539,8 @@ jobs:
       # Normal: median 31 s, p90 61 s, healthy max 141 s for the old combined
       # step, so 300 s per attempt is twice the worst healthy run.
       #
-      # Same retry shape as the backend's OCR apt step. `sudo env PATH=...`
+      # Same retry script as the backend's OCR apt step (it also switches the
+      # apt mirror between attempts). The script runs `sudo env PATH=...`
       # rather than plain sudo: secure_path would hide setup-node's toolcache,
       # so `npx` (and the `node` its shebang asks env for) would resolve to the
       # image's system node or not at all. `timeout` runs as root so it can kill
@@ -559,18 +553,9 @@ jobs:
         env:
           BROWSERS: ${{ matrix.browsers }}
         run: |
-          for attempt in 1 2 3; do
-            # shellcheck disable=SC2086
-            if sudo env "PATH=$PATH" timeout --kill-after=30 300 \
-              npx playwright install-deps $BROWSERS
-            then
-              exit 0
-            fi
-            echo "::warning::playwright install-deps attempt $attempt of 3 failed or ran over 300 s"
-            sudo dpkg --configure -a || true
-          done
-          echo "::error::playwright install-deps failed 3 times; usually a slow apt mirror, so rerun the job"
-          exit 1
+          # shellcheck disable=SC2086
+          ../scripts/ci_apt_retry.sh "playwright install-deps" \
+            npx playwright install-deps $BROWSERS
       # Only this shard's browsers, which is what keeps the WebKit shards cheap.
       - name: Install Playwright browsers
         working-directory: frontend

@@ -1,8 +1,8 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-11-06 (§1.3 step 5: the deploy prunes old images; §1.6 step 1: find the rollback SHA from git, not the host). Earlier: 2026-11-05 (§1.2: which CI jobs run on which change — docs-only PRs skip e2e, compose-smoke and typecheck; ci-gate's `expect.e2e` rule; job time limits and the apt retries). Earlier: 2026-11-04 (§1.3 and §1.7: compose leftover containers). **Supersedes:** none.
-**Last verified:** 2026-11-06 — method: partial, scoped to §1.3's prune step: `tests/test_deploy_script.py` runs `deploy()` end to end against a fake ssh/docker (seen red with the call removed and with `-a`), and the same prune run by hand on the host freed 12GB. 2026-11-05: §1.2's CI paragraphs. Read `ci.yml` and `scripts/ci_gate.sh`; ran `tests/test_ci_gate.py` and `tests/test_ci_workflow.py` (both seen red first), and the retry loop in an ubuntu:24.04 container as a sudo user. The table is from reading the job `if:`s; a live docs-only PR is the next check. §1.3/§1.7's leftover handling was last verified 2026-11-04 (`tests/test_deploy_script.py` against a fake ssh/docker).
-**Covers:** scripts/deploy.sh, scripts/ci_gate.sh
+**Status:** active. **Last updated:** 2026-11-06 (§1.2: apt retries go through `scripts/ci_apt_retry.sh`, which switches the runner's apt mirror from Azure to archive.ubuntu.com between attempts; §1.3 step 5: the deploy prunes old images; §1.6 step 1: find the rollback SHA from git, not the host). Earlier: 2026-11-05 (§1.2: which CI jobs run on which change; `expect.e2e`; job time limits). **Supersedes:** none.
+**Last verified:** 2026-11-06 — method: partial. §1.2's apt-retries paragraph: ran `tests/test_ci_apt_retry.py` (red before the script existed) and the script in an ubuntu:24.04 container with a runner-format mirrors file (attempt 1 killed, file rewritten, attempt 2 fetched from archive.ubuntu.com). §1.3's prune step: `tests/test_deploy_script.py` against a fake ssh/docker (seen red), and the same prune run by hand on the host. The rest carries its earlier verifications forward.
+**Covers:** scripts/deploy.sh, scripts/ci_gate.sh, scripts/ci_apt_retry.sh
 
 How to ship a merged change to the live `documents` LXC. This is the focused
 "do it now" version; the full topology and rationale live in
@@ -70,10 +70,18 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
    **Time limits and apt retries.** Every job has a `timeout-minutes` (5 to 35,
    about 2-4x its normal duration). The runner's apt mirror sometimes stalls
    for many minutes, so the two apt steps, the backend's OCR packages and
-   e2e's "Install Playwright system dependencies", try up to 3 times, each
-   attempt killed after 300 s. A run that fails all three ends with
-   `::error::... failed 3 times`; rerun the failed jobs
-   (`gh run rerun <id> --failed`).
+   e2e's "Install Playwright system dependencies", both run through
+   `scripts/ci_apt_retry.sh`: up to 3 attempts, each killed after 300 s, with
+   `dpkg --configure -a` after a failure. Retrying the same slow mirror did
+   not help (all three attempts failed on PR #213 and on main `7dfb945`), so
+   before each retry the script rewrites the runner's `/etc/apt/apt-mirrors.txt`
+   (which apt reads through `mirror+file:`) to put `archive.ubuntu.com` first
+   and drop `azure.archive.ubuntu.com`; apt keeps the .debs already fetched.
+   A run that fails all three ends with `::error::... failed 3 times`; rerun
+   the failed jobs (`gh run rerun <id> --failed`). The notice
+   `switched apt mirror to archive.ubuntu.com` in a job log means the first
+   attempt was slow. `tests/test_ci_apt_retry.py` covers the script and
+   `tests/test_ci_workflow.py` checks both steps call it.
 
    The `main` ruleset **does** require `ci-gate` (it also blocks deletion and
    force-pushes, requires a pull request, and has no bypass actors), so a red
