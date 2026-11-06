@@ -407,7 +407,7 @@ top-level modules.
 | `src/library/importer/` | paperless-ngx importer: REST client, payload mapper, batch runner. |
 | `src/library/llm/` | The subscription LLM backend: Claude Agent SDK adapter and OAuth credential refresh. See [`llm-backends.md`](llm-backends.md). |
 | `src/library/markdown/` | Vision-model page-to-markdown conversion and its storage. |
-| `src/library/money/` | Payment identity: which documents describe one real-world payment (`amount_kind`, `reference`, the `payment_edges`/`payments` SQL views, and the override write path). |
+| `src/library/money/` | Payment identity: which documents describe one real-world payment (`amount_kind`, `reference`, the `payment_edges`/`payments` SQL views, and the override write path). `statistics.py` runs `ANALYZE` on the money tables after a backfill or `library import paperless`. |
 | `src/library/ocr/` | Routed OCR: text-layer extraction, OCRmyPDF/Tesseract, OpenCV+RapidOCR, and the pinned RapidOCR weights (`weights.py`). |
 
 | Module | What it does |

@@ -1,7 +1,8 @@
 # Observability
 
 **Status:** active. **Last updated:** 2026-11-05 (§3.1: the `mcp_rejected` log line for refused `/mcp` requests; MCP tool-call metrics and the `mcp_call` line before it). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to §3.1 and the MCP rows of §3. Metric names, labels and buckets asserted from a Prometheus scrape in `tests/test_telemetry.py`; outcomes and the log line asserted through an MCP client in `tests/test_mcp.py`, each seen red under a hand-made mutant; the log line seen in a locally built image's `docker compose logs api`. The `mcp_rejected` line asserted in `tests/test_mcp.py` and `tests/test_mcp_rejected_log.py`.
+**Last verified:** 2026-11-06 — method: partial, scoped to §3.1's `mcp_rejected` line. Read `src/library/mcp_rejected_log.py` and `main.py`'s logger wiring against the text; `tests/test_mcp_rejected_log.py` pins the format, and the line was observed in production logs on 2026-11-06. Metric rows of §3 carry their 2026-11-05 verification (a Prometheus scrape in `tests/test_telemetry.py`).
+**Covers:** src/library/mcp_rejected_log.py
 
 > Purpose
 >
@@ -127,8 +128,12 @@ INFO:
 
 `method` is the JSON-RPC method (`-` when the body is not a single JSON
 object), `reason` is the error message the transport gave, cut to 200
-characters and JSON-quoted. Whitespace in `method` and `protocol_version`,
-both client-sent, becomes `_`, so no value can pose as an extra field. Params, arguments and bodies are never logged. The usual cause
+characters and JSON-quoted. In `method` and `protocol_version`, both
+client-sent, whitespace and any character outside printable ASCII become
+`_`, so no value can pose as an extra field or reach a terminal as an escape
+code. Params, arguments and bodies are never logged. Writing the line can
+never fail the request: it runs after the response is sent, and a fault there
+is logged at debug and dropped. The usual cause
 is a client on a newer MCP revision probing before it falls back to
 `initialize` ([mcp.md §1.2](mcp.md)).
 

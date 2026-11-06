@@ -2,7 +2,7 @@
 
 **Status:** active. **Last updated:** 2026-11-06 (§1.3.3: the import analyses the money tables when it has written documents). Earlier entries are in this file's history.
 **Last verified:** 2026-11-06 — method: partial, scoped to §1.3.3. Read `run_import` and `money/statistics.py`, and ran `tests/test_importer.py` (the ANALYZE tests seen red with the call removed, and red when the guard was removed). The rest carries its earlier verifications forward.
-**Covers:** src/library/importer/, src/library/cli.py
+**Covers:** src/library/importer/, src/library/cli.py, src/library/money/statistics.py
 
 `library import paperless` copies every document out of a running
 paperless-ngx instance (2.x or 3.0) into Library over the paperless REST

@@ -18,6 +18,7 @@ gave. 401 is left out: it is the normal OAuth challenge, not a mystery.
 
 import json
 import logging
+import re
 from typing import Any
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -32,6 +33,9 @@ _RESPONSE_CAP = 4 * 1024
 _REASON_MAX_CHARS = 200
 #: Longest ``method`` / ``protocol_version`` written to the log.
 _FIELD_MAX_CHARS = 64
+#: Anything but printable, non-space ASCII in a bare token: ESC, NUL and the
+#: like are not whitespace to ``str.split`` and a terminal would act on them.
+_NOT_PRINTABLE = re.compile(r"[^\x21-\x7e]")
 
 
 def _clean(text: str, limit: int) -> str:
@@ -50,14 +54,14 @@ def _token(text: str, limit: int) -> str:
     ``method`` and ``protocol_version`` are bare ``key=value`` fields, so a
     space in a client-sent value would let it pose as an extra field.
     """
-    return "_".join(text.split())[:limit] or "-"
+    return _NOT_PRINTABLE.sub("_", "_".join(text.split()))[:limit] or "-"
 
 
 def _jsonrpc_method(body: bytes) -> str:
     """The ``method`` of a single JSON-RPC request object, else ``-``."""
     try:
         data: Any = json.loads(body)
-    except ValueError:
+    except (ValueError, RecursionError):  # deep nesting raises RecursionError
         return "-"
     if isinstance(data, dict) and isinstance(data.get("method"), str):
         return _token(data["method"], _FIELD_MAX_CHARS)
@@ -70,7 +74,7 @@ def _reason(body: bytes) -> str:
     text = body.decode("utf-8", errors="replace")
     try:
         data: Any = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return _clean(text, _REASON_MAX_CHARS)
     if isinstance(data, dict):
         error = data.get("error")
@@ -124,7 +128,13 @@ class McpRejectedLog:
             await self.app(scope, watched_receive, watched_send)
         finally:
             if self._wanted(status):
-                self._log(scope, status, request_chunks, request_size, response_chunks)
+                # Runs after the response went out: a fault here must not
+                # reach the request path, drop the connection or mask an
+                # exception the app raised.
+                try:
+                    self._log(scope, status, request_chunks, request_size, response_chunks)
+                except Exception:
+                    logger.debug("could not write the rejected-request log line", exc_info=True)
 
     @staticmethod
     def _wanted(status: int) -> bool:
