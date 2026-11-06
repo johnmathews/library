@@ -1,8 +1,8 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-06 (*Where a money total comes from* and §1.10 item 11: a `facets` filter on `sum_amount` counts the money rows, document or line, that carry the facet, as a chart does). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to *Where a money total comes from* and §1.10 item 11. Read against `structured_query.sum_amount`; the line-facet tests in `tests/test_structured_query.py` pass, seen red on main first or killed by hand-made mutants. The rest carries its earlier verifications forward.
-**Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, .github/workflows/e2e-nightly.yml
+**Status:** active. **Last updated:** 2026-11-06 (§1 item 3: `query_documents` refuses unknown filter values; *Where a money total comes from* and §1.10 item 11: a `facets` filter on `sum_amount` counts the money rows, document or line, that carry the facet, as a chart does). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: partial, scoped to *Where a money total comes from*, §1.10 item 11 and §1 item 3. Read against `structured_query.sum_amount`; the line-facet tests in `tests/test_structured_query.py` pass, seen red on main first or killed by hand-made mutants. Also item 3's refusal, covered by the new `tests/test_ask_tool_filters.py` tests (seen red with the check disabled, green with it). The rest carries its earlier verifications forward.
+**Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, src/library/filter_vocabulary.py, .github/workflows/e2e-nightly.yml
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -128,7 +128,11 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    carry *all* of them). Blank strings and empty lists — which the model does
    send — are treated as absent, and so is a `facets` entry whose key or value
    is blank: a filter coerced to `""` would match no document and narrow a total
-   to zero, which reads exactly like a real answer of nothing. Every row carries the contributing document
+   to zero, which reads exactly like a real answer of nothing. A kind, tag, project, matter, facet or facet value the archive does not have is refused instead: the tool
+   returns `{"error": ...}` naming only the unknown values (a concept word as `kind` gets
+   the `CONCEPT_TO_KIND` slug) and pointing at the Archive context block, the same check as
+   MCP `money_query` (`filter_vocabulary.unknown_filter_values`). `semantic_search` stays
+   permissive: its empty result carries counts. Every row carries the contributing document
    ids for citation; document refs also expose `title`, `sender`, `recipient`,
    `kind`, `document_date`, and `amount_total`. Aggregation citations have no text location, so their
    `page_number` is always `None`.

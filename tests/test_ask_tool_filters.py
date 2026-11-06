@@ -6,8 +6,10 @@ the organisation the user curates by hand (matters, projects, tags) and the
 recipient identity are reachable from a question.
 """
 
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import Any, cast
 
 import pytest
@@ -16,9 +18,11 @@ from sqlalchemy.pool import NullPool
 
 from library.ask import engine as ask_engine
 from library.ask.engine import TOOLS, _run_query_documents
-from library.models import ReviewStatus
+from library.filter_vocabulary import UnknownFilterValues
+from library.models import AmountKind, ReviewStatus
 from library.search import DocumentFilters
 from tests.test_documents_api import _seed_document
+from tests.test_mcp import _label
 
 _FILTER_ARGS: dict[str, Any] = {
     "recipient_contains": "Ada",
@@ -36,7 +40,9 @@ def test_query_tools_declare_the_filters_to_the_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_documents_tool_forwards_the_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_query_documents_tool_forwards_the_filters(
+    monkeypatch: pytest.MonkeyPatch, vocabulary_check_off: None
+) -> None:
     captured: dict[str, DocumentFilters] = {}
 
     async def fake_query_documents(session: Any, *, filters: DocumentFilters, **_: Any) -> Any:
@@ -55,7 +61,7 @@ async def test_query_documents_tool_forwards_the_filters(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_query_documents_tool_treats_blank_filters_as_absent(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, vocabulary_check_off: None
 ) -> None:
     captured: dict[str, DocumentFilters] = {}
 
@@ -123,7 +129,7 @@ def test_query_documents_exposes_review_status() -> None:
 
 @pytest.mark.asyncio
 async def test_query_documents_forwards_review_status(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, vocabulary_check_off: None
 ) -> None:
     captured: dict[str, Any] = {}
 
@@ -192,7 +198,7 @@ def test_query_tools_declare_the_facet_filter() -> None:
 
 @pytest.mark.asyncio
 async def test_query_documents_tool_forwards_a_facet_filter(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, vocabulary_check_off: None
 ) -> None:
     captured: dict[str, DocumentFilters] = {}
 
@@ -212,7 +218,7 @@ async def test_query_documents_tool_forwards_a_facet_filter(
 
 @pytest.mark.asyncio
 async def test_query_documents_tool_drops_unusable_facet_entries(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, vocabulary_check_off: None
 ) -> None:
     """A blank or non-string facet entry becomes *no filter for that facet*,
     never a filter on the empty string.
@@ -243,7 +249,7 @@ async def test_query_documents_tool_drops_unusable_facet_entries(
 
 @pytest.mark.asyncio
 async def test_query_documents_tool_tolerates_a_non_object_facets_argument(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, vocabulary_check_off: None
 ) -> None:
     """A hallucinated shape degrades to "no facet filter", never to a 500 inside
     the tool loop — the same contract `_slug_args` holds for the list filters."""
@@ -259,3 +265,96 @@ async def test_query_documents_tool_tolerates_a_non_object_facets_argument(
     )
 
     assert dict(captured["filters"].facets) == {}
+
+
+# --- unknown filter values are refused, not totalled to 0 (W6) ---------------
+
+
+@pytest.fixture
+def vocabulary_check_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The forwarding tests above pass no session; they test mapping, not the
+    archive's vocabulary, so the vocabulary lookup is stubbed out for them."""
+
+    async def accept_all(session: Any, filters: DocumentFilters) -> UnknownFilterValues:
+        return UnknownFilterValues()
+
+    monkeypatch.setattr(ask_engine, "unknown_filter_values", accept_all)
+
+
+async def _seed_vocabulary(database_url: str) -> str:
+    """One 12.50 payment tagged ``tag`` and in project ``tag-kitchen``, labelled
+    ``{tag}-f: known``. Returns the tag."""
+    tag = f"askv-{secrets.token_hex(4)}"
+    document = await _seed_document(
+        database_url,
+        tag,
+        kind_slug="receipt",
+        tag_slugs=[tag],
+        project_slugs=[f"{tag}-kitchen"],
+        amount_total=Decimal("12.50"),
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+    await _label(database_url, document, f"{tag}-f", "known")
+    return tag
+
+
+async def _sum(database_url: str, **args: Any) -> dict[str, Any]:
+    async with _open_session(database_url) as session:
+        return await _run_query_documents(session, {"aggregate": "sum_amount", **args}, set())
+
+
+@pytest.mark.asyncio
+async def test_query_documents_refuses_an_unknown_tag_and_names_only_it(
+    api_database_url: str,
+) -> None:
+    tag = await _seed_vocabulary(api_database_url)
+    result = await _sum(api_database_url, tags=[tag, f"{tag}-nope"])
+    assert "rows" not in result
+    assert result["error"].startswith(f"unknown tag '{tag}-nope'.")
+    assert f"unknown tag '{tag}'" not in result["error"]
+    assert "Archive context" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_query_documents_refuses_a_near_spelt_project(api_database_url: str) -> None:
+    tag = await _seed_vocabulary(api_database_url)
+    result = await _sum(api_database_url, projects=[f"{tag}-kitchn"])
+    assert result["error"].startswith(f"unknown project '{tag}-kitchn'.")
+
+
+@pytest.mark.asyncio
+async def test_query_documents_gives_the_concept_hint_for_a_concept_word_kind(
+    api_database_url: str,
+) -> None:
+    result = await _sum(api_database_url, kind="energy")
+    assert result["error"].startswith("unknown kind 'energy' (did you mean kind='utility-bill'?)")
+
+
+@pytest.mark.asyncio
+async def test_query_documents_refuses_an_unknown_facet_value(api_database_url: str) -> None:
+    tag = await _seed_vocabulary(api_database_url)
+    result = await _sum(api_database_url, facets={f"{tag}-f": "unknown"})
+    assert result["error"].startswith(f"unknown facet value {tag}-f='unknown'.")
+
+
+@pytest.mark.asyncio
+async def test_query_documents_refuses_an_unknown_facet_key(api_database_url: str) -> None:
+    tag = await _seed_vocabulary(api_database_url)
+    result = await _sum(api_database_url, facets={f"{tag}-x": "known"})
+    assert result["error"].startswith(f"unknown facet '{tag}-x'.")
+
+
+@pytest.mark.asyncio
+async def test_query_documents_still_totals_known_filters(api_database_url: str) -> None:
+    """Pin: the check refuses only what the archive lacks."""
+    tag = await _seed_vocabulary(api_database_url)
+    result = await _sum(
+        api_database_url,
+        kind="receipt",
+        tags=[tag],
+        projects=[f"{tag}-kitchen"],
+        facets={f"{tag}-f": "known"},
+    )
+    assert "error" not in result
+    assert [row["total"] for row in result["rows"]] == ["12.50"]

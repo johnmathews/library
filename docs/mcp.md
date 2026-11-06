@@ -1,8 +1,8 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.2: why a client's first `POST /mcp` can get a `400`, and the `mcp_rejected` log line; §1.2/§1.3: the file, ingest and edit tool text now tells hosted clients what to do). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: verified by tests/test_mcp*.py (the 400 pin, the `mcp_rejected` line, the tool text); live client behaviour per journal 261105-mcp-live-connectors.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, src/library/mcp_rejected_log.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py
+**Status:** active. **Last updated:** 2026-11-06 (money_query: the unknown-value check is the shared `filter_vocabulary` one; the `facets` field text says totals match per money row). Earlier: 2026-11-05 (§1.2: why a client's first `POST /mcp` can get a `400`, and the `mcp_rejected` log line; §1.2/§1.3: the file, ingest and edit tool text now tells hosted clients what to do). Earlier entries are in this file's history.
+**Last verified:** 2026-11-06 — method: verified by tests/test_mcp*.py (the 400 pin, the `mcp_rejected` line, the tool text); live client behaviour per journal 261105-mcp-live-connectors.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, src/library/mcp_rejected_log.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py, src/library/filter_vocabulary.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,
@@ -389,8 +389,10 @@ its result unchanged.
   concept word Ask's concept-to-kind map knows, `energy`, gets the slug
   to use instead, `utility-bill`), and unknown tag, project or matter
   slugs, facets or facet values, all named in one error that points at
-  `get_library_context` and the `list_*` tools. An `aggregate` or `group_by`
-  outside its enum is an argument-validation error.
+  `get_library_context` and the `list_*` tools. One check serves this tool
+  and Ask's `query_documents` (`filter_vocabulary.unknown_filter_values`);
+  the search tools do not run it and return an empty result. An `aggregate` or
+  `group_by` outside its enum is an argument-validation error.
 - The archive is shared, so every household member gets the same total.
 
 **Editing: preview, then apply.** `update_document_metadata` never
