@@ -714,5 +714,36 @@ def test_0041_downgrade_restores_the_exact_0040_view(admin_database_url: str) ->
         ("twin_labels", "ARRAY"),
     ]
 
-    command.upgrade(config, "head")
+    # To 0041, not head: 0042 appends `twin_rank`, which its own test pins.
+    command.upgrade(config, "0041")
     assert fetch_all(roundtrip, _SPEND_FACTS_COLUMNS) == at_0041
+
+
+def test_0042_adds_twin_rank_and_its_downgrade_restores_the_exact_0041_view(
+    admin_database_url: str,
+) -> None:
+    """0042 appends `twin_rank` (the view's twin order, a `row_number()`, so
+    `bigint`) after every 0041 column, and its downgrade carries a copy of
+    0041's SQL. Run 0041 -> 0042 -> 0041 -> 0042 and diff each side against a
+    database migrated straight to 0041, so a drifted copy or a moved column
+    goes red rather than a remembered property passing."""
+    original = create_database(admin_database_url, "library_spend_facts_at_0041")
+    command.upgrade(alembic_config(original), "0041")
+    before = fetch_all(original, _SPEND_FACTS_COLUMNS)
+    assert before, "no spend_facts at 0041; the diff would pass vacuously"
+
+    roundtrip = create_database(admin_database_url, "library_spend_facts_roundtrip_0042")
+    config = alembic_config(roundtrip)
+    command.upgrade(config, "0042")
+    at_0042 = fetch_all(roundtrip, _SPEND_FACTS_COLUMNS)
+    viewdef_0042 = fetch_all(roundtrip, _SPEND_FACTS_VIEWDEF)
+    assert at_0042[: len(before)] == before
+    assert [(name, kind) for name, kind, _ in at_0042[len(before) :]] == [("twin_rank", "bigint")]
+
+    command.downgrade(config, "0041")
+    assert fetch_all(roundtrip, _SPEND_FACTS_COLUMNS) == before
+    assert fetch_all(roundtrip, _SPEND_FACTS_VIEWDEF) == fetch_all(original, _SPEND_FACTS_VIEWDEF)
+
+    command.upgrade(config, "0042")
+    assert fetch_all(roundtrip, _SPEND_FACTS_COLUMNS) == at_0042
+    assert fetch_all(roundtrip, _SPEND_FACTS_VIEWDEF) == viewdef_0042

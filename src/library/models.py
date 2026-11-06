@@ -165,12 +165,12 @@ AMOUNT_SIGN: Mapping[AmountKind, int] = MappingProxyType(
 SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(AMOUNT_SIGN)
 
 
-#: The ``spend_facts`` view (migration 0035, recreated by 0041) as a composable selectable.
+#: The ``spend_facts`` view (migration 0035, recreated by 0041 and 0042) as a composable selectable.
 #:
 #: A lightweight ``table()`` rather than a ``Table`` on ``Base.metadata``,
 #: deliberately: this is a **view**, and putting it in the metadata would offer
 #: it to ``create_all``/``drop_all`` and to Alembic's autogenerate as though it
-#: were a table the ORM owns. The latest migration that creates it (0041) is the
+#: were a table the ORM owns. The latest migration that creates it (0042) is the
 #: one definition of its shape.
 #:
 #: The view's other readers — ``library.charts.query``, ``library.charts.footer``
@@ -202,6 +202,10 @@ spend_facts = table(
     # The row's merged facet labels: a line's own over its document's, and on
     # the canonical row over its twins' document labels (0041).
     column("labels", JSONB),
+    # The document's place in its payment's twin order (0042): line-bearing
+    # first, then `payment_made`, then the lowest id. The same on every row of
+    # a document, and 1 exactly where `is_canonical`.
+    column("twin_rank", BigInteger),
 )
 
 
