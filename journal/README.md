@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-218 entries.
+219 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -16,6 +16,7 @@ CI checks it is current.
 - **2026-11-06** — [Planner statistics after bulk money writes](261106-money-planner-statistics.md)
 - **2026-11-06** — [Money totals filtered by facet count the lines that carry it](261106-money-line-facets.md)
 - **2026-11-06** — [MCP follow-ups run closed](261106-mcp-followups-run-closed.md)
+- **2026-11-06** — [The deploy script verifies WUD's deploys](261106-deploy-verifies-wud.md)
 - **2026-11-06** — [The deploy prunes old images](261106-deploy-prunes-old-images.md)
 - **2026-11-06** — [CI time limits, apt retries, and no e2e on docs-only changes](261106-ci-time-limits-and-docs-only-e2e.md)
 - **2026-11-06** — [CI apt retries switch away from the slow mirror](261106-ci-apt-mirror-fallback.md)

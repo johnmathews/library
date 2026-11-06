@@ -1,35 +1,44 @@
 #!/usr/bin/env bash
 #
-# Deploy Library to the production host (the `documents` LXC, CT 117).
+# Verify (default) or run a deploy of Library on the production host (the
+# `documents` LXC, CT 117).
 #
-# Pulls the freshly-promoted `ghcr.io/johnmathews/library:latest` image, runs DB
-# migrations via the one-shot `library-migrate` job, recreates the webserver and
-# worker, and verifies the result (migrate exit code, /healthz, alembic head).
+# What's Up Docker (WUD) on the host deploys every new
+# `ghcr.io/johnmathews/library:latest` by itself, within about a minute of CI's
+# `promote` job (home-server role `document_library_lxc`, wud-deploy-library.sh).
+# So the default action does NOT deploy: it waits until /healthz reports HEAD's
+# commit, then checks the stack (migration state, health detail, compose
+# leftovers) and prunes old images. Running a second deploy beside WUD's ran
+# the migration twice at once (2026-11-06).
+#
+# `--deploy` is the manual deploy, for when WUD is paused or broken. It takes
+# the host lock WUD's script also takes, pulls, runs the migration exactly once
+# (`docker compose run --rm library-migrate`), then recreates the webserver and
+# worker with `--no-deps`, and runs the same checks.
 #
 # This is the automation of docs/runbooks/deploy.md — read that for the why,
 # the preconditions, and rollback. The procedure it encodes lives in
 # docs/deployment.md §1.7.2.
 #
 # Usage:
-#   scripts/deploy.sh            Deploy :latest to the prod host (default).
+#   scripts/deploy.sh            Verify WUD's deploy of HEAD (default).
+#   scripts/deploy.sh --deploy   Deploy :latest by hand (WUD paused), then verify.
+#   scripts/deploy.sh --force    Like --deploy, without the promote gate (emergencies).
 #   scripts/deploy.sh --status   Show the running stack; do not deploy.
 #   scripts/deploy.sh --logs     Tail recent webserver + worker logs.
 #   scripts/deploy.sh --help     This help.
 #
 # Preconditions (the script checks what it can, but you own these):
-#   - `main` is green in CI: the build + promote jobs must have published the new
-#     :latest BEFORE you deploy. The script now VERIFIES this (see the promote
-#     gate below) by checking that :latest points at HEAD's image — but you still
-#     own being on the commit you actually intend to ship.
+#   - `main` is green in CI and you are on the commit you intend to ship: the
+#     promote gate below checks that :latest points at HEAD's image.
 #   - SSH access to $LIBRARY_DEPLOY_HOST is key-based (no password prompt).
 #
-# Usage (extra):
-#   scripts/deploy.sh --force    Deploy without the promote gate (emergencies).
-#
 # Environment overrides:
-#   LIBRARY_DEPLOY_HOST   SSH host/alias            (default: documents)
-#   LIBRARY_DEPLOY_DIR    Compose dir on the host   (default: /srv/apps)
-#   SKIP_PROMOTE_CHECK    Set to 1 to bypass the promote gate (like --force).
+#   LIBRARY_DEPLOY_HOST      SSH host/alias                 (default: documents)
+#   LIBRARY_DEPLOY_DIR       Compose dir on the host        (default: /srv/apps)
+#   LIBRARY_VERIFY_TIMEOUT   Seconds to wait for HEAD to be live (default: 600)
+#   LIBRARY_VERIFY_INTERVAL  Seconds between /healthz polls      (default: 10)
+#   SKIP_PROMOTE_CHECK       Set to 1 to bypass the promote gate (like --force).
 #
 set -euo pipefail
 
@@ -37,6 +46,10 @@ HOST="${LIBRARY_DEPLOY_HOST:-documents}"
 DIR="${LIBRARY_DEPLOY_DIR:-/srv/apps}"
 IMAGE="ghcr.io/johnmathews/library"
 SKIP_PROMOTE_CHECK="${SKIP_PROMOTE_CHECK:-0}"
+VERIFY_TIMEOUT="${LIBRARY_VERIFY_TIMEOUT:-600}"
+VERIFY_INTERVAL="${LIBRARY_VERIFY_INTERVAL:-10}"
+# How long `--deploy` waits for a WUD deploy that holds the host lock.
+LOCK_WAIT=900
 
 # Prod service names differ from the repo compose file (api → library-webserver,
 # etc. — see the deployment doc). These are the names on the live host.
@@ -44,7 +57,7 @@ MIGRATE_SVC="library-migrate"
 WEB_SVC="library-webserver"
 WORKER_SVC="library-worker"
 DB_SVC="library-db"
-DEPLOY_SVCS="$MIGRATE_SVC $WEB_SVC $WORKER_SVC"
+APP_SVCS="$WEB_SVC $WORKER_SVC"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 err() { printf '\033[31m%s\033[0m\n' "$*" >&2; }
@@ -167,14 +180,61 @@ remove_compose_leftovers() {
   fi
 }
 
-# `up` once; on failure clear the leftovers it may have left and retry once.
-compose_up() {
-  if remote "docker compose up -d --pull always $DEPLOY_SVCS"; then
-    return 0
+# The manual deploy's mutating steps, as one script run on the host under the
+# host lock. One ssh session holds the lock for the whole sequence; WUD's deploy
+# script locks the same directory (it mounts it read-only, so the lock is on the
+# directory itself, not on a file in it). `flock -E 75` tells "WUD is still
+# deploying" apart from a failure. The migration runs once, here, by
+# `compose run`: `up --no-deps` then starts web and worker without waiting on
+# (or re-running) the one-shot `library-migrate` service. `run -T </dev/null`
+# matters: this script reaches the host on bash's stdin, and `compose run`
+# attaches stdin by default, so it would swallow the lines after it.
+manual_deploy_steps() {
+  cat <<EOF
+set -euo pipefail
+leftovers() {
+  docker ps -a --filter label=com.docker.compose.project=$COMPOSE_PROJECT \\
+    --format '{{.Names}} {{.State}}' | awk '{print \$1}' | grep -E '$LEFTOVER_RE' || true
+}
+clear_leftovers() {
+  local names
+  names="\$(leftovers)"
+  if [[ -n "\$names" ]]; then
+    echo "  removing compose leftovers: \$(tr '\\n' ' ' <<<"\$names")"
+    # shellcheck disable=SC2086  # one name per line: split on purpose
+    docker rm -f \$names >/dev/null
   fi
-  err "docker compose up failed; removing compose leftovers and retrying once."
-  remove_compose_leftovers
-  remote "docker compose up -d --pull always $DEPLOY_SVCS"
+}
+clear_leftovers
+docker compose pull $MIGRATE_SVC $APP_SVCS
+docker compose run --rm -T $MIGRATE_SVC </dev/null || exit 3
+if ! docker compose up -d --no-deps $APP_SVCS; then
+  echo "docker compose up failed; removing compose leftovers and retrying once." >&2
+  clear_leftovers
+  docker compose up -d --no-deps $APP_SVCS
+fi
+EOF
+}
+
+run_manual_deploy() {
+  local code=0
+  # shellcheck disable=SC2029  # $DIR is this script's own config (see remote()).
+  manual_deploy_steps | ssh "$HOST" "cd '$DIR' && flock -w $LOCK_WAIT -E 75 '$DIR' bash -s" || code=$?
+  case "$code" in
+    0) ;;
+    3)
+      err "library-migrate failed — migrations FAILED. The webserver and worker were NOT recreated."
+      err "Inspect: ssh $HOST 'cd $DIR && docker compose logs --tail 50 $MIGRATE_SVC' (the run container is removed; its output is above)."
+      err "Roll back per docs/runbooks/deploy.md if needed."
+      exit 1 ;;
+    75)
+      err "Could not take the deploy lock within ${LOCK_WAIT}s: a WUD deploy is probably still running."
+      err "Check: ssh $HOST 'docker logs --tail 50 wud'. Then re-run, or just verify: scripts/deploy.sh"
+      exit 1 ;;
+    *)
+      err "The manual deploy failed (exit $code); see the output above."
+      exit 1 ;;
+  esac
 }
 
 # After `up`: no leftovers, and nothing stuck in `Created` (= never started).
@@ -203,115 +263,139 @@ prune_old_images() {
   remote "df -h / | awk 'NR==2 {print \"  root disk: \" \$4 \" free (\" \$5 \" used)\"}'" || true
 }
 
+# The /healthz body, read inside the webserver container, or "" if it does not
+# answer. Inside the container, not via a host port: the host publishes the app
+# on :8010, and when paperless-ngx still ran on :8000 (until 2026-07) a bare
+# `curl localhost:8000` got its 302 and passed. python, not curl: python is what
+# the image's own HEALTHCHECK uses, and curl may not be installed. Compact JSON,
+# no spaces after the colons.
+healthz_body() {
+  remote "docker compose exec -T $WEB_SVC python -c \
+      \"import urllib.request; print(urllib.request.urlopen('http://localhost:8000/healthz').read().decode())\"" \
+      2>/dev/null || true
+}
+
+# Wait until /healthz answers, and — given a commit — reports it as `git_sha`.
+# WUD notices a new :latest within a minute, then pulls, migrates and starts the
+# app (~20 s boot), so the default allows 10 minutes. Sets HEALTH_BODY.
+HEALTH_BODY=""
+wait_until_live() {
+  local want="$1" waited=0 body
+  if [[ -n "$want" ]]; then
+    bold "Waiting for ${want:0:12} to be live (up to ${VERIFY_TIMEOUT}s) ..."
+  else
+    bold "Waiting for /healthz (up to ${VERIFY_TIMEOUT}s) ..."
+  fi
+  while :; do
+    body="$(healthz_body)"
+    if [[ -n "$body" ]] && { [[ -z "$want" ]] || grep -q "\"git_sha\": *\"$want\"" <<<"$body"; }; then
+      HEALTH_BODY="$body"
+      echo "  /healthz OK${want:+ on ${want:0:12}}"
+      return 0
+    fi
+    if (( waited >= VERIFY_TIMEOUT )); then
+      err "/healthz did not report ${want:-OK} within ${VERIFY_TIMEOUT}s."
+      [[ -n "$body" ]] && err "  last body: $body"
+      err "WUD deploys each new :latest by itself; if it is paused or failing (ssh $HOST 'docker logs --tail 50 wud'),"
+      err "deploy by hand with: scripts/deploy.sh --deploy"
+      exit 1
+    fi
+    sleep "$VERIFY_INTERVAL"
+    waited=$(( waited + VERIFY_INTERVAL ))
+    (( VERIFY_INTERVAL == 0 )) && waited=$(( waited + 1 ))
+  done
+}
+
+# The migration check, by state rather than by container: the database's
+# revision must be the running image's head. True whoever ran the migration
+# (WUD, or `--deploy`'s `compose run --rm`, which leaves no container to inspect).
+check_migration_state() {
+  bold "Migration state:"
+  local db head
+  db="$(remote "docker compose exec -T $DB_SVC psql -U library -tAc 'select version_num from alembic_version;'" | tr -d '[:space:]')"
+  head="$(remote "docker compose exec -T $WEB_SVC alembic heads" | awk 'NF {print $1; exit}')"
+  if [[ -z "$db" || -z "$head" || "$db" != "$head" ]]; then
+    err "The database is at revision '${db:-?}' but the running image expects '${head:-?}' — migrations FAILED or did not run."
+    err "Inspect: ssh $HOST 'docker logs --tail 50 wud' (WUD's deploy) or 'cd $DIR && docker compose logs $MIGRATE_SVC'."
+    err "Roll back per docs/runbooks/deploy.md if needed."
+    exit 1
+  fi
+  echo "  alembic_version = $db = image head"
+}
+
+# A 200 is not the whole story: /healthz stays 200 while reporting
+# `status: "degraded"`, because the app IS serving. The OCR weights are fatal
+# (GH #109): they are read lazily, so an image without them deploys green and
+# then fails one document at a time, hours later. Credential degradation is only
+# reported: it needs a human, not a rollback.
+check_health_detail() {
+  bold "Health detail:"
+  echo "  $HEALTH_BODY"
+  if grep -q '"ocr_models": *"missing"' <<<"$HEALTH_BODY"; then
+    err "OCR model weights are MISSING from the running image."
+    err "Photo OCR (JPEG/PNG/HEIC, and any scan that falls through the"
+    err "confidence gate) will fail per-document. The image did not ship"
+    err "models/ocr/ — roll back (docs/runbooks/deploy.md) and rebuild."
+    exit 1
+  fi
+  if grep -q '"status": *"degraded"' <<<"$HEALTH_BODY"; then
+    err "  /healthz reports status=degraded — see the fields above."
+    err "  Not fatal: the app is serving. See docs/deployment.md §1.4.2."
+  fi
+}
+
+# Everything after the deploy itself, whoever ran it.
+post_deploy_checks() {
+  wait_until_live "$1"
+  check_stack_clean
+  check_migration_state
+  check_health_detail
+  prune_old_images
+  echo
+  show_status
+  echo
+}
+
+head_sha() { git rev-parse HEAD 2>/dev/null || true; }
+
+# Default: WUD deployed (or is deploying) :latest; confirm HEAD is live and sound.
+verify() {
+  require_ssh
+  check_promote_gate
+  post_deploy_checks "$(head_sha)"
+  bold "Deploy verified."
+}
+
+# Manual: deploy :latest ourselves, under the lock, migrating once.
 deploy() {
   require_ssh
   check_promote_gate
 
   bold "Before:"
-  remote "docker compose ps --format 'table {{.Service}}\t{{.Status}}' $WEB_SVC $WORKER_SVC" || true
+  remote "docker compose ps --format 'table {{.Service}}\t{{.Status}}' $APP_SVCS" || true
 
-  bold "Pulling :latest and recreating ($DEPLOY_SVCS) on $HOST ..."
-  # --pull always fetches the freshly-promoted image; the one-shot migrate job
-  # applies any new migrations transactionally before web/worker come up.
-  remove_compose_leftovers
-  compose_up
-  check_stack_clean
+  bold "Deploying :latest by hand on $HOST (lock, pull, migrate once, then $APP_SVCS) ..."
+  run_manual_deploy
 
-  bold "Migration job result:"
-  local code
-  code="$(remote "docker inspect -f '{{.State.ExitCode}}' $MIGRATE_SVC" | tr -d '[:space:]')"
-  remote "docker compose logs --tail 8 $MIGRATE_SVC" || true
-  if [[ "$code" != "0" ]]; then
-    err "library-migrate exited $code — migrations FAILED. The new web/worker may be running against an un-migrated DB."
-    err "Inspect: ssh $HOST 'cd $DIR && docker compose logs $MIGRATE_SVC'"
-    err "Roll back per docs/runbooks/deploy.md if needed."
-    exit 1
-  fi
-
-  bold "Health check:"
-  # Probe /healthz INSIDE the webserver container, not via a host port. The
-  # host publishes the app on :8010, not :8000, and when paperless-ngx still
-  # ran there (until 2026-07) a bare `curl localhost:8000` got its 302 to
-  # /accounts/login/ — which `curl -fsS` treats as success, so it never
-  # checked the library app at all. Exec-in-container hits the app directly
-  # on its own port whatever the host maps, and
-  # uses python (guaranteed present — it's what the image's HEALTHCHECK uses;
-  # curl may not be installed) so a non-2xx raises and fails the gate.
-  #
-  # Retry: `compose up` returns as soon as the container is (re)created, but
-  # uvicorn needs a few seconds to bind and accept connections — a single probe
-  # races the recreate and false-fails an otherwise-healthy deploy. Poll for up
-  # to ~60s (well past the observed ~15-20s boot) before giving up.
-  local health_ok=0
-  for _ in $(seq 1 20); do
-    if remote "docker compose exec -T $WEB_SVC \
-        python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\"" \
-        >/dev/null 2>&1; then
-      health_ok=1
-      break
-    fi
-    sleep 3
-  done
-  if [[ "$health_ok" == "1" ]]; then
-    echo "  /healthz OK"
+  # Forced past the promote gate, :latest may not be HEAD, so don't wait for it.
+  if [[ "$SKIP_PROMOTE_CHECK" == "1" ]]; then
+    post_deploy_checks ""
   else
-    err "/healthz did not return OK after ~60s — check 'docker compose logs $WEB_SVC'."
-    exit 1
+    post_deploy_checks "$(head_sha)"
   fi
-
-  # A 200 is not the whole story: /healthz stays 200 while reporting
-  # `status: "degraded"`, because the app IS serving. Read the body too, or a
-  # deploy that broke something the app only needs later passes this gate.
-  #
-  # The OCR weights are the case that motivated it (GH #109): they are read
-  # lazily, on the first photo/PNG/HEIC/gate-retried scan, so an image missing
-  # them deploys entirely green and then fails one document at a time, hours
-  # later. That one is fatal here — a weightless image is a broken image and
-  # the answer is a rollback, not a shrug. Credential degradation is only
-  # reported: it needs a human, but it is not a reason to reject the build
-  # that just deployed.
-  bold "Health detail:"
-  local health_body
-  # Prints the response body verbatim (compact JSON, no spaces after the
-  # colons) — one python statement, so the quoting stays as simple as the
-  # probe above.
-  health_body="$(remote "docker compose exec -T $WEB_SVC python -c \
-      \"import urllib.request; print(urllib.request.urlopen('http://localhost:8000/healthz').read().decode())\"" \
-      2>/dev/null)" || health_body=""
-  if [[ -z "$health_body" ]]; then
-    err "  could not read the /healthz body — skipping the degraded-status check."
-  else
-    echo "  $health_body"
-    if grep -q '"ocr_models": *"missing"' <<<"$health_body"; then
-      err "OCR model weights are MISSING from the running image."
-      err "Photo OCR (JPEG/PNG/HEIC, and any scan that falls through the"
-      err "confidence gate) will fail per-document. The image did not ship"
-      err "models/ocr/ — roll back (docs/runbooks/deploy.md) and rebuild."
-      exit 1
-    fi
-    if grep -q '"status": *"degraded"' <<<"$health_body"; then
-      err "  /healthz reports status=degraded — see the fields above."
-      err "  Not fatal: the app is serving. See docs/deployment.md §1.4.2."
-    fi
-  fi
-
-  prune_old_images
-
-  echo
-  show_status
-  echo
   bold "Deploy complete."
 }
 
 # Sourced (tests/test_deploy_script.py) → define the functions only.
 [[ "${BASH_SOURCE[0]}" != "$0" ]] && return 0
 
-case "${1:-deploy}" in
+case "${1:-verify}" in
   --status|status) require_ssh; show_status ;;
   --logs|logs) require_ssh; show_logs ;;
   --help|-h|help)
-    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//' ;;
+  --deploy|deploy) deploy ;;
   --force|force) SKIP_PROMOTE_CHECK=1; deploy ;;
-  deploy|"") deploy ;;
+  verify|"") verify ;;
   *) err "Unknown option: $1"; err "Try: scripts/deploy.sh --help"; exit 2 ;;
 esac

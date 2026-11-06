@@ -1,7 +1,7 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-11-06 (§1.2: apt retries go through `scripts/ci_apt_retry.sh`, which switches the runner's apt mirror from Azure to archive.ubuntu.com between attempts; §1.3 step 5: the deploy prunes old images; §1.6 step 1: find the rollback SHA from git, not the host). Earlier: 2026-11-05 (§1.2: which CI jobs run on which change; `expect.e2e`; job time limits). **Supersedes:** none.
-**Last verified:** 2026-11-06 — method: partial. §1.2's apt-retries paragraph: ran `tests/test_ci_apt_retry.py` (red before the script existed) and the script in an ubuntu:24.04 container with a runner-format mirrors file (attempt 1 killed, file rewritten, attempt 2 fetched from archive.ubuntu.com). §1.3's prune step: `tests/test_deploy_script.py` against a fake ssh/docker (seen red), and the same prune run by hand on the host. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-06 (WUD deploys every new `:latest`; `scripts/deploy.sh` now verifies by default, and `--deploy` is the manual deploy under a host lock with one migration run: §1.1, §1.3, §1.4, §1.6, §1.7). Earlier: 2026-11-06 (§1.2 apt retries; §1.3 image prune). **Supersedes:** none.
+**Last verified:** 2026-11-06 — method: partial. §1.3: `tests/test_deploy_script.py` against a fake ssh/docker/flock (new tests seen red on the old script), the `--deploy` host steps run through `bash -s` on a local copy of the prod compose shape with a pending migration (one run), and WUD's own log on the host for the race. The rest carries its earlier verifications forward.
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh, scripts/ci_apt_retry.sh
 
 How to ship a merged change to the live `documents` LXC. This is the focused
@@ -14,8 +14,13 @@ How to ship a merged change to the live `documents` LXC. This is the focused
 scripts/deploy.sh
 ```
 
-Run it from the repo root once `main` is green in CI. It SSHes to the prod host,
-pulls the new image, migrates, recreates web + worker, and verifies. Done.
+**What's Up Docker (WUD) on the host deploys every new `:latest` by itself,**
+about a minute after CI's `promote` job: it pulls, migrates and restarts web +
+worker. So after a merge, run the script from the repo root at the merged
+commit: it waits until `/healthz` reports that commit, then verifies the
+migration, the health detail and the containers, and prunes old images. It
+deploys nothing. Only when WUD is paused or broken, deploy by hand with
+`scripts/deploy.sh --deploy` (§1.4).
 
 ## 1.2 Preconditions
 
@@ -115,17 +120,45 @@ commit yet — or `docker`/git isn't available to check — it aborts *before
 pulling or deploying anything*, so it can't silently redeploy the previous
 image.
 
-Then, on the host, in `/srv/apps`, it removes any **compose leftovers** (below)
-and runs:
+**By default it verifies WUD's deploy and changes nothing:**
 
-```bash
-docker compose up -d --pull always library-migrate library-webserver library-worker
-```
+1. **Waits for HEAD to be live:** polls `/healthz` (inside the webserver
+   container) until its `git_sha` is HEAD, for up to 10 minutes
+   (`LIBRARY_VERIFY_TIMEOUT`). On timeout it says so and names `--deploy`:
+   WUD may be paused, or its deploy failed (`ssh documents 'docker logs --tail
+   50 wud'`).
+2. **Compose leftovers** (below): removes any, and **aborts if a `library-`
+   container is `Created`** (created, never started: the stack may be down).
+3. **Migration state:** the database's `alembic_version` must equal
+   `alembic heads` from the running image, or it **aborts**. This holds
+   whoever ran the migration, so no container's exit code is involved.
+4. **Health detail:** the `/healthz` body. A missing OCR model weight
+   (`ocr_models: "missing"`) **aborts**: the image did not ship `models/ocr/`,
+   and photo OCR would fail one document at a time with everything else green
+   (GH #109). Any other `status: "degraded"` is reported, not fatal. See
+   deployment.md §1.4.2.
+5. **Prunes old images** with `docker image prune -f`, then prints the space
+   reclaimed and the root disk's free space. Each deploy leaves the previous
+   1.4GB image behind untagged, and the host's root disk is 16G: 14 of them
+   had filled it to 97% by 2026-11-06. Dangling images only, never `-a`, which
+   would also delete tagged images no container is running. A failed prune
+   does not fail the run, and a run that aborts earlier prunes nothing.
+6. Prints the running images and the prod Alembic head.
 
-If that fails, it removes the leftovers again and retries once. Afterwards it
-removes any leftover still present and **aborts if a `library-` container is
-`Created`** (created, never started: the stack may be down), naming the
-containers.
+**Why it no longer deploys by default.** Until 2026-11-06 the script ran its own
+`docker compose up` while WUD ran another for the same new image. Both started a
+migrate job: on the 0041 deploy one applied the migration and the other failed
+with "expected to match one row ... 0 found" (harmless only because the DDL is
+transactional). WUD's log shows the collision on both deploys that day.
+
+**`--deploy`, the manual deploy**, runs these steps on the host as one script
+under a **host lock**, `flock` on `/srv/apps` itself; WUD's deploy script takes
+the same lock, so the two can never overlap (it waits up to 15 minutes for a
+running WUD deploy): remove compose leftovers; `docker compose pull`; **run the
+migration once** with `docker compose run --rm -T library-migrate`, aborting
+before web and worker if it fails; then `docker compose up -d --no-deps
+library-webserver library-worker` (on failure: remove leftovers, retry once).
+Then the six checks above.
 
 **Compose leftovers.** To recreate a container, `docker compose up` first
 renames the old one to `<12 hex>_<name>`. When that is interrupted the
@@ -136,27 +169,6 @@ duplicate embedder after an otherwise good deploy, once a ~2.5 minute outage).
 The script removes only containers of the compose project whose names match
 `^[0-9a-f]{12}_library-`; they are compose's temporaries by construction.
 
-Then it verifies:
-
-1. **`--pull always`** fetches the freshly-promoted `:latest`.
-2. **`library-migrate`** (one-shot) applies any new Alembic migrations
-   transactionally, then exits. The script reads its exit code and **aborts if
-   it is non-zero** (web/worker would otherwise run against an un-migrated DB).
-3. **`library-webserver` + `library-worker`** are recreated on the new image.
-4. **`GET /healthz`** must return OK, and its **body** is then read: a
-   missing OCR model weight (`ocr_models: "missing"`) **aborts** — the image
-   did not ship `models/ocr/`, and photo OCR would fail one document at a time
-   with everything else green (GH #109). Any other `status: "degraded"` is
-   reported but not fatal. See deployment.md §1.4.2.
-5. **Prunes old images** with `docker image prune -f`, then prints the space
-   reclaimed and the root disk's free space. Each deploy leaves the previous
-   1.4GB image behind untagged, and the host's root disk is 16G: 14 of them
-   had filled it to 97% by 2026-11-06. It removes dangling images only, never
-   `-a`, which would also delete tagged images no container is running. A
-   failed prune does not fail the deploy, and a deploy that aborts earlier
-   prunes nothing.
-6. Prints the running images and the prod Alembic head.
-
 Service names on the live host are `library-*` (the repo's compose file uses
 `api`/`worker`/`db`; production renames them — see the deployment doc). The
 script uses the production names.
@@ -164,23 +176,27 @@ script uses the production names.
 ## 1.4 Other modes
 
 ```bash
+scripts/deploy.sh --deploy   # deploy :latest by hand (WUD paused or broken), then verify
+scripts/deploy.sh --force    # --deploy WITHOUT the promote gate (emergencies)
 scripts/deploy.sh --status   # show the running stack + Alembic head, no deploy
 scripts/deploy.sh --logs     # tail recent webserver + worker logs
-scripts/deploy.sh --force    # deploy WITHOUT the promote gate (emergencies)
 scripts/deploy.sh --help     # usage
 ```
 
-`--force` (or `SKIP_PROMOTE_CHECK=1`) bypasses the promote gate — use it only
-when you've verified `:latest` is current yourself (e.g. `docker`/git isn't
-available locally to run the check). You then own not redeploying the old image.
+`--force` (or `SKIP_PROMOTE_CHECK=1` with `--deploy`) bypasses the promote
+gate — use it only when you've verified `:latest` is current yourself (e.g.
+`docker`/git isn't available locally to run the check). You then own not
+redeploying the old image, and the script waits only for `/healthz` to answer,
+not for HEAD's commit.
 
 Overrides (env): `LIBRARY_DEPLOY_HOST` (default `documents`),
-`LIBRARY_DEPLOY_DIR` (default `/srv/apps`), `SKIP_PROMOTE_CHECK` (`1` = bypass
-the promote gate, like `--force`).
+`LIBRARY_DEPLOY_DIR` (default `/srv/apps`), `LIBRARY_VERIFY_TIMEOUT` (default
+600 s), `LIBRARY_VERIFY_INTERVAL` (default 10 s), `SKIP_PROMOTE_CHECK` (`1` =
+bypass the promote gate).
 
 ## 1.5 Verify after deploy
 
-The script already checks migrate + `/healthz`, but for a human sanity pass:
+The script already checks the migration state and `/healthz`, but for a human sanity pass:
 
 ```bash
 scripts/deploy.sh --status        # web/worker/db/embedder up, head = expected revision
@@ -194,6 +210,9 @@ Then click through the changed surface in the browser.
 The image is content-addressed by commit SHA, so rollback = redeploy the
 previous SHA:
 
+0. **Pause WUD first** (`ssh documents 'docker stop wud'`), or it redeploys
+   `:latest` within a minute. Start it again (`docker start wud`) once the fix
+   or the revert has shipped as the new `:latest`.
 1. Find the previous good commit on `main` (`git log --first-parent main`).
    CI pushes an image tagged with its full SHA to ghcr, so the tag is
    `ghcr.io/johnmathews/library:<full-sha>`. The host does not keep old
@@ -211,11 +230,20 @@ previous SHA:
 
 1. **`Cannot SSH to 'documents'`** — `ssh documents true` fails. Fix your SSH
    config/keys, or set `LIBRARY_DEPLOY_HOST`.
-2. **`library-migrate exited <n>`** — a migration failed; the script aborts
-   before declaring success. Read `docker compose logs library-migrate`, fix
-   forward or roll back. The DB is left at whatever revision the failed
-   transaction reached (migrations are transactional, so a failed step rolls
-   itself back).
+2. **`The database is at revision 'X' but the running image expects 'Y'`** or
+   **`library-migrate failed — migrations FAILED`** — a migration failed or did
+   not run. After a WUD deploy read `docker logs --tail 50 wud`; after
+   `--deploy` the failing run's output is in the script's own output (the run
+   container is removed). Fix forward or roll back. The DB is left at whatever
+   revision the failed transaction reached (migrations are transactional, so a
+   failed step rolls itself back).
+   - **`Could not take the deploy lock`** (`--deploy`): a WUD deploy held the
+     lock for 15 minutes. Check `docker logs --tail 50 wud`; usually just run
+     the default (verify) instead.
+   - **`/healthz did not report <sha>`** (verify): WUD has not deployed HEAD.
+     It may be paused (`docker ps --filter name=wud`), its deploy may have
+     failed (its log; a failure also sends a Pushover message), or `:latest`
+     is not HEAD yet.
 3. **`These containers were created but never started`** — the retry did not
    clear compose's name conflict, and the stack may be down. Run
    `ssh documents 'docker ps -a --filter name=library'`; confirm any
