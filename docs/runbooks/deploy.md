@@ -1,7 +1,7 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.2: which CI jobs run on which change — docs-only PRs skip e2e, compose-smoke and typecheck; ci-gate's `expect.e2e` rule; job time limits and the apt retries). Earlier: 2026-11-04 (§1.3 and §1.7: compose leftover containers). **Supersedes:** none.
-**Last verified:** 2026-11-05 — method: partial, scoped to §1.2's CI paragraphs. Read `ci.yml` and `scripts/ci_gate.sh`; ran `tests/test_ci_gate.py` and `tests/test_ci_workflow.py` (both seen red first), and the retry loop in an ubuntu:24.04 container as a sudo user. The table is from reading the job `if:`s; a live docs-only PR is the next check. §1.3/§1.7's leftover handling was last verified 2026-11-04 (`tests/test_deploy_script.py` against a fake ssh/docker).
+**Status:** active. **Last updated:** 2026-11-06 (§1.3 step 5: the deploy prunes old images; §1.6 step 1: find the rollback SHA from git, not the host). Earlier: 2026-11-05 (§1.2: which CI jobs run on which change — docs-only PRs skip e2e, compose-smoke and typecheck; ci-gate's `expect.e2e` rule; job time limits and the apt retries). Earlier: 2026-11-04 (§1.3 and §1.7: compose leftover containers). **Supersedes:** none.
+**Last verified:** 2026-11-06 — method: partial, scoped to §1.3's prune step: `tests/test_deploy_script.py` runs `deploy()` end to end against a fake ssh/docker (seen red with the call removed and with `-a`), and the same prune run by hand on the host freed 12GB. 2026-11-05: §1.2's CI paragraphs. Read `ci.yml` and `scripts/ci_gate.sh`; ran `tests/test_ci_gate.py` and `tests/test_ci_workflow.py` (both seen red first), and the retry loop in an ubuntu:24.04 container as a sudo user. The table is from reading the job `if:`s; a live docs-only PR is the next check. §1.3/§1.7's leftover handling was last verified 2026-11-04 (`tests/test_deploy_script.py` against a fake ssh/docker).
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh
 
 How to ship a merged change to the live `documents` LXC. This is the focused
@@ -140,7 +140,14 @@ Then it verifies:
    did not ship `models/ocr/`, and photo OCR would fail one document at a time
    with everything else green (GH #109). Any other `status: "degraded"` is
    reported but not fatal. See deployment.md §1.4.2.
-5. Prints the running images and the prod Alembic head.
+5. **Prunes old images** with `docker image prune -f`, then prints the space
+   reclaimed and the root disk's free space. Each deploy leaves the previous
+   1.4GB image behind untagged, and the host's root disk is 16G: 14 of them
+   had filled it to 97% by 2026-11-06. It removes dangling images only, never
+   `-a`, which would also delete tagged images no container is running. A
+   failed prune does not fail the deploy, and a deploy that aborts earlier
+   prunes nothing.
+6. Prints the running images and the prod Alembic head.
 
 Service names on the live host are `library-*` (the repo's compose file uses
 `api`/`worker`/`db`; production renames them — see the deployment doc). The
@@ -179,10 +186,11 @@ Then click through the changed surface in the browser.
 The image is content-addressed by commit SHA, so rollback = redeploy the
 previous SHA:
 
-1. Find the previous good image:
-   ```bash
-   ssh documents 'docker images ghcr.io/johnmathews/library --format "{{.Tag}}\t{{.CreatedAt}}"'
-   ```
+1. Find the previous good commit on `main` (`git log --first-parent main`).
+   CI pushes an image tagged with its full SHA to ghcr, so the tag is
+   `ghcr.io/johnmathews/library:<full-sha>`. The host does not keep old
+   images: every deploy prunes them (§1.3), and they were untagged locally
+   anyway, so `docker images` on the host cannot show their SHA.
 2. Pin the stack to the previous `:sha` tag (edit `/srv/apps/.env` or the compose
    image ref — back it up first) and `docker compose up -d`. See
    [../deployment.md](../deployment.md) §1.7.

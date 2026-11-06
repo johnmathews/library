@@ -191,6 +191,18 @@ check_stack_clean() {
   fi
 }
 
+# Each deploy leaves the previous 1.4GB image behind, untagged, and the host's
+# root disk is 16G: 14 of them took it to 97% full by 2026-11-06. Prune the
+# dangling (untagged, unused) images once the new one is healthy. Never `-a`:
+# that would also delete tagged images no container happens to run right now.
+# Rollback does not need them — it pins a `:<sha>` tag, which CI keeps on ghcr.
+# A prune failure only costs disk, so it never fails the deploy.
+prune_old_images() {
+  bold "Pruning old images:"
+  remote "docker image prune -f" | grep -E '^Total reclaimed space' || true
+  remote "df -h / | awk 'NR==2 {print \"  root disk: \" \$4 \" free (\" \$5 \" used)\"}'" || true
+}
+
 deploy() {
   require_ssh
   check_promote_gate
@@ -282,6 +294,8 @@ deploy() {
       err "  Not fatal: the app is serving. See docs/deployment.md §1.4.2."
     fi
   fi
+
+  prune_old_images
 
   echo
   show_status

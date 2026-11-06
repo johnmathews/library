@@ -62,6 +62,20 @@ if [[ "$1" == "compose" && "$2" == "up" ]]; then
   fi
   exit 0
 fi
+if [[ "$1" == "inspect" ]]; then
+  echo "${FAKE_MIGRATE_EXIT:-0}"
+  exit 0
+fi
+if [[ "$1" == "compose" && "$2" == "exec" ]]; then
+  echo '{"status":"ok"}'
+  exit 0
+fi
+if [[ "$1" == "image" && "$2" == "prune" ]]; then
+  [[ -f "$FAKE_PRUNE_FAILS" ]] && exit 1
+  echo 'Deleted Images:'
+  echo 'Total reclaimed space: 1.42GB'
+  exit 0
+fi
 exit 0
 """
 
@@ -95,6 +109,7 @@ def _run(host: Path, call: str) -> subprocess.CompletedProcess[str]:
         "FAKE_DOCKER_STATE": str(host / "state"),
         "FAKE_DOCKER_LOG": str(host / "docker.log"),
         "FAKE_UP_FAILS_ONCE": str(host / "up-fails-once"),
+        "FAKE_PRUNE_FAILS": str(host / "prune-fails"),
     }
     return subprocess.run(
         ["bash", "-c", f'source "{_SCRIPT}"; {call}'],
@@ -184,3 +199,37 @@ def test_a_clean_stack_passes_and_a_running_duplicate_is_removed(host: Path) -> 
     result = _run(host, "check_stack_clean")
     assert result.returncode == 0, result.stderr
     assert "310a240f486b_library-embedder" not in _names(host)
+
+
+def _prune_calls(host: Path) -> list[str]:
+    log = (host / "docker.log").read_text().splitlines()
+    return [line for line in log if line.startswith("docker image prune")]
+
+
+def test_a_successful_deploy_prunes_dangling_images_only(host: Path) -> None:
+    # Each deploy leaves its predecessor's 1.4GB image behind; 14 of them filled
+    # the 16G host disk to 97% (2026-11-06).
+    _containers(host, *HEALTHY)
+    result = _run(host, "SKIP_PROMOTE_CHECK=1 deploy")
+    assert result.returncode == 0, result.stderr
+    assert "Deploy complete." in result.stdout
+    # Dangling only: `-a` would also delete tagged images no container runs.
+    assert _prune_calls(host) == ["docker image prune -f"]
+    assert "Total reclaimed space: 1.42GB" in result.stdout
+
+
+def test_a_failed_prune_does_not_fail_the_deploy(host: Path) -> None:
+    _containers(host, *HEALTHY)
+    (host / "prune-fails").write_text("")
+    result = _run(host, "SKIP_PROMOTE_CHECK=1 deploy")
+    assert result.returncode == 0, result.stderr
+    assert "Deploy complete." in result.stdout
+    assert _prune_calls(host) == ["docker image prune -f"]
+
+
+def test_a_failed_migration_stops_before_pruning(host: Path) -> None:
+    _containers(host, *HEALTHY)
+    result = _run(host, "FAKE_MIGRATE_EXIT=1 SKIP_PROMOTE_CHECK=1 deploy")
+    assert result.returncode != 0
+    assert "migrations FAILED" in result.stderr
+    assert _prune_calls(host) == []

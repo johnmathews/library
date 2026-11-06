@@ -1,6 +1,6 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.4: `compose-smoke` now also calls the MCP endpoint the way the reverse proxy forwards it, and checks the call log and `/metrics`). Earlier entries are in this file's history.
+**Status:** active. **Last updated:** 2026-11-06 (§1.7.2 point 5: `scripts/deploy.sh` prunes old images after a healthy deploy). Earlier: 2026-11-05 (§1.4: `compose-smoke` now also calls the MCP endpoint the way the reverse proxy forwards it, and checks the call log and `/metrics`). Earlier entries are in this file's history.
 **Last verified:** 2026-11-05 — method: partial, scoped to the `compose-smoke` paragraph of §1.4: the steps ran against a locally built image (green), and red against builds with the MCP mount moved, the strict Host guard on, and the API log handler removed. The rest carries forward the 2026-11-04 check of §1.5 and §1.5.1.
 
 How to run Library in production: a single `docker compose up` on any
@@ -499,8 +499,9 @@ image; proxmox-setup owns how it is run. Concrete details:
    up -d --pull always library-migrate library-webserver library-worker`
    (never `stop` the db; always include `library-migrate`). This is automated by
    **`scripts/deploy.sh`** (run `make deploy` from the repo root), which also
-   verifies the migrate exit code and `/healthz` — see the focused
-   [deploy runbook](runbooks/deploy.md).
+   verifies the migrate exit code and `/healthz` and then prunes the old
+   images — see the focused [deploy runbook](runbooks/deploy.md). The root
+   disk is only 16G, and each deploy's leftover image is 1.4GB.
 
 ## 1.8 Troubleshooting
 
