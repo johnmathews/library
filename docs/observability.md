@@ -2,7 +2,7 @@
 
 **Status:** active. **Last updated:** 2026-11-07 (§3: the `library.ask.input_tokens_per_call` histogram and its query; subscription cost is now the API-equivalent, not a full-rate ceiling). Earlier entries are in this file's history.
 **Last verified:** 2026-11-07 — method: partial, scoped to the `input_tokens_per_call` row and its subsection. `tests/test_telemetry.py::test_input_tokens_per_call_reaches_the_scrape` reads the series from a real `/metrics` scrape and `tests/test_api_ask.py::test_a_turn_records_its_input_tokens_per_model_call` pins the call site, both seen red first. The rest carries its earlier verifications forward.
-**Covers:** src/library/mcp_rejected_log.py
+**Covers:** src/library/mcp_rejected_log.py, src/library/telemetry.py
 
 > Purpose
 >
@@ -72,10 +72,15 @@ subscription path is not metered, so its cost is what the API would have
 charged ([llm-backends.md §3.3](llm-backends.md)). Do not sum the two and call
 it a bill.
 
+**Every `library.ask.*` metric is instrumented where the backends converge**
+(`api/ask.py`), not inside the engine — so one call site covers both and their
+numbers stay comparable.
+
 ### Input tokens per model call
 
-A CLI upgrade once took the subscription's fixed cost per call from ~43k to
-~100k tokens and nothing noticed ([llm-backends.md §3](llm-backends.md)). After
+The subscription's fixed cost per call once grew from ~43k to ~100k tokens as
+the CLI offered more tools, mostly the claude.ai account's connectors, and
+nothing noticed ([llm-backends.md §3](llm-backends.md)). After
 the tool lockdown a call carries library's own prompt and tools (~4k tokens)
 plus the conversation, so a median that climbs past ~50k means something is
 being added to every call again:
@@ -87,10 +92,6 @@ histogram_quantile(0.5, sum by (le, backend) (
 
 The alert rule belongs with the others in the home-server repository; it is not
 defined yet.
-
-**Instrumented at the point where the backends converge** (`api/ask.py`), not
-inside the engine — so one call site covers both and their numbers stay
-comparable.
 
 ### Cache hit rate, as a query
 

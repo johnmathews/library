@@ -81,7 +81,8 @@ def _no_oauth_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_usage_counts_cache_tokens_as_input() -> None:
-    """The ~32k harness tax arrives as cache_creation; it must not be hidden.
+    """The ~32k harness tax (before the tool lockdown) arrived as cache_creation;
+    it must not be hidden.
 
     Counting only ``input_tokens`` would report a 3-token prompt for a call that
     actually put 32k of Claude Code system prompt on the wire, making the

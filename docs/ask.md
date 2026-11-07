@@ -2,7 +2,7 @@
 
 **Status:** active. **Last updated:** 2026-11-07 (§1.4: each turn records its backend, token split and model calls, migration 0043; subscription turns are priced by the API rate card and shown as "API-equivalent"; the backend paragraph drops the ~43k preamble claim after the tool lockdown). Earlier entries are in this file's history.
 **Last verified:** 2026-11-07 — method: partial, scoped to §1.4. `tests/test_api_ask.py::test_a_turn_records_its_backend_token_split_and_model_calls`, `tests/test_migrations.py::test_0043_backfills_backend_only_where_the_history_proves_it` and `tests/test_ask_backend.py::test_a_subscription_turn_is_priced_by_the_api_rate_card_for_its_split` pass, each seen red first; the backfill rule was previewed read-only against production. The rest carries its earlier verifications forward.
-**Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, src/library/filter_vocabulary.py, .github/workflows/e2e-nightly.yml
+**Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, src/library/filter_vocabulary.py, .github/workflows/e2e-nightly.yml, migrations/versions/0043_ask_turn_accounting.py
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -863,7 +863,9 @@ which 0043 fills where the history proves it: `api` for turns before
 the stored `llm_backend.ask` setting's value for turns from that row's
 `updated_at` onwards. Every save of the setting moves `updated_at`, so the
 value has held since then. Turns in between, or with no stored setting, stay
-null. The thread API returns `backend` on each turn. Cost is **recorded, not gated** in this release — Ask is
+null. The thread API returns `backend` on each turn.
+
+Cost is **recorded, not gated** in this release — Ask is
 interactive and self-limiting. A daily-budget guard mirroring the extraction
 budget (`LIBRARY_EXTRACTION_DAILY_BUDGET_USD`) can be added later. Embedding
 is local and effectively free.

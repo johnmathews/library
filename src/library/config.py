@@ -13,8 +13,8 @@ from library.extraction.pricing import MODEL_PRICING_USD_PER_MTOK
 # Which transport a given LLM surface uses. "api" is the metered Anthropic
 # Messages API (x-api-key, per-token billing). "subscription" reaches Claude
 # through the bundled Claude Code CLI using OAuth credentials from a Claude
-# subscription — see docs/llm-backends.md, and note the ~32k-token per-call
-# harness tax that makes it unsuitable for the batch pipeline.
+# subscription — see docs/llm-backends.md. It has no structured outputs, which
+# the batch pipeline needs, so only Ask may use it.
 LLMBackend = Literal["api", "subscription"]
 
 # The ``*_model`` knobs whose value must have a row in
@@ -203,8 +203,8 @@ class Settings(BaseSettings):
     # request — call ``resolve_backend`` instead.
     #
     # Ask is the surface where the subscription backend pays: opus-4-8 is the
-    # priciest configured model, and calls are human-paced, so the fixed harness
-    # tax is amortised against a call that was already large. Deployments
+    # priciest configured model, calls are human-paced, and the locked-down CLI
+    # adds only a few hundred tokens a call (docs/llm-backends.md §3). Deployments
     # without Claude CLI credentials must set this back to "api" — the test
     # suite does exactly that (see tests/conftest.py).
     ask_llm_backend: LLMBackend = "subscription"

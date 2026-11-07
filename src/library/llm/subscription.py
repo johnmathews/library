@@ -18,10 +18,9 @@ claude.ai account behind the credentials (Gmail, Slack, Drive, ...). Under
 accounts, and the tool descriptions alone cost ~100k tokens per call. Locked
 down, an empty prompt costs a few hundred tokens; see ``docs/llm-backends.md`` §3.
 
-Usage reported back to callers deliberately includes cache-creation and
-cache-read tokens in ``input_tokens``, so the cost estimate library derives from
-it reflects the true context size — harness tax included — rather than
-flattering the subscription path.
+Usage reported back to callers counts cache-creation and cache-read tokens in
+``input_tokens``, so the total is the true context size, and keeps the split so
+the cost can weight each kind as the API would (``ask.engine._subscription_cost_usd``).
 """
 
 import json
@@ -104,9 +103,8 @@ class Usage:
     """Token usage for one subscription call.
 
     ``input_tokens`` is the *total* context billed against the subscription —
-    fresh input plus cache creation plus cache reads. Callers feed it to
-    ``estimate_cost_usd``, so under-reporting here would understate what the
-    harness costs and make the backend look cheaper than it is.
+    fresh input plus cache creation plus cache reads. Under-reporting it would
+    make the backend look cheaper than it is.
 
     The components are ALSO kept, individually, so telemetry can report a cache
     hit rate for this backend the same way it does for the API one. They are

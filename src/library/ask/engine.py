@@ -462,8 +462,8 @@ async def generate_thread_title(
 
     ``backend`` is the ask surface's resolved backend — titles follow it, because
     splitting them off would leave a "subscription" deployment still needing an
-    API key for a handful of tokens. That does mean a ~32-token title pays the
-    Agent SDK's fixed harness cost, once per *new thread* rather than per turn.
+    API key for a handful of tokens. On the subscription a title also pays a few
+    hundred tokens of CLI overhead, once per *new thread* rather than per turn.
     It is passed in rather than resolved here so the caller makes one database
     round-trip per turn, and so the standalone backfill script — which has no
     session — keeps working on the default ``api``.
@@ -1282,11 +1282,10 @@ async def _run_subscription_turn(
     from the SDK's message stream. ``dispatch`` is library's same tool
     dispatcher — the SDK path adds a transport, never a second implementation.
 
-    Cost is still estimated from ``MODEL_PRICING_USD_PER_MTOK``. Under a
-    subscription no such dollars are billed, so ``cost_usd`` here means "what
-    this turn would have cost on the API" — which is the number worth recording,
-    both to measure the saving and to keep the ~32k-token harness overhead
-    visible instead of free-looking.
+    Cost is the API rate card applied to the token split
+    (:func:`_subscription_cost_usd`). Under a subscription no such dollars are
+    billed, so ``cost_usd`` here means "what this turn would have cost on the
+    API", which is the number worth recording to measure the saving.
     """
     loop = await subscription.tool_loop(
         config_dir=settings.claude_config_dir,
