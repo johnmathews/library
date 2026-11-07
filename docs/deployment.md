@@ -1,7 +1,7 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-11-07 (the stale-`git_sha` note now names WUD and `--deploy`; §1.7.2 point 5: WUD deploys each new `:latest`; `scripts/deploy.sh` verifies by default and `--deploy` migrates once with `compose run --no-deps` under a host lock). Earlier: 2026-11-06 (§1.7.2: the deploy prunes old images). Earlier entries are in this file's history.
-**Last verified:** 2026-11-07 — method: partial, scoped to §1.7.2 point 5: read on the host after the 00:12 CET WUD role apply, the verify run against production after WUD deployed `045b235`, and WUD's log of that deploy. The rest carries forward the 2026-11-05 `compose-smoke` check of §1.4 and the 2026-11-04 check of §1.5.
+**Status:** active. **Last updated:** 2026-11-07 (§1.7.3: grouped Dependabot security updates and how to handle them). Earlier: 2026-11-07 (§1.7.2 point 5: WUD deploys each new `:latest`; `scripts/deploy.sh` verifies by default). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial. §1.7.3: the config read against GitHub's Dependabot options reference; GitHub's acceptance of it is checked after merge (journal 261107-dependabot-alerts). §1.7.2 point 5: read on the host and the verify run after WUD deployed `045b235`. The rest carries forward the 2026-11-05 `compose-smoke` check of §1.4 and the 2026-11-04 check of §1.5.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
@@ -511,6 +511,28 @@ image; proxmox-setup owns how it is run. Concrete details:
    migration twice on 2026-11-06. See the focused
    [deploy runbook](runbooks/deploy.md). The root disk is only 16G, and each
    deploy's leftover image is 1.4GB.
+
+### 1.7.3 Dependency security updates
+
+Dependabot raises security PRs for the Python (`uv.lock`) and frontend
+(`frontend/package-lock.json`) dependencies. It groups them, so each
+ecosystem gets one PR carrying every available fix (`.github/dependabot.yml`,
+`applies-to: security-updates`). Version updates are off for both
+(`open-pull-requests-limit: 0`). Docker digests and GitHub Actions still get
+weekly version PRs.
+
+1. Merge a grouped PR like any other: green CI, squash, then verify the
+   deploy with `scripts/deploy.sh`.
+2. If it's red, or stale and conflicted, don't fix it in place. Re-create
+   the upgrade on a branch (`uv lock --upgrade-package …` or `npm update …`)
+   and close the bot PR with a pointer. GitHub runs no PR checks on a
+   conflicted PR, so it can sit "mergeable" with no e2e at all.
+3. A fix that needs a new major goes in its own PR, after its changelog
+   is read.
+4. An alert that has no compatible fix, or doesn't reach Library, is
+   dismissed with a reason, not left open. Two current exceptions: mcp is
+   held on 1.28.1 ([MCP §1.2](mcp.md)), and the dev-only minimatch alert is
+   dismissed until eslint accepts minimatch 11.
 
 ## 1.8 Troubleshooting
 
