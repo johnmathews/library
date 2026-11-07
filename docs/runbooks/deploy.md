@@ -1,6 +1,6 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-11-07 (§1.3: `--deploy` runs the migration with `compose run --no-deps`, so it cannot recreate the running `library-db`). Earlier: 2026-11-06 (WUD deploys every new `:latest`; the script verifies by default; §1.2 apt retries; §1.3 image prune). **Supersedes:** none.
+**Status:** active. **Last updated:** 2026-11-07 (§1.3: verify waits for the host lock before touching containers, and a failed DB read reports instead of exiting silently; `--deploy` runs the migration with `compose run --no-deps`; §1.6: the rollback downgrade uses `--no-deps` too). Earlier: 2026-11-06 (WUD deploys every new `:latest`; the script verifies by default; §1.2 apt retries; §1.3 image prune). **Supersedes:** none.
 **Last verified:** 2026-11-07 — method: partial. §1.3: `tests/test_deploy_script.py` against a fake ssh/docker/flock (seen red), the default verify run against production after WUD deployed `045b235` (passed: HEAD live, `alembic_version` = image head, no stray), and WUD's own log of that deploy, which showed `compose run` without `--no-deps` recreating `library-db`. The rest carries its earlier verifications forward.
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh, scripts/ci_apt_retry.sh
 
@@ -127,23 +127,28 @@ image.
    (`LIBRARY_VERIFY_TIMEOUT`). On timeout it says so and names `--deploy`:
    WUD may be paused, or its deploy failed (`ssh documents 'docker logs --tail
    50 wud'`).
-2. **Compose leftovers** (below): removes any, and **aborts if a `library-`
+2. **Waits for the host lock** (and releases it at once). HEAD on `/healthz`
+   means WUD migrated and started the webserver, not that its script is done:
+   it may still be recreating the worker, and compose's in-flight
+   `<12 hex>_library-…` rename looks like a leftover. WUD holds the lock until
+   its health wait ends.
+3. **Compose leftovers** (below): removes any, and **aborts if a `library-`
    container is `Created`** (created, never started: the stack may be down).
-3. **Migration state:** the database's `alembic_version` must equal
+4. **Migration state:** the database's `alembic_version` must equal
    `alembic heads` from the running image, or it **aborts**. This holds
    whoever ran the migration, so no container's exit code is involved.
-4. **Health detail:** the `/healthz` body. A missing OCR model weight
+5. **Health detail:** the `/healthz` body. A missing OCR model weight
    (`ocr_models: "missing"`) **aborts**: the image did not ship `models/ocr/`,
    and photo OCR would fail one document at a time with everything else green
    (GH #109). Any other `status: "degraded"` is reported, not fatal. See
    deployment.md §1.4.2.
-5. **Prunes old images** with `docker image prune -f`, then prints the space
+6. **Prunes old images** with `docker image prune -f`, then prints the space
    reclaimed and the root disk's free space. Each deploy leaves the previous
    1.4GB image behind untagged, and the host's root disk is 16G: 14 of them
    had filled it to 97% by 2026-11-06. Dangling images only, never `-a`, which
    would also delete tagged images no container is running. A failed prune
    does not fail the run, and a run that aborts earlier prunes nothing.
-6. Prints the running images and the prod Alembic head.
+7. Prints the running images and the prod Alembic head.
 
 **Why it no longer deploys by default.** Until 2026-11-06 the script ran its own
 `docker compose up` while WUD ran another for the same new image. Both started a
@@ -158,7 +163,7 @@ running WUD deploy): remove compose leftovers; `docker compose pull`; **run the
 migration once** with `docker compose run --rm --no-deps -T library-migrate` (`--no-deps`, or `run` may recreate the running `library-db`), aborting
 before web and worker if it fails; then `docker compose up -d --no-deps
 library-webserver library-worker` (on failure: remove leftovers, retry once).
-Then the six checks above.
+Then the seven steps above.
 
 **Compose leftovers.** To recreate a container, `docker compose up` first
 renames the old one to `<12 hex>_<name>`. When that is interrupted the
@@ -223,7 +228,7 @@ previous SHA:
    [../deployment.md](../deployment.md) §1.7.
 3. **Migrations do not auto-roll-back.** If the bad deploy ran a migration that
    the old image can't tolerate, downgrade it explicitly
-   (`docker compose run --rm library-migrate alembic downgrade -1`) or restore
+   (`docker compose run --rm --no-deps library-migrate alembic downgrade -1`) or restore
    the pre-deploy DB backup (§1.6 of the deployment doc).
 
 ## 1.7 Troubleshooting
