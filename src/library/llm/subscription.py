@@ -11,11 +11,12 @@ needs:
 * :func:`tool_loop` — an agentic loop over library's own tools, bridged into
   the SDK as an in-process MCP server. Used by ``ask``.
 
-**The harness is not free.** Every call carries the Claude Code system prompt —
-measured at ~32k tokens for Sonnet and ~43k for Opus on an empty prompt, and it
-cannot be configured away (a custom ``system_prompt`` replaces nothing and costs
-five tokens more). That fixed per-call tax is why only large, infrequent calls
-belong here; see ``docs/llm-backends.md``.
+**The CLI offers library's tools and nothing else** (:func:`build_options`).
+Left at its defaults it offers its own built-ins and every connector on the
+claude.ai account behind the credentials (Gmail, Slack, Drive, ...). Under
+``bypassPermissions`` that would let a prompt-injected document act on those
+accounts, and the tool descriptions alone cost ~100k tokens per call. Locked
+down, an empty prompt costs a few hundred tokens; see ``docs/llm-backends.md`` §3.
 
 Usage reported back to callers deliberately includes cache-creation and
 cache-read tokens in ``input_tokens``, so the cost estimate library derives from
@@ -278,8 +279,23 @@ def build_options(
     return ClaudeAgentOptions(
         model=model,
         system_prompt=system_prompt,
+        # Offer library's tools and nothing else. permission_mode below makes
+        # every offered tool callable without a prompt, and ask reads documents
+        # a stranger can write (ingested email). Defaults would offer the CLI's
+        # built-ins and every connector on the claude.ai account behind the
+        # credentials (Gmail, Slack, Drive, ...), which setting_sources=[] does
+        # not remove — and their descriptions cost ~100k tokens a call.
+        #   tools=[]                 every built-in off, including ones a later
+        #                            CLI adds (a blocklist cannot name those)
+        #   strict_mcp_config=True   only the MCP servers passed here
+        #   skills=[]                no skills
+        # Pinned against the real CLI by tests/test_llm_subscription_cli.py.
+        tools=[],
+        strict_mcp_config=True,
+        skills=[],
         mcp_servers=mcp_servers or {},
         allowed_tools=[f"{_MCP_PREFIX}*"] if mcp_servers else [],
+        # Second layer, kept from before tools=[] existed.
         disallowed_tools=_BLOCKED_BUILTINS,
         permission_mode="bypassPermissions",
         max_turns=max_turns,

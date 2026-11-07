@@ -159,6 +159,21 @@ def test_options_block_every_builtin_and_ignore_host_settings(tmp_path: Path) ->
     assert options.setting_sources == []
 
 
+def test_options_offer_no_builtins_skills_or_account_connectors(tmp_path: Path) -> None:
+    # A blocklist cannot name built-ins a later CLI adds, and setting_sources=[]
+    # does not keep out the claude.ai account's connectors (Gmail, Slack, ...).
+    # Under bypassPermissions anything offered is callable, so offer nothing
+    # beyond library's own MCP server. tests/test_llm_subscription_cli.py checks
+    # the outcome against the real CLI.
+    for servers in (None, {"library": {}}):
+        options = subscription.build_options(
+            model="m", system_prompt="s", config_dir=tmp_path, max_turns=8, mcp_servers=servers
+        )
+        assert options.tools == []
+        assert options.strict_mcp_config is True
+        assert options.skills == []
+
+
 def test_options_authorise_only_librarys_mcp_tools(tmp_path: Path) -> None:
     with_tools = subscription.build_options(
         model="m", system_prompt="s", config_dir=tmp_path, max_turns=8, mcp_servers={"library": {}}

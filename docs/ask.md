@@ -1,6 +1,6 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-06 (*Where a money total comes from*: totals and charts read the same merged twin labels, migration 0041; a `facets` filter counts the money rows that carry the facet. §1 item 3: `query_documents` refuses unknown filter values). Earlier entries are in this file's history.
+**Status:** active. **Last updated:** 2026-11-07 (the subscription paragraph under the backend setting: the CLI offers only library's tools, so the ~43k preamble claim is gone, see llm-backends.md §3). Earlier: 2026-11-06 (*Where a money total comes from*: totals and charts read the same merged twin labels, migration 0041; a `facets` filter counts the money rows that carry the facet. §1 item 3: `query_documents` refuses unknown filter values). Earlier entries are in this file's history.
 **Last verified:** 2026-11-06 — method: partial, scoped to *Where a money total comes from*, §1.10 item 11 and §1 item 3. Read against `structured_query.sum_amount` and migration 0041; the twin and line-facet tests in `tests/test_structured_query.py` were seen red first. Item 3's refusal is covered by `tests/test_ask_tool_filters.py` (seen red with the check disabled). The rest carries its earlier verifications forward.
 **Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, src/library/filter_vocabulary.py, .github/workflows/e2e-nightly.yml
 
@@ -859,12 +859,13 @@ request so a change needs no restart; `LIBRARY_ASK_LLM_BACKEND` supplies the
 default and ships as `subscription`. `api` uses the metered Messages API,
 `subscription` runs the same loop through the Claude Code CLI against a Claude
 subscription.
-Ask is the surface where that trade pays — `ask_model` is the priciest
-configured model and calls are human-paced — but the Agent SDK adds a fixed
-~43k-token Claude Code preamble to every Opus call. `cost_usd` counts it, so a
-subscription-answered turn records a *higher* `cost_usd` than the same turn on
-the API: under a subscription that figure is notional ("what this would have
-cost"), and the real resource being spent is quota. On `subscription`, Ask needs
+Ask is the surface where that trade pays: `ask_model` is the priciest
+configured model and calls are human-paced. The CLI is locked down to offer
+only library's own tools, which keeps the claude.ai account's connectors out of
+reach and keeps its fixed cost per call to a few hundred tokens
+([`llm-backends.md` §3](llm-backends.md)). Under a subscription `cost_usd` is
+notional ("what this would have cost"), and the real resource being spent is
+quota. On `subscription`, Ask needs
 no Anthropic API key at all and does not 503 without one. Full mechanism,
 provisioning steps and the credential runbook: [`llm-backends.md`](llm-backends.md).
 
