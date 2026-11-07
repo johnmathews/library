@@ -1,7 +1,7 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-07 (§1.2: mcp also stays on 1.28.1, because 1.30 backports the 4 MiB cap; a guard test now catches any SDK that caps the body). Earlier entries are in this file's history.
-**Last verified:** 2026-11-07 — method: partial, scoped to §1.2's mcp 1.30 point: the guard test run on mcp 1.28.1 (pass) and 1.30.0 (`413`), plus the mcp 1.30.0 and fastmcp 3.4.11 source (journal 261107-dependabot-alerts). The rest carries forward the earlier 2026-11-07 check (journal 261107-library-followups-run-closed).
+**Status:** active. **Last updated:** 2026-11-07 (§1.2: the SDK hold is about value, not the 4 MiB cap, because model output limits MCP uploads first; mcp also stays on 1.28.1). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial. §1.2's hold: the live archive has no document with source `mcp`; the output-length limit is reasoning, not measured. The mcp 1.30 point: the guard test on 1.28.1 (pass) and 1.30.0 (`413`) (journal 261107-dependabot-alerts). The rest carries forward journal 261107-library-followups-run-closed.
 **Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, src/library/mcp_rejected_log.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py, src/library/filter_vocabulary.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -192,13 +192,27 @@ clients are not supported.
   the client answers, so the preview and `preview_token` step would stay
   anyway. Re-check when the connector guide lists elicitation.
 - **The SDK stays on fastmcp 3 / mcp 1 for now (held 2026-11-07).** fastmcp
-  4 / mcp 2 would serve 2026-07-28 natively and end the `400` above, but mcp 2
-  refuses MCP request bodies over 4 MiB, and fastmcp 4.1.6 has no setting to
-  raise that. `ingest_document` would drop from 100 MiB to about 3 MiB per
-  file, and a larger file would get a plain HTTP `413` the model cannot read.
-  The upgrade waits until fastmcp exposes the limit. mcp 1 receives security
-  fixes only. The fixes the upgrade needs are listed in journal
-  `261107-library-followups-run-closed`.
+  4 / mcp 2 would serve 2026-07-28 natively and end the `400` above. They
+  also refuse MCP request bodies over 4 MiB (about 3 MiB per
+  `ingest_document` file once base64 is decoded), fastmcp 4.1.6 has no
+  setting to raise that, and a larger file gets a plain HTTP `413` the model
+  cannot read.
+  - **The cap matters less than it looks.** The model writes a tool call's
+    arguments itself, so every character of `content_base64` is model
+    output. A 3 MiB file is about 4 million characters, far more than a model
+    writes in one reply, so the practical limit on an MCP upload is much
+    lower than 3 MiB. That is reasoning, not a measurement. No document in
+    the archive has come in through MCP (checked 2026-11-07).
+  - **So the hold is about value, not the cap.** Today's gains are small: the
+    `400` nobody sees, a confirmation step not wanted (above), and four mcp
+    alerts that don't reach this server (next point). The cost is about one
+    session of fixes, several on the OAuth path (journal
+    `261107-library-followups-run-closed` §4).
+  - **Upgrade when** mcp 1 stops getting security fixes, an alert lands that
+    does reach this server, claude.ai offers mid-call questions, or a
+    feature we want needs mcp 2. Then state the size limit in the
+    `ingest_document` text, so the model doesn't send a file that would get
+    the `413`.
 - **mcp stays on 1.28.1, too.** mcp 1.30 backports the same 4 MiB cap, and
   fastmcp 3.4.11 builds its session manager without a size, so raising it
   would mean patching fastmcp and mcp internals. The four advisories 1.30
@@ -589,7 +603,8 @@ the returned content, and for a file over 2 MB.
   everyone behind the proxy shares one bucket. `/api/auth/login` is
   throttled too (`docs/api.md` §1.9.1).
 - **Size caps:** ingest respects `LIBRARY_MAX_UPLOAD_BYTES` (default
-  100 MB, before base64 expansion); `get_document_file` returns bytes
+  100 MB, before base64 expansion), though in practice how much base64 the
+  model can write is the lower limit (§1.2); `get_document_file` returns bytes
   only up to 2 MB (about 2.7 MB of base64), to keep a tool result inside
   LLM context budgets, and above that a sign-in-protected download link.
 - **Database connections:** tools and the token check take sessions

@@ -86,3 +86,18 @@ against `main`. `.github/dependabot.yml` now has `uv` and `npm` entries with
 `open-pull-requests-limit: 0` (security updates only) and one `applies-to: security-updates`
 group each. Each ecosystem now gets a single PR carrying every available fix.
 `docs/deployment.md` §1.7.3 says how to handle them.
+
+## 5. Later the same day: the 4 MiB cap matters less than it looked
+
+Asked whether a 3 MiB limit on MCP uploads would hurt, a look at the live archive found:
+
+- **No document has come in through MCP** (confirmed). Every PDF arrived by email, import,
+  the consume folder or web upload.
+- **A few percent of PDFs are over 3 MiB** (confirmed), as are some phone-photo JPEGs.
+
+The bigger point is about how tool calls work (strongly supported, not measured). The model
+writes a call's arguments itself, so every character of `content_base64` is model output. A
+3 MiB file is about 4 million characters, far more than a model writes in one reply. The
+practical limit on an MCP upload is therefore much lower than the 4 MiB transport cap, and the
+cap is not what holds the SDK upgrade back. `docs/mcp.md` §1.2 now says the hold is about
+value: small gains against about a session of OAuth-path fixes. It also lists when to upgrade.
