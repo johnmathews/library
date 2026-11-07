@@ -401,6 +401,9 @@ class AskResult:
     cache_write_tokens: int = 0
     cost_usd: float = 0.0
     turn_messages: list[dict[str, Any]] = field(default_factory=list)
+    # Which backend answered, and how many model requests its tool loop made.
+    backend: str = "api"
+    model_calls: int = 0
 
 
 @dataclass(slots=True)
@@ -1178,6 +1181,7 @@ async def _run_api_turn(
             tools=cast("list[ToolParam]", TOOLS),
             messages=cast("list[MessageParam]", messages),
         )
+        result.model_calls += 1
         total_input, billable_input = _cached_usage(response.usage)
         result.input_tokens += total_input
         result.fresh_input_tokens += int(response.usage.input_tokens)
@@ -1285,6 +1289,7 @@ async def _run_subscription_turn(
     result.cache_read_tokens += loop.usage.cache_read_input_tokens
     result.cache_write_tokens += loop.usage.cache_creation_input_tokens
     result.output_tokens += loop.usage.output_tokens
+    result.model_calls += loop.usage.model_calls
     # Priced at the full input rate on purpose: this path is not metered, so the
     # figure is a conservative notional ceiling rather than a bill. Weighting the
     # cache components 0.1x/1.25x here (as the API path does) would change what
@@ -1341,7 +1346,7 @@ async def run_ask(
     drive the engine directly) records no user.
     """
     model = settings.ask_model
-    result = AskResult(answer="", citations=[], used_tools=[], model=model)
+    result = AskResult(answer="", citations=[], used_tools=[], model=model, backend=backend)
     cited: set[int] = set()
     pages: dict[int, int] = {}
     used: list[str] = []

@@ -846,7 +846,24 @@ Indexing (embedding) needs only the local sidecar, not the API key.
 The answer step's token cost is estimated and recorded per turn in the
 `ask_turns` table (`query`, `answer`, `model`, token counts, `cost_usd`,
 `used_tools`). The total cost of a conversation thread is the sum of its turns'
-`cost_usd`. Cost is **recorded, not gated** in this release — Ask is
+`cost_usd`.
+
+Each turn also records how it was answered, so a cost can be explained after
+the fact without reconstructing it from metrics:
+
+| Column | Meaning |
+| --- | --- |
+| `backend` | `api` or `subscription`, whichever answered the turn |
+| `fresh_input_tokens`, `cache_read_tokens`, `cache_write_tokens` | `input_tokens` split by how it was billed; they sum to `input_tokens` |
+| `model_calls` | Model requests the tool loop made (the title call is not counted) |
+
+All five are null on turns from before migration 0043, apart from `backend`,
+which 0043 fills where the history proves it: `api` for turns before
+2026-08-20 14:13 UTC (the release that added the subscription backend), and
+the stored `llm_backend.ask` setting's value for turns from that row's
+`updated_at` onwards. Every save of the setting moves `updated_at`, so the
+value has held since then. Turns in between, or with no stored setting, stay
+null. The thread API returns `backend` on each turn. Cost is **recorded, not gated** in this release — Ask is
 interactive and self-limiting. A daily-budget guard mirroring the extraction
 budget (`LIBRARY_EXTRACTION_DAILY_BUDGET_USD`) can be added later. Embedding
 is local and effectively free.

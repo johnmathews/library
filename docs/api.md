@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-06 (§1.23.5: a value only a payment's non-canonical twin carries is now counted, through the canonical row's merged labels; the spending footer drill accepts `bucket=conflicting`). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to §1.23.5 and the `/footer/{bucket}` row. `tests/test_api_spending.py::test_a_value_only_a_twin_carries_is_counted` and `::test_a_payment_its_twin_labels_differently_is_a_drillable_conflicting_bucket` pass, seen red on the 0040 view first. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-07 (§1.11 and §1.12: Ask responses and thread turns carry `backend`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to the `backend` field in §1.11 and §1.12. `tests/test_api_ask.py::test_a_turn_records_its_backend_token_split_and_model_calls` reads it back from `GET /api/ask/threads/{id}`, seen red before the change. The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -1190,7 +1190,8 @@ unsupported `media_type`.
   "used_tools": ["semantic_search"],
   "cost_usd": 0.0031,
   "thread_id": 1,
-  "turn_id": 311
+  "turn_id": 311,
+  "backend": "subscription"
 }
 ```
 
@@ -1207,6 +1208,9 @@ unsupported `media_type`.
 - `thread_id` — the conversation thread this turn belongs to (new or existing).
 - `turn_id` — the id the turn was stored under; pass it as
   `replace_from_turn_id` to retry or edit it.
+- `backend` — `api` or `subscription`, whichever answered. On `subscription`,
+  `cost_usd` is what the turn would have cost on the API, not money spent
+  ([llm-backends.md §3.3](llm-backends.md)).
 
 **Errors:** `503` when no model can be reached (see above); `422` when the
 question is empty or too long, a field is unknown, or `replace_from_turn_id`
@@ -1253,11 +1257,15 @@ The raw replay `messages` blob is not returned to the client.
       "citations": [{"document_id": 42, "title": "Employment contract", "page_number": 3}],
       "used_tools": ["semantic_search"],
       "cost_usd": 0.0031,
-      "created_at": "2026-06-22T10:00:00Z"
+      "created_at": "2026-06-22T10:00:00Z",
+      "backend": "subscription"
     }
   ]
 }
 ```
+
+A turn's `backend` is null when it predates migration 0043 and the history
+cannot prove which backend answered it ([ask.md §1.4](ask.md)).
 
 `404` if the thread does not exist or belongs to another user.
 

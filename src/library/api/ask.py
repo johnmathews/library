@@ -96,6 +96,9 @@ class AskResponse(BaseModel):
     cost_usd: float
     thread_id: int
     turn_id: int
+    # `api` or `subscription`. On `subscription` the cost is what the turn would
+    # have cost on the API, not money spent.
+    backend: str
 
 
 class ThreadSummary(BaseModel):
@@ -115,6 +118,8 @@ class TurnView(BaseModel):
     used_tools: list[str]
     cost_usd: float
     created_at: datetime
+    # Null for turns from before migration 0043 whose backend is not provable.
+    backend: str | None = None
 
 
 class ThreadDetail(BaseModel):
@@ -350,6 +355,11 @@ async def ask(
             for c in result.citations
         ],
         messages=result.turn_messages,
+        backend=result.backend,
+        fresh_input_tokens=result.fresh_input_tokens,
+        cache_read_tokens=result.cache_read_tokens,
+        cache_write_tokens=result.cache_write_tokens,
+        model_calls=result.model_calls,
     )
     session.add(new_turn)
     thread.updated_at = func.now()
@@ -369,6 +379,7 @@ async def ask(
         cost_usd=turn_cost,
         thread_id=thread_id,
         turn_id=turn_id,
+        backend=result.backend,
     )
 
 
@@ -443,6 +454,7 @@ async def get_thread(
                 used_tools=list(t.used_tools.get("tools", [])),
                 cost_usd=t.cost_usd,
                 created_at=t.created_at,
+                backend=t.backend,
             )
             for t in turns
         ],

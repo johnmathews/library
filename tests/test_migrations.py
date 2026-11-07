@@ -747,3 +747,83 @@ def test_0042_adds_twin_rank_and_its_downgrade_restores_the_exact_0041_view(
     command.upgrade(config, "0042")
     assert fetch_all(roundtrip, _SPEND_FACTS_COLUMNS) == at_0042
     assert fetch_all(roundtrip, _SPEND_FACTS_VIEWDEF) == viewdef_0042
+
+
+# The release that added the subscription backend (#76) merged at this instant;
+# every earlier turn can only have been answered by the Messages API.
+_SETTING_SAVED = "2026-08-20 17:08:02+00"
+_TURN_TIMES = {
+    "before_release": "2026-08-20 14:12:59+00",
+    "at_release": "2026-08-20 14:13:00+00",
+    "before_setting": "2026-08-20 17:08:01+00",
+    "at_setting": _SETTING_SAVED,
+    "later": "2026-11-07 17:00:00+00",
+}
+_ACCOUNTING_COLUMNS = (
+    "backend",
+    "fresh_input_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "model_calls",
+)
+
+
+@pytest.mark.parametrize(
+    ("stored", "after_setting"),
+    [
+        ('"subscription"', "subscription"),
+        ('"api"', "api"),
+        # An unrecognised value makes resolve_backend fall back to the
+        # environment default, which the database cannot see.
+        ('"bogus"', None),
+        (None, None),
+    ],
+)
+def test_0043_backfills_backend_only_where_the_history_proves_it(
+    admin_database_url: str, stored: str | None, after_setting: str | None
+) -> None:
+    """0043 adds the per-turn accounting columns and fills ``backend`` for old
+    turns: ``api`` before the subscription release, the stored setting's value
+    from the moment it was last saved (every save moves ``updated_at``), and
+    null where nothing proves which backend answered. Runs 0042 -> 0043 -> 0042
+    -> 0043 so a downgrade that leaves a column behind goes red."""
+    suffix = (stored or "none").strip('"')
+    url = create_database(admin_database_url, f"library_backfill_backend_{suffix}")
+    config = alembic_config(url)
+    command.upgrade(config, "0042")
+    statements = ["INSERT INTO ask_threads (id, title) VALUES (1, 't')"]
+    for i, (label, at) in enumerate(_TURN_TIMES.items(), start=1):
+        statements.append(
+            "INSERT INTO ask_turns (id, thread_id, query, answer, model, input_tokens, "
+            "output_tokens, cost_usd, created_at) "
+            f"VALUES ({i}, 1, '{label}', 'a', 'm', 100, 10, 0.01, '{at}')"
+        )
+    if stored is not None:
+        statements.append(
+            "INSERT INTO instance_settings (key, value, updated_at) "
+            f"VALUES ('llm_backend.ask', '{stored}', '{_SETTING_SAVED}')"
+        )
+    asyncio.run(_execute(url, statements))
+
+    expected = {
+        "before_release": "api",
+        "at_release": None,
+        "before_setting": None,
+        "at_setting": after_setting,
+        "later": after_setting,
+    }
+    listed = ", ".join(f"'{c}'" for c in _ACCOUNTING_COLUMNS)
+    present = (
+        "SELECT column_name FROM information_schema.columns "
+        f"WHERE table_name = 'ask_turns' AND column_name IN ({listed})"
+    )
+    for _ in range(2):
+        command.upgrade(config, "0043")
+        rows = fetch_all(
+            url, f"SELECT query, {', '.join(_ACCOUNTING_COLUMNS)} FROM ask_turns ORDER BY id"
+        )
+        assert {row[0]: row[1] for row in rows} == expected
+        # The token split and call count were never recorded for old turns.
+        assert {row[2:] for row in rows} == {(None, None, None, None)}
+        command.downgrade(config, "0042")
+        assert fetch_all(url, present) == []

@@ -125,6 +125,8 @@ class Usage:
     fresh_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    # Model requests the CLI made in the run (``ResultMessage.num_turns``).
+    model_calls: int = 0
 
     def add(self, raw: dict[str, Any] | None) -> None:
         if not raw:
@@ -357,6 +359,7 @@ async def _run(
             messages.append(message)
             if isinstance(message, ResultMessage):
                 usage.add(message.usage)
+                usage.model_calls += int(message.num_turns or 0)
                 # Running out of turns is also reported as an error result, but
                 # it is a normal outcome the caller handles — not a failure.
                 if message.is_error and message.subtype != _MAX_TURNS_SUBTYPE:
