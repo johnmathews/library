@@ -87,7 +87,8 @@ if [[ "$1" == "compose" && "$2" == "up" ]]; then
 fi
 if [[ "$1" == "compose" && "$2" == "exec" ]]; then
   case "$*" in
-    *psql*) echo "${FAKE_DB_REV:-0041}" ;;
+    *psql*) [[ -n "${FAKE_DB_EXEC_FAILS:-}" ]] && { echo "service not running" >&2; exit 1; }
+            echo "${FAKE_DB_REV:-0041}" ;;
     *"alembic heads"*) echo "${FAKE_HEAD_REV:-0041} (head)" ;;
     *) printf '{"status":"ok","git_sha":"%s"}\n' "${FAKE_GIT_SHA:-}" ;;
   esac
@@ -290,7 +291,9 @@ def test_manual_deploy_runs_the_migration_once_under_the_lock(host: Path) -> Non
     log = _log(host)
     # The lock is the compose directory itself: WUD mounts it read-only, so a
     # lock file could not be created there, and a directory can be locked.
-    locks = _calls(host, "flock")
+    # One lock held for the whole deploy (its steps arrive on `bash -s`); the
+    # second, brief one is post_deploy_checks waiting before it touches containers.
+    locks = [line for line in _calls(host, "flock") if line.endswith("bash -s")]
     assert len(locks) == 1
     assert str(host / "srv") in locks[0].split()
     runs = _calls(host, "docker compose run")
@@ -329,8 +332,33 @@ def test_verify_never_deploys(host: Path) -> None:
     result = _run(host, "verify")
     assert result.returncode == 0, result.stderr
     assert "verified" in result.stdout.lower()
-    for mutating in ("docker compose up", "docker compose run", "docker compose pull", "flock"):
+    for mutating in ("docker compose up", "docker compose run", "docker compose pull"):
         assert _calls(host, mutating) == [], mutating
+
+
+def test_verify_waits_for_the_deploy_lock_before_touching_containers(host: Path) -> None:
+    # HEAD's sha on /healthz means WUD has migrated and started the webserver,
+    # not that its script is done: it may still be recreating the worker, and
+    # compose's in-flight `<12 hex>_library-…` rename looks like a leftover.
+    # WUD holds the lock until its health wait ends, so wait for it first.
+    _containers(host, *HEALTHY, "cb8ba3b95f13_library-worker exited")
+    result = _run(host, "verify")
+    assert result.returncode == 0, result.stderr
+    log = _log(host)
+    locks = [i for i, line in enumerate(log) if line.startswith("flock")]
+    removals = [i for i, line in enumerate(log) if line.startswith("docker rm")]
+    assert locks and removals, log
+    assert locks[0] < removals[0], log
+    assert str(host / "srv") in log[locks[0]].split()
+
+
+def test_a_failed_db_read_reports_instead_of_exiting_silently(host: Path) -> None:
+    # set -e + pipefail kill `x="$(ssh … | tr …)"` on a failed exec before the
+    # script can say why; it must reach its own message.
+    _containers(host, *HEALTHY)
+    result = _run(host, "FAKE_DB_EXEC_FAILS=1 verify")
+    assert result.returncode != 0
+    assert "revision '?'" in result.stderr
 
 
 def test_verify_waits_for_heads_commit_and_times_out_naming_the_manual_deploy(host: Path) -> None:

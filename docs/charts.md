@@ -1,8 +1,8 @@
 # The chart engine
 
-**Status:** active. **Last updated:** 2026-11-06 (§2, §2.2, §7: a payment's counted row carries its twins' labels (migration 0041), and the footer's ninth field, `conflicting`, reports a payment its documents label differently). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to §2, §2.2 and §7, read against migration `0041_spend_facts_twin_labels.py`, `charts/footer.py` and `charts/rule.py`; the twin cases in `tests/test_spend_facts.py`, `tests/test_chart_footer.py` and `tests/test_api_spending.py` and `test_0041_downgrade_restores_the_exact_0040_view` are green, and were red on the 0040 view. Other sections carry forward their earlier verification.
-**Covers:** src/library/charts/, src/library/api/spending.py, src/library/spend_lines.py, migrations/versions/0035_spend_facts.py, migrations/versions/0036_charts.py, migrations/versions/0037_split_colour.py, migrations/versions/0041_spend_facts_twin_labels.py
+**Status:** active. **Last updated:** 2026-11-07 (§2: the view gains `twin_rank` (migration 0042), the twin order `structured_query.sum_amount` now reads instead of restating). Earlier: 2026-11-06 (§2, §2.2, §7: a payment's counted row carries its twins' labels (0041), and the footer's `conflicting` field). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to §2's column list and migration note, read against `0042_spend_facts_twin_rank.py` and `tests/test_spend_facts.py`'s `twin_rank` test, and the 0042 production deploy (`alembic_version` 0042, a grouped `money_query` answering). §2.2 and §7 carry forward the 2026-11-06 check against 0041, `charts/footer.py` and `charts/rule.py`.
+**Covers:** src/library/charts/, src/library/api/spending.py, src/library/spend_lines.py, migrations/versions/0035_spend_facts.py, migrations/versions/0036_charts.py, migrations/versions/0037_split_colour.py, migrations/versions/0041_spend_facts_twin_labels.py, migrations/versions/0042_spend_facts_twin_rank.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
 > reference number below is invented.
@@ -36,7 +36,8 @@ on accountancy per year, and what it spends charging the car.
 ## 2. `spend_facts`: one relation, not scattered `COALESCE`s
 
 Every chart query reads exactly one relation, the `spend_facts` view
-(migration `0035`, recreated by `0041` to merge twin labels, §2.2), and the chart engine's own SQL against it lives in
+(migration `0035`, recreated by `0041` to merge twin labels, §2.2, and by
+`0042` to expose the twin order as `twin_rank`), and the chart engine's own SQL against it lives in
 `src/library/charts/query.py` and `src/library/charts/footer.py`.
 
 The view is **not** exclusive to the chart engine, and reading this section as
@@ -63,6 +64,8 @@ spend_facts (view)
   labels  jsonb   -- {"category":"accountancy","scope":"business"}
   label_conflict  boolean   -- canonical row only (§2.2)
   twin_labels     jsonb[]   -- canonical row only (§2.2)
+  twin_rank       bigint    -- the document's place in its payment's twin
+                            -- order; 1 exactly where is_canonical (0042)
 ```
 
 The view is a `UNION ALL` of two arms: **unsplit documents**, which contribute

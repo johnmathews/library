@@ -7,8 +7,9 @@
 # `ghcr.io/johnmathews/library:latest` by itself, within about a minute of CI's
 # `promote` job (home-server role `document_library_lxc`, wud-deploy-library.sh).
 # So the default action does NOT deploy: it waits until /healthz reports HEAD's
-# commit, then checks the stack (migration state, health detail, compose
-# leftovers) and prunes old images. Running a second deploy beside WUD's ran
+# commit and until WUD's script has let go of the host lock, then checks the
+# stack (compose leftovers, migration state, health detail) and prunes old
+# images. Running a second deploy beside WUD's ran
 # the migration twice at once (2026-11-06).
 #
 # `--deploy` is the manual deploy, for when WUD is paused or broken. It takes
@@ -317,8 +318,10 @@ wait_until_live() {
 check_migration_state() {
   bold "Migration state:"
   local db head
-  db="$(remote "docker compose exec -T $DB_SVC psql -U library -tAc 'select version_num from alembic_version;'" | tr -d '[:space:]')"
-  head="$(remote "docker compose exec -T $WEB_SVC alembic heads" | awk 'NF {print $1; exit}')"
+  # `|| true`: under `set -e` + pipefail a failed exec would end the script on
+  # this assignment, before the message below says what went wrong.
+  db="$(remote "docker compose exec -T $DB_SVC psql -U library -tAc 'select version_num from alembic_version;'" | tr -d '[:space:]' || true)"
+  head="$(remote "docker compose exec -T $WEB_SVC alembic heads" | awk 'NF {print $1; exit}' || true)"
   if [[ -z "$db" || -z "$head" || "$db" != "$head" ]]; then
     err "The database is at revision '${db:-?}' but the running image expects '${head:-?}' — migrations FAILED or did not run."
     err "Inspect: ssh $HOST 'docker logs --tail 50 wud' (WUD's deploy) or 'cd $DIR && docker compose logs $MIGRATE_SVC'."
@@ -350,8 +353,26 @@ check_health_detail() {
 }
 
 # Everything after the deploy itself, whoever ran it.
+# HEAD's sha on /healthz means the migration ran and the webserver is up — not
+# that the deploy is over: WUD may still be recreating the worker, and
+# compose's in-flight `<12 hex>_library-…` rename looks exactly like a
+# leftover. WUD's script holds the host lock until its health wait ends, so
+# take the lock once (and let it go) before touching any container.
+wait_for_deploy_lock() {
+  local code=0
+  remote "flock -w $LOCK_WAIT -E 75 '$DIR' true" || code=$?
+  if [[ "$code" == "75" ]]; then
+    err "A deploy still held the host lock after ${LOCK_WAIT}s (ssh $HOST 'docker logs --tail 50 wud'); not touching containers."
+    exit 1
+  elif [[ "$code" != "0" ]]; then
+    err "Could not check the host deploy lock (exit $code)."
+    exit 1
+  fi
+}
+
 post_deploy_checks() {
   wait_until_live "$1"
+  wait_for_deploy_lock
   check_stack_clean
   check_migration_state
   check_health_detail

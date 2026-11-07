@@ -1,6 +1,6 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-11-07 (§1.7.2 point 5: WUD deploys each new `:latest`; `scripts/deploy.sh` verifies by default and `--deploy` migrates once with `compose run --no-deps` under a host lock). Earlier: 2026-11-06 (§1.7.2: the deploy prunes old images). Earlier entries are in this file's history.
+**Status:** active. **Last updated:** 2026-11-07 (the stale-`git_sha` note now names WUD and `--deploy`; §1.7.2 point 5: WUD deploys each new `:latest`; `scripts/deploy.sh` verifies by default and `--deploy` migrates once with `compose run --no-deps` under a host lock). Earlier: 2026-11-06 (§1.7.2: the deploy prunes old images). Earlier entries are in this file's history.
 **Last verified:** 2026-11-07 — method: partial, scoped to §1.7.2 point 5: read on the host after the 00:12 CET WUD role apply, the verify run against production after WUD deployed `045b235`, and WUD's log of that deploy. The rest carries forward the 2026-11-05 `compose-smoke` check of §1.4 and the 2026-11-04 check of §1.5.
 
 How to run Library in production: a single `docker compose up` on any
@@ -237,8 +237,10 @@ test "$(curl -s https://library.<host>/healthz | jq -r .git_sha)" \
 ```
 
 A mismatch means the registry `:latest` moved but the box hasn't pulled +
-recreated the container yet (`docker compose pull && docker compose up -d`, or
-`make deploy`) — retagging `:latest` never restarts a running server. The same
+recreated the container yet — retagging `:latest` never restarts a running
+server. On the live host WUD does that within about a minute of `promote`
+(§1.7.2 point 5); if WUD is paused, `scripts/deploy.sh --deploy` deploys by
+hand under the deploy lock. The same
 `git_sha` is also on the admin **System** view (`GET /api/admin/system`).
 
 ### 1.4.2 `status: "degraded"`
