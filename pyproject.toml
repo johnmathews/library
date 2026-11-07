@@ -47,7 +47,7 @@ dependencies = [
     #   * otlp/http  — push. For an OTel collector. http/protobuf rather than
     #     grpc so the dependency tree stays httpx-shaped and no C extension or
     #     extra port is involved.
-    "opentelemetry-api>=1.30",
+    "opentelemetry-api>=1.45.1",
     "opentelemetry-sdk>=1.30",
     "opentelemetry-exporter-prometheus>=0.51b0",
     "opentelemetry-exporter-otlp-proto-http>=1.30",
