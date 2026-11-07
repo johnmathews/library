@@ -264,6 +264,28 @@ def record_turn(
     )
 
 
+# Tokens per model call. A locked-down call sits in the low thousands; the CLI's
+# unrestricted tool list once pushed it past 100k (docs/llm-backends.md §3).
+_CALL_SIZE_BUCKETS = (500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000, 200_000)
+
+
+def record_call_size(*, backend: str, model: str, input_tokens: int, model_calls: int) -> None:
+    """Average input tokens per model request in one turn.
+
+    Watches the fixed cost every call carries: if it grows (a CLI upgrade that
+    offers more tools, a prompt that balloons), the median moves with it. A turn
+    with no model call records nothing.
+    """
+    if model_calls <= 0:
+        return
+    _histogram(
+        "library.ask.input_tokens_per_call",
+        "{token}",
+        "Input tokens per model call in an Ask turn",
+        buckets=_CALL_SIZE_BUCKETS,
+    ).record(input_tokens / model_calls, {"backend": backend, "model": model})
+
+
 def record_error(*, backend: str, kind: str) -> None:
     """Failures by category — currently only visible by grepping container logs.
 

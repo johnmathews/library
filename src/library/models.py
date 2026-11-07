@@ -1089,6 +1089,15 @@ class AskTurn(Base):
     used_tools: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     citations: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     messages: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    # How the turn was answered, so its cost can be explained later (0043).
+    # Null on turns from before 0043 unless the backfill could prove `backend`.
+    backend: Mapped[str | None] = mapped_column(String(16))
+    # `input_tokens` split by how it bills; the three sum to `input_tokens`.
+    fresh_input_tokens: Mapped[int | None] = mapped_column(Integer)
+    cache_read_tokens: Mapped[int | None] = mapped_column(Integer)
+    cache_write_tokens: Mapped[int | None] = mapped_column(Integer)
+    # Model requests the tool loop made; the title call is not counted.
+    model_calls: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     thread: Mapped[AskThread] = relationship(back_populates="turns")

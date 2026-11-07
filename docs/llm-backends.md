@@ -1,7 +1,7 @@
 # LLM backends
 
-**Status:** active. **Last updated:** 2026-10-27 (every login instruction names the host directory, #195: the 503, `/healthz` and the settings view used to print `CLAUDE_CONFIG_DIR=/app/.claude`, the container path, or a bare `claude auth login`; new `LIBRARY_CLAUDE_HOST_CONFIG_DIR` in §5.1, §5.2 example rewritten). Earlier: 2026-10-22 (§5 gains the scheduled refresh, which finds a dead refresh token without a question being asked; §5.1 is renamed "Runbook: log in again" and gives the host-side commands, so the alerts can link to it; new §5.3 documents the `library_claude_credentials_healthy` gauge and the two Grafana alerts). Earlier: 2026-08-31 (the `series_insight` surface was deleted with the legacy series stack, so §2's table is one row: `ask`. The switchable-backend *mechanism* is unchanged — `BACKEND_SURFACES` is still a map and a second row is still all it takes — and §3.2 keeps the reason a per-document job should not be switchable. Also corrected the structured-output call-site count, six → nine.) Earlier: 2026-08-20 (credential failures now answer 503 with the command that fixes them instead of a bare 500 — §5.2). Earlier the same day: corrected the provisioning command — `claude auth login --claudeai`, not `setup-token`, which writes nothing; and `/healthz` now reports credential health whenever credentials exist rather than keying on the environment default, which left the alarm silent for deployments enabled via the toggle). Earlier the same day: credential-file permissions: refreshes now preserve `0600` instead of widening it, plus directory-ownership guidance in §4). Earlier the same day: the backend became an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
-**Last verified:** 2026-10-27 — method: partial, scoped to §5.1's setting paragraph and §5.2's example. The example is the text `oauth.login_instructions` and `subscription._explain` now produce, pinned by tests in `tests/test_llm_oauth.py` and `tests/test_llm_subscription.py` that failed before the change (7 red) and pass after. Earlier: 2026-10-22 — method: partial, scoped to §5, §5.1 and §5.3. The timer and the gauge are pinned by tests in `tests/test_llm_oauth.py`, `tests/test_telemetry.py` and `tests/test_llm_backend_config.py`; the loop's error guard was mutation-checked (removing it turns its test red). The §5.1 commands were run on the deploy host on 2026-10-22 and `/healthz` then read `healthy`. The §5.3 rules are verified in the home-server repo, not here. Earlier: 2026-08-31 — method: partial, scoped to §2, §3.2 and §5.2's closing paragraph. Read `BACKEND_SURFACES` in `src/library/llm/backends.py` (one key, `ask`), confirmed no `series_insight` field survives in `src/library/config.py`, and re-derived the structured-output call sites with `grep -rn 'output_format=' src/library/` — nine files: `charts/draft.py`, `email_label.py`, `extraction/extractor.py`, `extraction/judge.py`, `extraction/repair.py`, `facets/labeller.py`, `markdown/generator.py`, `matter_classifier.py`, `money/backfill.py`. No live LLM calls were made this pass; every measured figure carries forward from the 2026-08-20 verification, whose method was: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The §5.2 behaviour was established by running the adapter against an unprovisioned config directory on the production container, which raised the SDK's own `ResultError` ("Not logged in · Please run /login") before any result message — the case the translation now covers; the 503 and the healthy-credentials wording are covered by tests confirmed to fail against the previous behaviour. The §4 provisioning commands were run on the deploy host: `setup-token` left `claude auth status` reporting `loggedIn: false` with no credentials file anywhere, while `claude auth login --claudeai` over SSH produced a `claudeAiOauth` file and `loggedIn: true`. A live Opus call and a full Ask turn then ran on the subscription from the production container (131,966 input tokens for a one-tool turn), and the container's write path was checked to confirm §5's refresh can persist. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure, and the §4/§5 file-permission claims by tests asserting the on-disk mode after a refresh (including under umask 0), confirmed to fail against the previous implementation. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Still unverified: the ~1-year `CLAUDE_CODE_OAUTH_TOKEN` form is documented from the CLI's own output, not exercised.
+**Status:** active. **Last updated:** 2026-11-07 (§3 rewritten: the CLI offers only library's tools — `tools=[]`, `strict_mcp_config=True`, `skills=[]` — closing access to the claude.ai account's connectors and cutting the fixed cost of a call from ~100k tokens to a few hundred; §3.3: subscription cost is the API rate card applied to the token split, 1-hour cache writes at 2x). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to §3 and §7's tool note. §3.1 figures are live calls from the production container, before and after the lockdown options; the after-lockdown tool list is asserted against the real bundled CLI by `tests/test_llm_subscription_cli.py`, seen red against the old options. §3.1.1 is read from `ask_turns` and the `library_ask_tokens_total` counter, which agreed to the token. §3.3's weights are pinned by `tests/test_ask_backend.py::test_a_subscription_turn_is_priced_by_the_api_rate_card_for_its_split`, seen red first.
 
 > **Purpose** — Library can reach Claude two ways: the metered Anthropic
 > Messages API, or a Claude subscription via the bundled Claude Code CLI. This
@@ -60,78 +60,82 @@ them also send page images as content blocks, which the SDK's prompt surface
 cannot take without writing files to disk and re-enabling the built-in file
 tools this integration deliberately blocks.
 
-## 3. The harness tax — read this before flipping a switch
+## 3. The harness tax, and how the tool lockdown removes it
 
-Every subscription call carries the full Claude Code system prompt, whether or
-not you want it.
+The CLI puts a description of every tool it offers into the context of every
+call. Left at its defaults it offers a lot: its own built-ins and, because the
+credentials are a claude.ai login, **every connector on that claude.ai account**
+(Gmail, Slack, Drive, Calendar and so on). `build_options` therefore offers
+nothing but library's own tools (§7). With that lockdown the CLI adds almost
+nothing to a call.
 
 ### 3.1 Measured
 
-With every built-in tool disallowed and a prompt of literally
-`"Reply with exactly: OK"`:
+A prompt of literally `"Reply with exactly: OK"`, run on the production
+container on 2026-11-07 (CLI 2.1.237, SDK 0.2.142):
 
-| Model | Real input | Context actually sent | Notional cost |
-| --- | --- | --- | --- |
-| `claude-sonnet-4-6` | 3 tok | **32,231 tok** | $0.121 |
-| `claude-opus-4-8` | 2 tok | **43,320 tok** | $0.813 |
+| Model | Before the lockdown | With the lockdown |
+| --- | --- | --- |
+| `claude-opus-4-8` | **102,494 tok** | 271 tok |
+| `claude-sonnet-4-6` | not measured | 211 tok |
+| `claude-haiku-4-5` | **125,580 tok** | 240 tok |
 
-It cannot be configured away. Same prompt, same model (`sonnet-4-6`), varying
-only the options:
+"Before" offered 23 built-ins outside the old blocklist plus about 130 tools
+from the account's connectors. The figure grows with whatever the account has
+connected: the same measurement read 43,320 on Opus in August 2026, before
+more connectors were added. A custom string `system_prompt` replaces Claude
+Code's own prompt, so with no tools offered the call is close to the bare
+prompt.
 
-| Configuration | Context |
-| --- | --- |
-| no `system_prompt` | 32,234 |
-| custom string `system_prompt` | 32,239 |
-| explicit `claude_code` preset | 38,165 |
-| custom `system_prompt` + `setting_sources=[]` | 32,239 |
+### 3.1.1 What it cost on a real turn
 
-A custom system prompt does not replace the preset — it costs five tokens more.
-
-### 3.1.1 What it costs on a real turn
-
-The floor above is per *API call*, and one `tool_loop` makes several. Running
-library's own adapter against the live subscription — a two-tool question
-("how much is my gas bill and who is it from?", `semantic_search` then
-`get_document`, Sonnet) — recorded **134,962 input tokens** for a turn whose
-actual content is a sentence and two small JSON tool results. A one-shot
-`text_call` for a six-word thread title recorded **26,068 input / 887 output**.
-
-Budget for the real figure, not the floor: the preamble is re-sent on each
-iteration of the agent loop.
+The tax was paid per *API call*, and one `tool_loop` makes several. A six-turn
+Ask conversation on 2026-11-07, before the lockdown, made 12 model calls and
+sent 1.93M input tokens, of which about 1.2M was tool descriptions. The
+remaining cost of a turn is library's own system prompt and tool schemas
+(about 4k tokens), the conversation history (§7) and the tool results.
 
 ### 3.2 What follows from it
 
-The tax is *fixed per call*, so it is only tolerable where each call is already
-large and calls are infrequent.
-
-- **`ask` earns it — but it is not cheap.** `ask_model` is `claude-opus-4-8`,
-  the priciest configured model, and calls are human-paced, so the dollar cost
-  going to zero is worth real quota. Size it honestly, though: §3.1.1 measured
-  ~135k input tokens for a single two-tool Sonnet turn, and Opus carries a
-  larger preamble. A busy Ask session can consume a meaningful slice of a
-  subscription's rolling window — and it is the *same* window everything else
-  on those credentials draws from.
-- **A per-document job would not have earned it.** `series_insight`, the second
-  switchable surface until it was deleted, defaulted to `api` for exactly this
-  reason: it ran on `extraction_model` (`claude-haiku-4-5`, the cheapest) with a
-  bounded prompt, once per ingested document. Routing it through the SDK would
-  have spent ~32k of quota per document to avoid a fraction of a cent — and that
-  quota is shared with `ask` and with anything else on the same credentials, so
-  an ingest burst could starve the interactive surface. Keep the rule even
-  though the surface is gone: **a high-frequency, small-prompt call site should
-  not be made switchable at all.**
+- **The lockdown is a security control first.** Ask runs with
+  `bypassPermissions`, so any tool the CLI offers can be called without a
+  prompt. Ingested email is text a stranger can write, and an Ask turn reads
+  it. If the account's connectors were offered, a document could steer the agent
+  into sending mail or sharing a file from the owner's accounts. An audit of
+  every stored subscription turn up to 2026-11-07 found no call to a tool
+  outside library's own.
+- **`ask` on the subscription now costs about what it would on the API**, in
+  tokens. The subscription's own rolling window is still shared with everything
+  else on those credentials.
+- **A per-document job still should not be switchable.** `series_insight`, the
+  second switchable surface until it was deleted, defaulted to `api`. A
+  high-frequency job on the subscription draws on the same window as `ask`, so
+  an ingest burst could starve the interactive surface, and §2 explains why the
+  structured-output call sites cannot move at all. **A high-frequency,
+  small-prompt call site should not be made switchable.**
 
 ### 3.3 Cost accounting under a subscription
 
 `cost_usd` keeps being computed from `MODEL_PRICING_USD_PER_MTOK` on both
 backends. Under a subscription no such dollars are billed, so the number means
-*"what this would have cost on the API"* — useful for measuring the saving.
+*"what this would have cost on the API"*, and the Ask page labels it
+"API-equivalent". The real resource being spent is quota.
 
-It deliberately counts cache-creation and cache-read tokens as input, so the
-harness overhead shows up rather than reading as free. A subscription-answered
-ask turn will therefore record a *higher* `cost_usd` than the same turn on the
-API. That is the honest number: the resource being spent is quota, and quota is
-proportional to context.
+Both backends price the same way, by the API's rate card for each kind of input
+token:
+
+| Input tokens | Weight |
+| --- | --- |
+| Fresh | 1x |
+| Cache read | 0.1x |
+| Cache write, 5-minute cache | 1.25x |
+| Cache write, 1-hour cache | 2x |
+
+The CLI writes the 1-hour cache; the API backend writes the 5-minute one. The
+SDK's usage reports the split (`cache_creation.ephemeral_1h_input_tokens`), and
+`Usage.cache_write_1h_tokens` carries it. Until 2026-11-07 the subscription
+path priced every input token at the full rate. Turns from before then record
+that higher figure and are not re-priced, because their split was never stored.
 
 ## 4. Provisioning
 
@@ -384,8 +388,17 @@ titles included.
   an API-key header carrying an OAuth token and fail. It is set in exactly one
   place, `build_options`, because a rebuild that dropped it caused a production
   outage in the project this was ported from.
-- **All Claude Code built-ins are blocked**, and `setting_sources=[]` stops the
+- **The CLI offers library's tools and nothing else.** `tools=[]` turns off
+  every built-in by allowlist, so a built-in added by a later CLI release stays
+  off. `strict_mcp_config=True` limits MCP servers to the one library passes in,
+  which keeps out the claude.ai account's connectors. `setting_sources=[]` was
+  never enough for that. `skills=[]` turns off skills. The old blocklist
+  (`_BLOCKED_BUILTINS`) stays as a second layer. `setting_sources=[]` stops the
   host's `CLAUDE.md` and settings leaking into library's prompts.
+  `tests/test_llm_subscription_cli.py` starts the real bundled CLI with no
+  credentials and a dead API address. It asserts that the tool list in the
+  CLI's startup message is exactly library's, so a CLI upgrade that adds a tool
+  fails CI.
 - **Turn transcripts stay in Anthropic block form on both backends.** `ask`'s
   preview-then-confirm write gate re-reads stored `tool_use` blocks to decide
   what a later turn may edit, so the SDK path reconstructs the same vocabulary

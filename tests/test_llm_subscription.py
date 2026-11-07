@@ -35,13 +35,14 @@ def _result(
     subtype: str = "success",
     is_error: bool = False,
     result: str | None = None,
+    num_turns: int = 1,
 ) -> ResultMessage:
     return ResultMessage(
         subtype=subtype,
         duration_ms=1,
         duration_api_ms=1,
         is_error=is_error,
-        num_turns=1,
+        num_turns=num_turns,
         session_id="s",
         usage=usage,
         result=result,
@@ -80,7 +81,8 @@ def _no_oauth_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_usage_counts_cache_tokens_as_input() -> None:
-    """The ~32k harness tax arrives as cache_creation; it must not be hidden.
+    """The ~32k harness tax (before the tool lockdown) arrived as cache_creation;
+    it must not be hidden.
 
     Counting only ``input_tokens`` would report a 3-token prompt for a call that
     actually put 32k of Claude Code system prompt on the wire, making the
@@ -97,6 +99,22 @@ def test_usage_counts_cache_tokens_as_input() -> None:
     )
     assert usage.input_tokens == 3 + 32231 + 100
     assert usage.output_tokens == 4
+
+
+def test_usage_keeps_the_one_hour_share_of_cache_writes() -> None:
+    # The CLI writes the 1-hour cache, which bills at 2x rather than 1.25x, so
+    # pricing needs to know how much of cache_creation was 1-hour.
+    usage = Usage()
+    usage.add(
+        {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 1000,
+            "cache_creation": {"ephemeral_1h_input_tokens": 700, "ephemeral_5m_input_tokens": 300},
+        }
+    )
+    usage.add({"cache_creation_input_tokens": 50, "cache_creation": None})
+    assert usage.cache_creation_input_tokens == 1050
+    assert usage.cache_write_1h_tokens == 700
 
 
 def test_usage_tolerates_missing_and_null_fields() -> None:
@@ -159,6 +177,21 @@ def test_options_block_every_builtin_and_ignore_host_settings(tmp_path: Path) ->
     assert options.setting_sources == []
 
 
+def test_options_offer_no_builtins_skills_or_account_connectors(tmp_path: Path) -> None:
+    # A blocklist cannot name built-ins a later CLI adds, and setting_sources=[]
+    # does not keep out the claude.ai account's connectors (Gmail, Slack, ...).
+    # Under bypassPermissions anything offered is callable, so offer nothing
+    # beyond library's own MCP server. tests/test_llm_subscription_cli.py checks
+    # the outcome against the real CLI.
+    for servers in (None, {"library": {}}):
+        options = subscription.build_options(
+            model="m", system_prompt="s", config_dir=tmp_path, max_turns=8, mcp_servers=servers
+        )
+        assert options.tools == []
+        assert options.strict_mcp_config is True
+        assert options.skills == []
+
+
 def test_options_authorise_only_librarys_mcp_tools(tmp_path: Path) -> None:
     with_tools = subscription.build_options(
         model="m", system_prompt="s", config_dir=tmp_path, max_turns=8, mcp_servers={"library": {}}
@@ -169,6 +202,20 @@ def test_options_authorise_only_librarys_mcp_tools(tmp_path: Path) -> None:
         model="m", system_prompt="s", config_dir=tmp_path, max_turns=1
     )
     assert without.allowed_tools == []
+
+
+async def test_usage_counts_the_model_calls_the_cli_made(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ResultMessage.num_turns is the CLI's count of model requests in the run;
+    # ask_turns.model_calls stores it so per-call cost can be worked out later.
+    _stub_query(monkeypatch, [_assistant(TextBlock(text="a")), _result(num_turns=3)])
+
+    out = await subscription.text_call(
+        config_dir=tmp_path, model="m", system_prompt="s", prompt="p"
+    )
+
+    assert out.usage.model_calls == 3
 
 
 # --------------------------------------------------------------------------

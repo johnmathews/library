@@ -1,7 +1,7 @@
 # Documentation
 
-**Status:** active. **Last updated:** 2026-11-05 (the `observability.md` row adds MCP tool-call metrics and the call log line).
-**Last verified:** 2026-11-05 — method: partial, scoped to the `observability.md` row, read against `observability.md` §3 and §3.1; `uv run python scripts/check_docs.py` clean. No row was added or removed, so the gated set is unchanged.
+**Status:** active. **Last updated:** 2026-11-07 (the `llm-backends.md` row names the tool lockdown and subscription pricing; the `observability.md` row adds input size per model call). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to those two rows, read against `llm-backends.md` §3 and `observability.md` §3; `uv run python scripts/check_docs.py` clean. No row was added or removed.
 
 Reference documentation for Library — a self-hosted document archive (FastAPI
 backend + Vue 3 SPA, Postgres/pgvector, OCR ingestion, an MCP server, and an
@@ -25,8 +25,8 @@ New to the codebase? Read in this order:
 | [`ingestion.md`](ingestion.md) | How a file becomes a Document: upload → storage → OCR → extraction → markdown → embedding. |
 | [`ask.md`](ask.md) | The "Ask" semantic Q&A feature: hybrid retrieval, the agentic tool loop, citations, metadata writes. |
 | [`mcp.md`](mcp.md) | The MCP server at `/mcp`: the tools LLM clients can call to search by keyword or meaning, read, total amounts, fetch files, ingest, write notes, edit and comment on documents, and OAuth sign-in for claude.ai and ChatGPT connectors (and Claude Code). |
-| [`llm-backends.md`](llm-backends.md) | The two ways library reaches Claude: metered API vs Claude subscription, which surfaces may use which, the per-call harness cost, and the credential runbook. |
-| [`observability.md`](observability.md) | What the app measures about itself: OpenTelemetry metrics for Ask (tokens by cache kind, cost, latency, tool-loop depth, errors) and for MCP tool calls (count and latency by tool and outcome, plus one log line per call), the Prometheus and OTLP exporters, and the content-logging guard that keeps document text out of telemetry. |
+| [`llm-backends.md`](llm-backends.md) | The two ways library reaches Claude: metered API vs Claude subscription, which surfaces may use which, the tool lockdown that keeps the CLI's per-call cost to a few hundred tokens, how subscription cost is priced, and the credential runbook. |
+| [`observability.md`](observability.md) | What the app measures about itself: OpenTelemetry metrics for Ask (tokens by cache kind, cost, latency, tool-loop depth, input size per model call, errors) and for MCP tool calls (count and latency by tool and outcome, plus one log line per call), the Prometheus and OTLP exporters, and the content-logging guard that keeps document text out of telemetry. |
 | [`frontend.md`](frontend.md) | The Vue 3 SPA: views, components, stores, the Mosaic design language, dark mode, PWA wiring, tests. |
 | [`frontend-view-principles.md`](frontend-view-principles.md) | How to build a new view that is consistent the first time: layout, shared classes, form/filter recipes. |
 | [`admin.md`](admin.md) | The admin role and admin views: users, taxonomy (senders/kinds/recipients), currencies, FX rates, business matters. |

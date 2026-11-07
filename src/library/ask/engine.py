@@ -401,6 +401,9 @@ class AskResult:
     cache_write_tokens: int = 0
     cost_usd: float = 0.0
     turn_messages: list[dict[str, Any]] = field(default_factory=list)
+    # Which backend answered, and how many model requests its tool loop made.
+    backend: str = "api"
+    model_calls: int = 0
 
 
 @dataclass(slots=True)
@@ -459,8 +462,8 @@ async def generate_thread_title(
 
     ``backend`` is the ask surface's resolved backend — titles follow it, because
     splitting them off would leave a "subscription" deployment still needing an
-    API key for a handful of tokens. That does mean a ~32-token title pays the
-    Agent SDK's fixed harness cost, once per *new thread* rather than per turn.
+    API key for a handful of tokens. On the subscription a title also pays a few
+    hundred tokens of CLI overhead, once per *new thread* rather than per turn.
     It is passed in rather than resolved here so the caller makes one database
     round-trip per turn, and so the standalone backfill script — which has no
     session — keeps working on the default ``api``.
@@ -479,9 +482,7 @@ async def generate_thread_title(
         )
         return TitleResult(
             title=_clean_title(title_result.text),
-            cost_usd=estimate_cost_usd(
-                model, title_result.usage.input_tokens, title_result.usage.output_tokens
-            ),
+            cost_usd=_subscription_cost_usd(model, title_result.usage),
         )
 
     response = await client.messages.create(
@@ -1058,6 +1059,25 @@ def _serialize_block(block: Any) -> dict[str, Any]:
     return {"type": block_type}
 
 
+def _subscription_cost_usd(model: str, usage: subscription.Usage) -> float:
+    """What a subscription call would have cost on the API.
+
+    The subscription is not metered, so this is the API's rate card applied to
+    the call's tokens: fresh input 1x, cache reads 0.1x, 5-minute cache writes
+    1.25x and 1-hour cache writes 2x. The CLI writes the 1-hour cache. Fresh
+    input is derived from the total, so a usage that carries only a total (no
+    split) is priced as fresh input rather than as free.
+    """
+    cache_read = usage.cache_read_input_tokens
+    cache_write = usage.cache_creation_input_tokens
+    write_1h = min(usage.cache_write_1h_tokens, cache_write)
+    fresh = max(usage.input_tokens - cache_read - cache_write, 0)
+    billable = (
+        fresh + round(cache_read * 0.1) + round((cache_write - write_1h) * 1.25) + write_1h * 2
+    )
+    return estimate_cost_usd(model, billable, usage.output_tokens)
+
+
 def _cached_usage(usage: Any) -> tuple[int, int]:
     """``(total_input_tokens, billable_input_tokens)`` for one API response.
 
@@ -1178,6 +1198,7 @@ async def _run_api_turn(
             tools=cast("list[ToolParam]", TOOLS),
             messages=cast("list[MessageParam]", messages),
         )
+        result.model_calls += 1
         total_input, billable_input = _cached_usage(response.usage)
         result.input_tokens += total_input
         result.fresh_input_tokens += int(response.usage.input_tokens)
@@ -1261,11 +1282,10 @@ async def _run_subscription_turn(
     from the SDK's message stream. ``dispatch`` is library's same tool
     dispatcher — the SDK path adds a transport, never a second implementation.
 
-    Cost is still estimated from ``MODEL_PRICING_USD_PER_MTOK``. Under a
-    subscription no such dollars are billed, so ``cost_usd`` here means "what
-    this turn would have cost on the API" — which is the number worth recording,
-    both to measure the saving and to keep the ~32k-token harness overhead
-    visible instead of free-looking.
+    Cost is the API rate card applied to the token split
+    (:func:`_subscription_cost_usd`). Under a subscription no such dollars are
+    billed, so ``cost_usd`` here means "what this turn would have cost on the
+    API", which is the number worth recording to measure the saving.
     """
     loop = await subscription.tool_loop(
         config_dir=settings.claude_config_dir,
@@ -1285,11 +1305,8 @@ async def _run_subscription_turn(
     result.cache_read_tokens += loop.usage.cache_read_input_tokens
     result.cache_write_tokens += loop.usage.cache_creation_input_tokens
     result.output_tokens += loop.usage.output_tokens
-    # Priced at the full input rate on purpose: this path is not metered, so the
-    # figure is a conservative notional ceiling rather than a bill. Weighting the
-    # cache components 0.1x/1.25x here (as the API path does) would change what
-    # the number MEANS, which is a separate decision from exposing the split.
-    result.cost_usd += estimate_cost_usd(model, loop.usage.input_tokens, loop.usage.output_tokens)
+    result.model_calls += loop.usage.model_calls
+    result.cost_usd += _subscription_cost_usd(model, loop.usage)
 
     answer = loop.answer
     if loop.hit_turn_limit and not answer:
@@ -1341,7 +1358,7 @@ async def run_ask(
     drive the engine directly) records no user.
     """
     model = settings.ask_model
-    result = AskResult(answer="", citations=[], used_tools=[], model=model)
+    result = AskResult(answer="", citations=[], used_tools=[], model=model, backend=backend)
     cited: set[int] = set()
     pages: dict[int, int] = {}
     used: list[str] = []

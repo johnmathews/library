@@ -1,8 +1,8 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-06 (*Where a money total comes from*: totals and charts read the same merged twin labels, migration 0041; a `facets` filter counts the money rows that carry the facet. §1 item 3: `query_documents` refuses unknown filter values). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to *Where a money total comes from*, §1.10 item 11 and §1 item 3. Read against `structured_query.sum_amount` and migration 0041; the twin and line-facet tests in `tests/test_structured_query.py` were seen red first. Item 3's refusal is covered by `tests/test_ask_tool_filters.py` (seen red with the check disabled). The rest carries its earlier verifications forward.
-**Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, src/library/filter_vocabulary.py, .github/workflows/e2e-nightly.yml
+**Status:** active. **Last updated:** 2026-11-07 (§1.4: each turn records its backend, token split and model calls, migration 0043; subscription turns are priced by the API rate card and shown as "API-equivalent"; the backend paragraph drops the ~43k preamble claim after the tool lockdown). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to §1.4. `tests/test_api_ask.py::test_a_turn_records_its_backend_token_split_and_model_calls`, `tests/test_migrations.py::test_0043_backfills_backend_only_where_the_history_proves_it` and `tests/test_ask_backend.py::test_a_subscription_turn_is_priced_by_the_api_rate_card_for_its_split` pass, each seen red first; the backfill rule was previewed read-only against production. The rest carries its earlier verifications forward.
+**Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, src/library/filter_vocabulary.py, .github/workflows/e2e-nightly.yml, migrations/versions/0043_ask_turn_accounting.py
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -846,7 +846,26 @@ Indexing (embedding) needs only the local sidecar, not the API key.
 The answer step's token cost is estimated and recorded per turn in the
 `ask_turns` table (`query`, `answer`, `model`, token counts, `cost_usd`,
 `used_tools`). The total cost of a conversation thread is the sum of its turns'
-`cost_usd`. Cost is **recorded, not gated** in this release — Ask is
+`cost_usd`.
+
+Each turn also records how it was answered, so a cost can be explained after
+the fact without reconstructing it from metrics:
+
+| Column | Meaning |
+| --- | --- |
+| `backend` | `api` or `subscription`, whichever answered the turn |
+| `fresh_input_tokens`, `cache_read_tokens`, `cache_write_tokens` | `input_tokens` split by how it was billed; they sum to `input_tokens` |
+| `model_calls` | Model requests the tool loop made (the title call is not counted) |
+
+All five are null on turns from before migration 0043, apart from `backend`,
+which 0043 fills where the history proves it: `api` for turns before
+2026-08-20 14:13 UTC (the release that added the subscription backend), and
+the stored `llm_backend.ask` setting's value for turns from that row's
+`updated_at` onwards. Every save of the setting moves `updated_at`, so the
+value has held since then. Turns in between, or with no stored setting, stay
+null. The thread API returns `backend` on each turn.
+
+Cost is **recorded, not gated** in this release — Ask is
 interactive and self-limiting. A daily-budget guard mirroring the extraction
 budget (`LIBRARY_EXTRACTION_DAILY_BUDGET_USD`) can be added later. Embedding
 is local and effectively free.
@@ -859,12 +878,13 @@ request so a change needs no restart; `LIBRARY_ASK_LLM_BACKEND` supplies the
 default and ships as `subscription`. `api` uses the metered Messages API,
 `subscription` runs the same loop through the Claude Code CLI against a Claude
 subscription.
-Ask is the surface where that trade pays — `ask_model` is the priciest
-configured model and calls are human-paced — but the Agent SDK adds a fixed
-~43k-token Claude Code preamble to every Opus call. `cost_usd` counts it, so a
-subscription-answered turn records a *higher* `cost_usd` than the same turn on
-the API: under a subscription that figure is notional ("what this would have
-cost"), and the real resource being spent is quota. On `subscription`, Ask needs
+Ask is the surface where that trade pays: `ask_model` is the priciest
+configured model and calls are human-paced. The CLI is locked down to offer
+only library's own tools, which keeps the claude.ai account's connectors out of
+reach and keeps its fixed cost per call to a few hundred tokens
+([`llm-backends.md` §3](llm-backends.md)). Under a subscription `cost_usd` is
+notional ("what this would have cost"), and the real resource being spent is
+quota. On `subscription`, Ask needs
 no Anthropic API key at all and does not 503 without one. Full mechanism,
 provisioning steps and the credential runbook: [`llm-backends.md`](llm-backends.md).
 
@@ -1016,9 +1036,12 @@ comparable across cached and uncached turns, while `cost_usd` prices those
 tokens at their real weights (reads ~0.1x, writes ~1.25x). Without this,
 enabling caching would have made recorded spend appear to collapse partly
 because tokens stopped being *counted*, not because they stopped being *sent*.
-The subscription backend already folded all three counts into one total
-(`llm/subscription.py`); it prices that total at the full input rate as a
-deliberately conservative notional figure, since that path is not metered.
+The subscription backend prices its tokens the same way, with one difference:
+the CLI writes the 1-hour cache, whose writes bill at 2x rather than 1.25x
+([`llm-backends.md` §3.3](llm-backends.md)). Its figure is what the turn would
+have cost on the API, so the Ask page shows it as "API-equivalent". Turns from
+before 2026-11-07 priced every subscription input token at the full rate and
+keep that higher figure.
 
 **Sliding window trade-off.** Older turns are dropped when a thread exceeds
 `LIBRARY_ASK_HISTORY_TURNS`. Dropped turns cause the history-prefix cache to

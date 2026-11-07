@@ -11,16 +11,16 @@ needs:
 * :func:`tool_loop` — an agentic loop over library's own tools, bridged into
   the SDK as an in-process MCP server. Used by ``ask``.
 
-**The harness is not free.** Every call carries the Claude Code system prompt —
-measured at ~32k tokens for Sonnet and ~43k for Opus on an empty prompt, and it
-cannot be configured away (a custom ``system_prompt`` replaces nothing and costs
-five tokens more). That fixed per-call tax is why only large, infrequent calls
-belong here; see ``docs/llm-backends.md``.
+**The CLI offers library's tools and nothing else** (:func:`build_options`).
+Left at its defaults it offers its own built-ins and every connector on the
+claude.ai account behind the credentials (Gmail, Slack, Drive, ...). Under
+``bypassPermissions`` that would let a prompt-injected document act on those
+accounts, and the tool descriptions alone cost ~100k tokens per call. Locked
+down, an empty prompt costs a few hundred tokens; see ``docs/llm-backends.md`` §3.
 
-Usage reported back to callers deliberately includes cache-creation and
-cache-read tokens in ``input_tokens``, so the cost estimate library derives from
-it reflects the true context size — harness tax included — rather than
-flattering the subscription path.
+Usage reported back to callers counts cache-creation and cache-read tokens in
+``input_tokens``, so the total is the true context size, and keeps the split so
+the cost can weight each kind as the API would (``ask.engine._subscription_cost_usd``).
 """
 
 import json
@@ -103,9 +103,8 @@ class Usage:
     """Token usage for one subscription call.
 
     ``input_tokens`` is the *total* context billed against the subscription —
-    fresh input plus cache creation plus cache reads. Callers feed it to
-    ``estimate_cost_usd``, so under-reporting here would understate what the
-    harness costs and make the backend look cheaper than it is.
+    fresh input plus cache creation plus cache reads. Under-reporting it would
+    make the backend look cheaper than it is.
 
     The components are ALSO kept, individually, so telemetry can report a cache
     hit rate for this backend the same way it does for the API one. They are
@@ -124,6 +123,12 @@ class Usage:
     fresh_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    # The part of ``cache_creation_input_tokens`` written to the 1-hour cache,
+    # which the API bills at 2x rather than the 5-minute cache's 1.25x. The CLI
+    # uses the 1-hour cache; pricing needs the split (docs/llm-backends.md §3.3).
+    cache_write_1h_tokens: int = 0
+    # Model requests the CLI made in the run (``ResultMessage.num_turns``).
+    model_calls: int = 0
 
     def add(self, raw: dict[str, Any] | None) -> None:
         if not raw:
@@ -136,6 +141,8 @@ class Usage:
         self.cache_read_input_tokens += cache_read
         self.input_tokens += fresh + cache_write + cache_read
         self.output_tokens += int(raw.get("output_tokens", 0) or 0)
+        by_ttl = raw.get("cache_creation") or {}
+        self.cache_write_1h_tokens += int(by_ttl.get("ephemeral_1h_input_tokens", 0) or 0)
 
 
 @dataclass
@@ -278,8 +285,23 @@ def build_options(
     return ClaudeAgentOptions(
         model=model,
         system_prompt=system_prompt,
+        # Offer library's tools and nothing else. permission_mode below makes
+        # every offered tool callable without a prompt, and ask reads documents
+        # a stranger can write (ingested email). Defaults would offer the CLI's
+        # built-ins and every connector on the claude.ai account behind the
+        # credentials (Gmail, Slack, Drive, ...), which setting_sources=[] does
+        # not remove — and their descriptions cost ~100k tokens a call.
+        #   tools=[]                 every built-in off, including ones a later
+        #                            CLI adds (a blocklist cannot name those)
+        #   strict_mcp_config=True   only the MCP servers passed here
+        #   skills=[]                no skills
+        # Pinned against the real CLI by tests/test_llm_subscription_cli.py.
+        tools=[],
+        strict_mcp_config=True,
+        skills=[],
         mcp_servers=mcp_servers or {},
         allowed_tools=[f"{_MCP_PREFIX}*"] if mcp_servers else [],
+        # Second layer, kept from before tools=[] existed.
         disallowed_tools=_BLOCKED_BUILTINS,
         permission_mode="bypassPermissions",
         max_turns=max_turns,
@@ -341,6 +363,7 @@ async def _run(
             messages.append(message)
             if isinstance(message, ResultMessage):
                 usage.add(message.usage)
+                usage.model_calls += int(message.num_turns or 0)
                 # Running out of turns is also reported as an error result, but
                 # it is a normal outcome the caller handles — not a failure.
                 if message.is_error and message.subtype != _MAX_TURNS_SUBTYPE:

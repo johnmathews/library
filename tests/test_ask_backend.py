@@ -248,14 +248,43 @@ async def test_turn_limit_without_an_answer_falls_back(
     assert result.answer == engine._NO_ANSWER
 
 
+async def test_a_subscription_turn_is_priced_by_the_api_rate_card_for_its_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cost_usd on the subscription means "what this would have cost on the
+    API", so each kind of input token gets the API's weight: fresh 1x, cache
+    reads 0.1x, 5-minute writes 1.25x, 1-hour writes 2x (the CLI's cache)."""
+    usage = Usage(output_tokens=1_000)
+    usage.add(
+        {
+            "input_tokens": 1_000,
+            "cache_read_input_tokens": 1_000_000,
+            "cache_creation_input_tokens": 110_000,
+            "cache_creation": {"ephemeral_1h_input_tokens": 10_000},
+        }
+    )
+    _stub_tool_loop(monkeypatch, ToolLoopResult(answer="a", usage=usage))
+
+    result = await run_ask(
+        object(),  # type: ignore[arg-type]
+        question="q",
+        settings=_sub_settings(tmp_path),
+        client=object(),  # type: ignore[arg-type]
+        backend="subscription",
+    )
+
+    # Billable input: 1,000 + 100,000 (reads) + 125,000 (5m writes) + 20,000
+    # (1h writes) = 246,000 at opus-4-8's $5/MTok, plus 1,000 out at $25/MTok.
+    assert result.cost_usd == pytest.approx(246_000 * 5 / 1e6 + 1_000 * 25 / 1e6)
+    # The total still counts every token that went in.
+    assert result.input_tokens == 1_111_000
+
+
 async def test_cost_records_the_true_context_including_harness_overhead(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Under a subscription cost_usd is notional — but it must not read as free.
-
-    Recording only the prompt would hide the ~43k-token Claude Code preamble
-    each opus call carries, which is the real resource being spent (quota).
-    """
+    """Under a subscription cost_usd is notional — but it must not read as free:
+    a total with no recorded split is priced as fresh input."""
     _stub_tool_loop(
         monkeypatch,
         ToolLoopResult(answer="a", usage=Usage(input_tokens=43_320, output_tokens=200)),
@@ -272,6 +301,30 @@ async def test_cost_records_the_true_context_including_harness_overhead(
     assert result.input_tokens == 43_320
     assert result.output_tokens == 200
     assert result.cost_usd > 0.2  # opus-4-8 at $5/MTok in
+
+
+async def test_a_subscription_result_records_its_backend_split_and_model_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage = Usage(output_tokens=7, model_calls=3)
+    usage.add(
+        {"input_tokens": 11, "cache_creation_input_tokens": 400, "cache_read_input_tokens": 900}
+    )
+    _stub_tool_loop(monkeypatch, ToolLoopResult(answer="a", usage=usage))
+
+    result = await run_ask(
+        object(),  # type: ignore[arg-type]
+        question="q",
+        settings=_sub_settings(tmp_path),
+        client=object(),  # type: ignore[arg-type]
+        backend="subscription",
+    )
+
+    assert result.backend == "subscription"
+    assert result.model_calls == 3
+    split = (result.fresh_input_tokens, result.cache_write_tokens, result.cache_read_tokens)
+    assert split == (11, 400, 900)
+    assert result.input_tokens == 1311
 
 
 async def test_result_shape_matches_the_api_backend(

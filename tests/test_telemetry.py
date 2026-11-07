@@ -129,6 +129,7 @@ def test_recording_without_a_configured_provider_is_a_no_op() -> None:
         backend="api", model="m", duration_s=1.0, tool_calls=2, citations=3, outcome="ok"
     )
     telemetry.record_error(backend="api", kind="upstream")
+    telemetry.record_call_size(backend="api", model="m", input_tokens=10, model_calls=2)
     telemetry.record_mcp_call("library_stats", "ok", 0.01)
 
 
@@ -206,6 +207,39 @@ def test_metrics_endpoint_exposes_recorded_series(monkeypatch, api_client) -> No
     assert 'kind="cache_read"' in body
     assert 'kind="fresh"' in body
     assert "library_ask_cost" in body
+
+    get_settings.cache_clear()
+
+
+def test_input_tokens_per_call_reaches_the_scrape(monkeypatch, api_client) -> None:  # type: ignore[no-untyped-def]
+    """One sample per turn, input tokens over model calls, so a jump in the
+    fixed cost of a call shows as a jump in the median. A turn with no model
+    call records nothing rather than dividing by zero."""
+    from library.config import get_settings
+    from library.telemetry import configure_telemetry
+
+    monkeypatch.setenv("LIBRARY_OTEL_METRICS_ENABLED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(telemetry, "_configured", False)
+    monkeypatch.setattr(telemetry, "_provider", None)
+    monkeypatch.setattr(telemetry, "_instruments", {})
+    configure_telemetry(
+        service_name="library-test",
+        service_version="0",
+        prometheus_enabled=True,
+        otlp_endpoint=None,
+    )
+
+    telemetry.record_call_size(
+        backend="subscription", model="test-model", input_tokens=9_000, model_calls=3
+    )
+    telemetry.record_call_size(backend="api", model="test-model", input_tokens=500, model_calls=0)
+
+    body = api_client.get("/metrics").text
+    sums = dict(
+        re.findall(r'library_ask_input_tokens_per_call_sum\{backend="(\w+)"[^}]*\} (\S+)', body)
+    )
+    assert sums == {"subscription": "3000.0"}
 
     get_settings.cache_clear()
 

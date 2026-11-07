@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-05 (§1.4: the MCP tool summary adds fetching files and writing notes). Earlier entries are in this file's history.
-**Last verified:** 2026-11-05 — method: partial, scoped to the §1.4 MCP bullet and the §1.6 `mcp_server.py` row, read against the registered tools in `src/library/mcp_server.py`. `notes_service.py` is under the 400-line floor, so it is not in §1.6. Other sections carry forward their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-07 (the `ask_turns` entry names the per-turn backend, token split and model calls). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to the `ask_turns` entry, read against `AskTurn` in `src/library/models.py` and migration 0043. The rest carries its earlier verifications forward.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -237,8 +237,10 @@ value, which would silently corrupt any `GROUP BY` over labels.
 **Ask:**
 
 - `ask_threads` — one conversation per owner.
-- `ask_turns` — one Q&A turn per thread; stores cost/provenance and the
-  serialized Anthropic message blocks replayed into follow-up questions.
+- `ask_turns` — one Q&A turn per thread; stores cost/provenance (including
+  which backend answered, the input-token split and the model-call count, see
+  [ask.md §1.4](ask.md)) and the serialized Anthropic message blocks replayed
+  into follow-up questions.
 - `fx_rates` — small reference FX snapshot (USD base, date-aware) for
   converting cross-currency amounts ([charts.md](charts.md), [admin.md](admin.md)
   §1.2.6).

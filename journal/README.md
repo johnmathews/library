@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-223 entries.
+224 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -17,6 +17,7 @@ CI checks it is current.
 - **2026-11-07** — [Library follow-ups run closed](261107-library-followups-run-closed.md)
 - **2026-11-07** — [The migrate run must not start the database](261107-deploy-migrate-no-deps.md)
 - **2026-11-07** — [Dependabot alerts cleared](261107-dependabot-alerts.md)
+- **2026-11-07** — [Ask subscription lockdown and cost accounting](261107-ask-subscription-lockdown.md)
 - **2026-11-06** — [Planner statistics after bulk money writes](261106-money-planner-statistics.md)
 - **2026-11-06** — [Money totals filtered by facet count the lines that carry it](261106-money-line-facets.md)
 - **2026-11-06** — [MCP follow-ups run closed](261106-mcp-followups-run-closed.md)

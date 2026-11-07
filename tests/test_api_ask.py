@@ -402,6 +402,84 @@ def test_ask_replays_thinking_blocks_unmodified_to_later_calls(
     assert replayed[0]["signature"] == "sig-abc123"
 
 
+def test_a_turn_records_its_backend_token_split_and_model_calls(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enough is stored per turn to explain its cost without the metrics: who
+    answered, how the input was billed, and how many requests it took."""
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[_ToolUseBlock(name="query_documents", input={}, id="t1")],
+                usage=_Usage(30, 10, cache_creation_input_tokens=2000),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="Done.")],
+                usage=_Usage(5, 20, cache_read_input_tokens=2100),
+            ),
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "anything?"})
+    assert response.status_code == 200
+    turn_id = response.json()["turn_id"]
+
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT backend, fresh_input_tokens, cache_write_tokens, cache_read_tokens,"
+                    " input_tokens, model_calls FROM ask_turns WHERE id = :id"
+                ),
+                {"id": turn_id},
+            ).one()
+    finally:
+        engine.dispose()
+    assert tuple(row) == ("api", 35, 2000, 2100, 4135, 2)
+
+    thread = api_client.get(f"/api/ask/threads/{response.json()['thread_id']}").json()
+    assert [t["backend"] for t in thread["turns"]] == ["api"]
+
+
+def test_a_turn_records_its_input_tokens_per_model_call(
+    api_client: TestClient,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-call size metric is fed from the turn the endpoint stored."""
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        ask_module.telemetry, "record_call_size", lambda **kwargs: seen.append(kwargs)
+    )
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[_ToolUseBlock(name="query_documents", input={}, id="t1")],
+                usage=_Usage(30, 10, cache_creation_input_tokens=2000),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="Done.")],
+                usage=_Usage(5, 20, cache_read_input_tokens=2100),
+            ),
+        ],
+    )
+
+    assert api_client.post("/api/ask", json={"question": "anything?"}).status_code == 200
+
+    model = get_settings().ask_model
+    assert seen == [{"backend": "api", "model": model, "input_tokens": 4135, "model_calls": 2}]
+
+
 def test_ask_tool_loop_has_headroom_beyond_four_calls(
     api_client: TestClient,
     api_database_url: str,
