@@ -104,7 +104,11 @@ def configure_telemetry(
         # /metrics route renders them when Prometheus scrapes. No timer.
         from opentelemetry.exporter.prometheus import PrometheusMetricReader
 
-        readers.append(PrometheusMetricReader())
+        # scope_info_enabled=False: since exporter 0.66 the default adds
+        # otel_scope_name/version/schema_url labels to every series, which
+        # would change the label sets docs/observability.md promises (and
+        # start new series on every dashboard). Keep the labels we chose.
+        readers.append(PrometheusMetricReader(scope_info_enabled=False))
 
     if otlp_endpoint:
         # Push-based: a timer flushes to the collector every interval.
