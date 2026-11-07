@@ -448,6 +448,38 @@ def test_a_turn_records_its_backend_token_split_and_model_calls(
     assert [t["backend"] for t in thread["turns"]] == ["api"]
 
 
+def test_a_turn_records_its_input_tokens_per_model_call(
+    api_client: TestClient,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-call size metric is fed from the turn the endpoint stored."""
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        ask_module.telemetry, "record_call_size", lambda **kwargs: seen.append(kwargs)
+    )
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[_ToolUseBlock(name="query_documents", input={}, id="t1")],
+                usage=_Usage(30, 10, cache_creation_input_tokens=2000),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="Done.")],
+                usage=_Usage(5, 20, cache_read_input_tokens=2100),
+            ),
+        ],
+    )
+
+    assert api_client.post("/api/ask", json={"question": "anything?"}).status_code == 200
+
+    model = get_settings().ask_model
+    assert seen == [{"backend": "api", "model": model, "input_tokens": 4135, "model_calls": 2}]
+
+
 def test_ask_tool_loop_has_headroom_beyond_four_calls(
     api_client: TestClient,
     api_database_url: str,

@@ -303,6 +303,12 @@ async def ask(
             # the metric cannot show whether the new headroom is enough.
             outcome="no_answer" if result.answer == _NO_ANSWER else "ok",
         )
+        telemetry.record_call_size(
+            backend=ask_backend,
+            model=result.model,
+            input_tokens=result.input_tokens,
+            model_calls=result.model_calls,
+        )
         turn_cost = result.cost_usd
         # A brand-new thread was seeded with the truncated question as a
         # placeholder title. Upgrade it to a concise generated title from the

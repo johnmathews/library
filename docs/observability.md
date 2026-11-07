@@ -1,7 +1,7 @@
 # Observability
 
-**Status:** active. **Last updated:** 2026-11-05 (§3.1: the `mcp_rejected` log line for refused `/mcp` requests; MCP tool-call metrics and the `mcp_call` line before it). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to §3.1's `mcp_rejected` line. Read `src/library/mcp_rejected_log.py` and `main.py`'s logger wiring against the text; `tests/test_mcp_rejected_log.py` pins the format, and the line was observed in production logs on 2026-11-06. Metric rows of §3 carry their 2026-11-05 verification (a Prometheus scrape in `tests/test_telemetry.py`).
+**Status:** active. **Last updated:** 2026-11-07 (§3: the `library.ask.input_tokens_per_call` histogram and its query; subscription cost is now the API-equivalent, not a full-rate ceiling). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to the `input_tokens_per_call` row and its subsection. `tests/test_telemetry.py::test_input_tokens_per_call_reaches_the_scrape` reads the series from a real `/metrics` scrape and `tests/test_api_ask.py::test_a_turn_records_its_input_tokens_per_model_call` pins the call site, both seen red first. The rest carries its earlier verifications forward.
 **Covers:** src/library/mcp_rejected_log.py
 
 > Purpose
@@ -62,13 +62,31 @@ histograms.
 | `library.ask.tool_calls` | histogram | `backend`, `model`, `outcome` | Whether raising the loop ceiling from 4 to 8 is being used |
 | `library.ask.citations` | histogram | `backend`, `model`, `outcome` | Whether answers are grounded — a quality proxy |
 | `library.ask.errors` | counter | `backend`, `kind` | Failures by category, previously only greppable in logs |
+| `library.ask.input_tokens_per_call` | histogram (tokens) | `backend`, `model` | Whether the fixed cost of a model call has grown. One sample per turn: its input tokens over its model calls. Buckets 500 to 200k. See below |
 | `library.mcp.calls` (`library_mcp_calls_total`) | counter | `tool`, `outcome` | Which MCP tools are used, and how often they fail. §3.1 |
 | `library.mcp.duration` (`library_mcp_duration_seconds`) | histogram (s) | `tool`, `outcome` | Which tools are slow. Buckets 10 ms to 30 s. §3.1 |
 | `library.claude_credentials.healthy` | gauge | none | Whether Ask's subscription login works: `1` usable, `0` a human must log in again, absent where OAuth is not in use. Read on each scrape; see [llm-backends.md §5.3](llm-backends.md) |
 
 `backend` is `api` or `subscription`, and it changes what `cost` *means*: the
-subscription path is not metered, so its cost is a notional ceiling priced at
-the full input rate. Do not sum the two and call it a bill.
+subscription path is not metered, so its cost is what the API would have
+charged ([llm-backends.md §3.3](llm-backends.md)). Do not sum the two and call
+it a bill.
+
+### Input tokens per model call
+
+A CLI upgrade once took the subscription's fixed cost per call from ~43k to
+~100k tokens and nothing noticed ([llm-backends.md §3](llm-backends.md)). After
+the tool lockdown a call carries library's own prompt and tools (~4k tokens)
+plus the conversation, so a median that climbs past ~50k means something is
+being added to every call again:
+
+```promql
+histogram_quantile(0.5, sum by (le, backend) (
+  rate(library_ask_input_tokens_per_call_bucket[1d])))
+```
+
+The alert rule belongs with the others in the home-server repository; it is not
+defined yet.
 
 **Instrumented at the point where the backends converge** (`api/ask.py`), not
 inside the engine — so one call site covers both and their numbers stay
