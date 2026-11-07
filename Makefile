@@ -56,8 +56,10 @@ lint-actions:
 fmt:
 	uv run ruff check --fix . && uv run ruff format .
 
-# Deploy the promoted :latest image to the live host. Run only after main is
-# green in CI (build + promote done). See docs/runbooks/deploy.md.
+# Verify the live host runs HEAD: WUD deploys each promoted :latest by itself,
+# so this waits for /healthz to report HEAD, then checks the migration state and
+# prunes old images. Deploying by hand (WUD paused) is
+# `scripts/deploy.sh --deploy`. See docs/runbooks/deploy.md.
 deploy:
 	./scripts/deploy.sh
 

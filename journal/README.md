@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-221 entries.
+222 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -14,6 +14,7 @@ CI checks it is current.
 ## November 2026
 
 - **2026-11-07** — [The twin order lives in the view](261107-twin-rank-in-the-view.md)
+- **2026-11-07** — [Library follow-ups run closed](261107-library-followups-run-closed.md)
 - **2026-11-07** — [The migrate run must not start the database](261107-deploy-migrate-no-deps.md)
 - **2026-11-06** — [Planner statistics after bulk money writes](261106-money-planner-statistics.md)
 - **2026-11-06** — [Money totals filtered by facet count the lines that carry it](261106-money-line-facets.md)

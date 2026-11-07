@@ -1,7 +1,7 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-06 (money_query: the unknown-value check is the shared `filter_vocabulary` one; the `facets` field text says totals match per money row). Earlier: 2026-11-05 (§1.2: why a client's first `POST /mcp` can get a `400`, and the `mcp_rejected` log line; §1.2/§1.3: the file, ingest and edit tool text now tells hosted clients what to do). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: verified by tests/test_mcp*.py (the 400 pin, the `mcp_rejected` line, the tool text); live client behaviour per journal 261105-mcp-live-connectors.
+**Status:** active. **Last updated:** 2026-11-07 (§1.2 "What the clients do": no client-side confirmation step, and why; the SDK upgrade is held and why). Earlier: 2026-11-06 (money_query: the unknown-value check is the shared `filter_vocabulary` one). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial. §1.2's two new points: a scratch upgrade to fastmcp 4.1.6 / mcp 2.3.0 with the MCP and OAuth suites run against it (4 MiB limit probed at 2.9 / 3.0 / 5.0 MiB decoded), and Anthropic's and OpenAI's own docs on elicitation (journal 261107-library-followups-run-closed). The rest carries forward the 2026-11-06 check by tests/test_mcp*.py and journal 261105-mcp-live-connectors.
 **Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, src/library/mcp_rejected_log.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py, src/library/filter_vocabulary.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -181,6 +181,24 @@ clients are not supported.
   The tool text now says that a user's explicit request for exactly that
   change is their agreement, while a change the model chose itself, or a
   preview that differs from the request, needs asking first.
+- **No client-side confirmation step, by decision (2026-11-07).** MCP has
+  ways for a tool to ask the user a question: 2025 `elicitation/create`, and
+  the 2026-07-28 revision's multi-round-trip tool calls, which work on a
+  stateless transport. Neither is used. The 2025 form cannot reach any client
+  over this stateless JSON-response transport. The 2026-07-28 form needs the
+  SDK upgrade below. The household's main client also does not offer it:
+  Anthropic's connector build guide lists no elicitation for claude.ai, while
+  Claude Code and ChatGPT (Desktop and Work web) do. A server may not assume
+  the client answers, so the preview and `preview_token` step would stay
+  anyway. Re-check when the connector guide lists elicitation.
+- **The SDK stays on fastmcp 3 / mcp 1 for now (held 2026-11-07).** fastmcp
+  4 / mcp 2 would serve 2026-07-28 natively and end the `400` above, but mcp 2
+  refuses MCP request bodies over 4 MiB, and fastmcp 4.1.6 has no setting to
+  raise that. `ingest_document` would drop from 100 MiB to about 3 MiB per
+  file, and a larger file would get a plain HTTP `413` the model cannot read.
+  The upgrade waits until fastmcp exposes the limit. mcp 1 receives security
+  fixes only. The fixes the upgrade needs are listed in journal
+  `261107-library-followups-run-closed`.
 
 ## 1.3 Tools
 
