@@ -203,6 +203,7 @@ async function send(text: string, replaceFrom?: number): Promise<void> {
       citations: res.citations,
       usedTools: res.used_tools,
       costUsd: res.cost_usd,
+      backend: res.backend,
     }
     scrollToBottom()
     // Post-success side effects live outside this try: a failure there must
@@ -278,6 +279,7 @@ async function loadThread(id: number): Promise<void> {
       citations: t.citations,
       usedTools: t.used_tools,
       costUsd: t.cost_usd,
+      backend: t.backend,
     }))
     threadId.value = id
     threadTitle.value = detail.title

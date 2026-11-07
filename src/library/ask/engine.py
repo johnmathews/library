@@ -482,9 +482,7 @@ async def generate_thread_title(
         )
         return TitleResult(
             title=_clean_title(title_result.text),
-            cost_usd=estimate_cost_usd(
-                model, title_result.usage.input_tokens, title_result.usage.output_tokens
-            ),
+            cost_usd=_subscription_cost_usd(model, title_result.usage),
         )
 
     response = await client.messages.create(
@@ -1061,6 +1059,25 @@ def _serialize_block(block: Any) -> dict[str, Any]:
     return {"type": block_type}
 
 
+def _subscription_cost_usd(model: str, usage: subscription.Usage) -> float:
+    """What a subscription call would have cost on the API.
+
+    The subscription is not metered, so this is the API's rate card applied to
+    the call's tokens: fresh input 1x, cache reads 0.1x, 5-minute cache writes
+    1.25x and 1-hour cache writes 2x. The CLI writes the 1-hour cache. Fresh
+    input is derived from the total, so a usage that carries only a total (no
+    split) is priced as fresh input rather than as free.
+    """
+    cache_read = usage.cache_read_input_tokens
+    cache_write = usage.cache_creation_input_tokens
+    write_1h = min(usage.cache_write_1h_tokens, cache_write)
+    fresh = max(usage.input_tokens - cache_read - cache_write, 0)
+    billable = (
+        fresh + round(cache_read * 0.1) + round((cache_write - write_1h) * 1.25) + write_1h * 2
+    )
+    return estimate_cost_usd(model, billable, usage.output_tokens)
+
+
 def _cached_usage(usage: Any) -> tuple[int, int]:
     """``(total_input_tokens, billable_input_tokens)`` for one API response.
 
@@ -1290,11 +1307,7 @@ async def _run_subscription_turn(
     result.cache_write_tokens += loop.usage.cache_creation_input_tokens
     result.output_tokens += loop.usage.output_tokens
     result.model_calls += loop.usage.model_calls
-    # Priced at the full input rate on purpose: this path is not metered, so the
-    # figure is a conservative notional ceiling rather than a bill. Weighting the
-    # cache components 0.1x/1.25x here (as the API path does) would change what
-    # the number MEANS, which is a separate decision from exposing the split.
-    result.cost_usd += estimate_cost_usd(model, loop.usage.input_tokens, loop.usage.output_tokens)
+    result.cost_usd += _subscription_cost_usd(model, loop.usage)
 
     answer = loop.answer
     if loop.hit_turn_limit and not answer:

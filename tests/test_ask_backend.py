@@ -248,14 +248,43 @@ async def test_turn_limit_without_an_answer_falls_back(
     assert result.answer == engine._NO_ANSWER
 
 
+async def test_a_subscription_turn_is_priced_by_the_api_rate_card_for_its_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cost_usd on the subscription means "what this would have cost on the
+    API", so each kind of input token gets the API's weight: fresh 1x, cache
+    reads 0.1x, 5-minute writes 1.25x, 1-hour writes 2x (the CLI's cache)."""
+    usage = Usage(output_tokens=1_000)
+    usage.add(
+        {
+            "input_tokens": 1_000,
+            "cache_read_input_tokens": 1_000_000,
+            "cache_creation_input_tokens": 110_000,
+            "cache_creation": {"ephemeral_1h_input_tokens": 10_000},
+        }
+    )
+    _stub_tool_loop(monkeypatch, ToolLoopResult(answer="a", usage=usage))
+
+    result = await run_ask(
+        object(),  # type: ignore[arg-type]
+        question="q",
+        settings=_sub_settings(tmp_path),
+        client=object(),  # type: ignore[arg-type]
+        backend="subscription",
+    )
+
+    # Billable input: 1,000 + 100,000 (reads) + 125,000 (5m writes) + 20,000
+    # (1h writes) = 246,000 at opus-4-8's $5/MTok, plus 1,000 out at $25/MTok.
+    assert result.cost_usd == pytest.approx(246_000 * 5 / 1e6 + 1_000 * 25 / 1e6)
+    # The total still counts every token that went in.
+    assert result.input_tokens == 1_111_000
+
+
 async def test_cost_records_the_true_context_including_harness_overhead(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Under a subscription cost_usd is notional — but it must not read as free.
-
-    Recording only the prompt would hide the ~43k-token Claude Code preamble
-    each opus call carries, which is the real resource being spent (quota).
-    """
+    """Under a subscription cost_usd is notional — but it must not read as free:
+    a total with no recorded split is priced as fresh input."""
     _stub_tool_loop(
         monkeypatch,
         ToolLoopResult(answer="a", usage=Usage(input_tokens=43_320, output_tokens=200)),

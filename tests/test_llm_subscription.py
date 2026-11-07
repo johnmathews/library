@@ -100,6 +100,22 @@ def test_usage_counts_cache_tokens_as_input() -> None:
     assert usage.output_tokens == 4
 
 
+def test_usage_keeps_the_one_hour_share_of_cache_writes() -> None:
+    # The CLI writes the 1-hour cache, which bills at 2x rather than 1.25x, so
+    # pricing needs to know how much of cache_creation was 1-hour.
+    usage = Usage()
+    usage.add(
+        {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 1000,
+            "cache_creation": {"ephemeral_1h_input_tokens": 700, "ephemeral_5m_input_tokens": 300},
+        }
+    )
+    usage.add({"cache_creation_input_tokens": 50, "cache_creation": None})
+    assert usage.cache_creation_input_tokens == 1050
+    assert usage.cache_write_1h_tokens == 700
+
+
 def test_usage_tolerates_missing_and_null_fields() -> None:
     usage = Usage()
     usage.add(None)

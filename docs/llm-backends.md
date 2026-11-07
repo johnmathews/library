@@ -1,7 +1,7 @@
 # LLM backends
 
-**Status:** active. **Last updated:** 2026-11-07 (§3 rewritten: the CLI now offers only library's tools — `tools=[]`, `strict_mcp_config=True`, `skills=[]` — which closes access to the claude.ai account's connectors and cuts the fixed cost of a call from ~100k tokens to a few hundred; §7 says how it is tested). Earlier entries are in this file's history.
-**Last verified:** 2026-11-07 — method: partial, scoped to §3 and §7's tool note. §3.1 figures are live calls from the production container, before and after the lockdown options; the after-lockdown tool list is asserted against the real bundled CLI by `tests/test_llm_subscription_cli.py`, seen red against the old options. §3.1.1 is read from `ask_turns` and the `library_ask_tokens_total` counter, which agreed to the token. Earlier verification is in this file's history.
+**Status:** active. **Last updated:** 2026-11-07 (§3 rewritten: the CLI offers only library's tools — `tools=[]`, `strict_mcp_config=True`, `skills=[]` — closing access to the claude.ai account's connectors and cutting the fixed cost of a call from ~100k tokens to a few hundred; §3.3: subscription cost is the API rate card applied to the token split, 1-hour cache writes at 2x). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to §3 and §7's tool note. §3.1 figures are live calls from the production container, before and after the lockdown options; the after-lockdown tool list is asserted against the real bundled CLI by `tests/test_llm_subscription_cli.py`, seen red against the old options. §3.1.1 is read from `ask_turns` and the `library_ask_tokens_total` counter, which agreed to the token. §3.3's weights are pinned by `tests/test_ask_backend.py::test_a_subscription_turn_is_priced_by_the_api_rate_card_for_its_split`, seen red first.
 
 > **Purpose** — Library can reach Claude two ways: the metered Anthropic
 > Messages API, or a Claude subscription via the bundled Claude Code CLI. This
@@ -118,13 +118,24 @@ remaining cost of a turn is library's own system prompt and tool schemas
 
 `cost_usd` keeps being computed from `MODEL_PRICING_USD_PER_MTOK` on both
 backends. Under a subscription no such dollars are billed, so the number means
-*"what this would have cost on the API"* — useful for measuring the saving.
+*"what this would have cost on the API"*, and the Ask page labels it
+"API-equivalent". The real resource being spent is quota.
 
-It deliberately counts cache-creation and cache-read tokens as input, so the
-harness overhead shows up rather than reading as free. A subscription-answered
-ask turn will therefore record a *higher* `cost_usd` than the same turn on the
-API. That is the honest number: the resource being spent is quota, and quota is
-proportional to context.
+Both backends price the same way, by the API's rate card for each kind of input
+token:
+
+| Input tokens | Weight |
+| --- | --- |
+| Fresh | 1x |
+| Cache read | 0.1x |
+| Cache write, 5-minute cache | 1.25x |
+| Cache write, 1-hour cache | 2x |
+
+The CLI writes the 1-hour cache; the API backend writes the 5-minute one. The
+SDK's usage reports the split (`cache_creation.ephemeral_1h_input_tokens`), and
+`Usage.cache_write_1h_tokens` carries it. Until 2026-11-07 the subscription
+path priced every input token at the full rate. Turns from before then record
+that higher figure and are not re-priced, because their split was never stored.
 
 ## 4. Provisioning
 

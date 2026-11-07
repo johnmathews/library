@@ -14,7 +14,7 @@
  * once the new answer lands (POST /api/ask `replace_from_turn_id`).
  */
 import { computed, nextTick, ref } from 'vue'
-import type { AskCitation } from '@/api/ask'
+import type { AskBackend, AskCitation } from '@/api/ask'
 import { renderAnswer } from './renderAnswer'
 
 export interface AskTurnVM {
@@ -26,6 +26,8 @@ export interface AskTurnVM {
   citations: AskCitation[]
   usedTools: string[]
   costUsd: number
+  /** Who answered; null when unknown (old turns) or still pending. */
+  backend?: AskBackend | null
   pending?: boolean
 }
 
@@ -43,6 +45,11 @@ const emit = defineEmits<{ retry: []; edit: [question: string] }>()
 
 const answerHtml = computed<string>(() => (props.turn.pending ? '' : renderAnswer(props.turn.answer)))
 const canAct = computed<boolean>(() => props.turn.id !== null && !props.turn.pending && !props.busy)
+// A subscription isn't billed per token, so its figure is what the API would
+// have charged (docs/llm-backends.md §3.3).
+const costLabel = computed<string>(() =>
+  props.turn.backend === 'subscription' ? 'API-equivalent' : 'Estimated cost',
+)
 
 // ── Copy ────────────────────────────────────────────────────────────────────
 const copied = ref(false)
@@ -302,7 +309,7 @@ const iconButton =
             v-if="turn.costUsd"
             data-testid="ask-meta"
             class="ml-1 text-xs text-gray-400 dark:text-gray-500"
-            >Estimated cost: ${{ turn.costUsd.toFixed(4) }}</span
+            >{{ costLabel }}: ${{ turn.costUsd.toFixed(4) }}</span
           >
         </div>
       </template>

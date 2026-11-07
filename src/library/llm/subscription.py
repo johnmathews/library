@@ -125,6 +125,10 @@ class Usage:
     fresh_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    # The part of ``cache_creation_input_tokens`` written to the 1-hour cache,
+    # which the API bills at 2x rather than the 5-minute cache's 1.25x. The CLI
+    # uses the 1-hour cache; pricing needs the split (docs/llm-backends.md §3.3).
+    cache_write_1h_tokens: int = 0
     # Model requests the CLI made in the run (``ResultMessage.num_turns``).
     model_calls: int = 0
 
@@ -139,6 +143,8 @@ class Usage:
         self.cache_read_input_tokens += cache_read
         self.input_tokens += fresh + cache_write + cache_read
         self.output_tokens += int(raw.get("output_tokens", 0) or 0)
+        by_ttl = raw.get("cache_creation") or {}
+        self.cache_write_1h_tokens += int(by_ttl.get("ephemeral_1h_input_tokens", 0) or 0)
 
 
 @dataclass

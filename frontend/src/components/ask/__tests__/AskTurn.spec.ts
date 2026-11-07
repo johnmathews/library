@@ -34,6 +34,16 @@ function mountTurn(props: Partial<InstanceType<typeof AskTurn>['$props']> = {}) 
 describe('AskTurn', () => {
   afterEach(() => vi.unstubAllGlobals())
 
+  it('labels the cost by who answered: API-equivalent on the subscription', () => {
+    const meta = (backend: AskTurnVM['backend']) =>
+      mountTurn({ turn: turn({ backend }) }).get('[data-testid="ask-meta"]').text()
+
+    expect(meta('subscription')).toBe('API-equivalent: $0.0123')
+    expect(meta('api')).toBe('Estimated cost: $0.0123')
+    // Turns from before the backend was recorded.
+    expect(meta(null)).toBe('Estimated cost: $0.0123')
+  })
+
   it('copies the markdown answer, not the rendered HTML', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })

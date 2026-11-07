@@ -42,6 +42,7 @@ function sampleResponse(overrides: Partial<AskResponse> = {}): AskResponse {
     cost_usd: 0.0123,
     thread_id: 1,
     turn_id: 101,
+    backend: 'api',
     ...overrides,
   }
 }
@@ -58,6 +59,7 @@ function threadWith(queries: string[], id = 7): ThreadDetail {
       used_tools: [],
       cost_usd: 0.02,
       created_at: '',
+      backend: 'api',
     })),
   }
 }
@@ -195,6 +197,22 @@ describe('AskView', () => {
     expect(w.get('[data-testid="ask-question-bubble"]').text()).toBe('which invoices are due?')
     expect(w.get('[data-testid="ask-answer"]').text()).toContain('Two invoices are due')
     expect(w.find('[data-testid="ask-greeting"]').exists()).toBe(false)
+  })
+
+  it('labels a subscription answer’s cost as API-equivalent, fresh and reloaded', async () => {
+    askQuestionMock.mockResolvedValueOnce(sampleResponse({ backend: 'subscription' }))
+    const asked = mountView()
+    await typeAndSubmit(asked, 'which invoices are due?')
+    expect(asked.get('[data-testid="ask-meta"]').text()).toBe('API-equivalent: $0.0123')
+    asked.unmount()
+
+    const thread = threadWith(['q'])
+    thread.turns[0]!.backend = 'subscription'
+    getThreadMock.mockResolvedValue(thread)
+    await router.push('/ask/7')
+    const reloaded = mountView()
+    await flushPromises()
+    expect(reloaded.get('[data-testid="ask-meta"]').text()).toBe('API-equivalent: $0.0200')
   })
 
   it('posts a follow-up with the thread id', async () => {

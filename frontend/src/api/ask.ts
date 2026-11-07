@@ -23,7 +23,11 @@ export interface AskResponse {
   thread_id: number
   /** The turn this answer was stored as — what retry and edit address. */
   turn_id: number
+  /** Who answered. On `subscription`, `cost_usd` is an API-equivalent, not money spent. */
+  backend: AskBackend
 }
+
+export type AskBackend = 'api' | 'subscription'
 
 /** Summary row returned by GET /api/ask/threads. */
 export interface ThreadSummary {
@@ -44,6 +48,8 @@ export interface TurnView {
   used_tools: string[]
   cost_usd: number
   created_at: string
+  /** Null on turns from before the backend was recorded. */
+  backend: AskBackend | null
 }
 
 /** Full thread returned by GET /api/ask/threads/{id}. */

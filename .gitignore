@@ -30,3 +30,6 @@ credentials.json
 
 # engineering-team working area (run reports, plans, pointer) — scratch, not source
 .engineering-team/
+# Playwright MCP browser screenshots: they can show real archive pages, and
+# this repo is public.
+.playwright-mcp/

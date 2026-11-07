@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-07 (the subscription paragraph under the backend setting: the CLI offers only library's tools, so the ~43k preamble claim is gone, see llm-backends.md §3). Earlier: 2026-11-06 (*Where a money total comes from*: totals and charts read the same merged twin labels, migration 0041; a `facets` filter counts the money rows that carry the facet. §1 item 3: `query_documents` refuses unknown filter values). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to *Where a money total comes from*, §1.10 item 11 and §1 item 3. Read against `structured_query.sum_amount` and migration 0041; the twin and line-facet tests in `tests/test_structured_query.py` were seen red first. Item 3's refusal is covered by `tests/test_ask_tool_filters.py` (seen red with the check disabled). The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-07 (§1.4: each turn records its backend, token split and model calls, migration 0043; subscription turns are priced by the API rate card and shown as "API-equivalent"; the backend paragraph drops the ~43k preamble claim after the tool lockdown). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to §1.4. `tests/test_api_ask.py::test_a_turn_records_its_backend_token_split_and_model_calls`, `tests/test_migrations.py::test_0043_backfills_backend_only_where_the_history_proves_it` and `tests/test_ask_backend.py::test_a_subscription_turn_is_priced_by_the_api_rate_card_for_its_split` pass, each seen red first; the backfill rule was previewed read-only against production. The rest carries its earlier verifications forward.
 **Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, src/library/filter_vocabulary.py, .github/workflows/e2e-nightly.yml
 
 Ask lets you put a natural-language question to the archive and get a prose
@@ -1034,9 +1034,12 @@ comparable across cached and uncached turns, while `cost_usd` prices those
 tokens at their real weights (reads ~0.1x, writes ~1.25x). Without this,
 enabling caching would have made recorded spend appear to collapse partly
 because tokens stopped being *counted*, not because they stopped being *sent*.
-The subscription backend already folded all three counts into one total
-(`llm/subscription.py`); it prices that total at the full input rate as a
-deliberately conservative notional figure, since that path is not metered.
+The subscription backend prices its tokens the same way, with one difference:
+the CLI writes the 1-hour cache, whose writes bill at 2x rather than 1.25x
+([`llm-backends.md` §3.3](llm-backends.md)). Its figure is what the turn would
+have cost on the API, so the Ask page shows it as "API-equivalent". Turns from
+before 2026-11-07 priced every subscription input token at the full rate and
+keep that higher figure.
 
 **Sliding window trade-off.** Older turns are dropped when a thread exceeds
 `LIBRARY_ASK_HISTORY_TURNS`. Dropped turns cause the history-prefix cache to
