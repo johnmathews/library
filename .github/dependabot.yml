@@ -2,6 +2,12 @@
 # The Dockerfile and docker-compose.yml pin every base image by @sha256; without
 # a bumper those digests silently rot. Docker ecosystem PRs refresh them; the
 # github-actions ecosystem keeps the CI action pins current too.
+#
+# Python (uv) and npm get SECURITY updates only, grouped into one PR per
+# ecosystem. open-pull-requests-limit: 0 turns version updates off for them;
+# security PRs have their own limit and still open. Without the groups, each
+# vulnerable package got its own PR, nobody merged them one by one, and 114
+# alerts piled up (journal 261107-dependabot-alerts). docs/deployment.md §1.7.3.
 version: 2
 updates:
   - package-ecosystem: "docker"
@@ -19,3 +25,29 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(ci)"
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      python-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      frontend-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
