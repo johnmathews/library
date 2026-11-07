@@ -49,7 +49,7 @@ dependencies = [
     #     extra port is involved.
     "opentelemetry-api>=1.30",
     "opentelemetry-sdk>=1.30",
-    "opentelemetry-exporter-prometheus>=0.51b0",
+    "opentelemetry-exporter-prometheus>=0.66b2",
     "opentelemetry-exporter-otlp-proto-http>=1.30",
     "prometheus-client>=0.21",
     "pgvector>=0.3.6",
