@@ -1,7 +1,7 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-07 (§1.2 "What the clients do": no client-side confirmation step, and why; the SDK upgrade is held and why). Earlier: 2026-11-06 (money_query: the unknown-value check is the shared `filter_vocabulary` one). Earlier entries are in this file's history.
-**Last verified:** 2026-11-07 — method: partial. §1.2's two new points: a scratch upgrade to fastmcp 4.1.6 / mcp 2.3.0 with the MCP and OAuth suites run against it (4 MiB limit probed at 2.9 / 3.0 / 5.0 MiB decoded), and Anthropic's and OpenAI's own docs on elicitation (journal 261107-library-followups-run-closed). The rest carries forward the 2026-11-06 check by tests/test_mcp*.py and journal 261105-mcp-live-connectors.
+**Status:** active. **Last updated:** 2026-11-07 (§1.2: mcp also stays on 1.28.1, because 1.30 backports the 4 MiB cap; a guard test now catches any SDK that caps the body). Earlier entries are in this file's history.
+**Last verified:** 2026-11-07 — method: partial, scoped to §1.2's mcp 1.30 point: the guard test run on mcp 1.28.1 (pass) and 1.30.0 (`413`), plus the mcp 1.30.0 and fastmcp 3.4.11 source (journal 261107-dependabot-alerts). The rest carries forward the earlier 2026-11-07 check (journal 261107-library-followups-run-closed).
 **Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, src/library/mcp_rejected_log.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py, src/library/filter_vocabulary.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -199,6 +199,15 @@ clients are not supported.
   The upgrade waits until fastmcp exposes the limit. mcp 1 receives security
   fixes only. The fixes the upgrade needs are listed in journal
   `261107-library-followups-run-closed`.
+- **mcp stays on 1.28.1, too.** mcp 1.30 backports the same 4 MiB cap, and
+  fastmcp 3.4.11 builds its session manager without a size, so raising it
+  would mean patching fastmcp and mcp internals. The four advisories 1.30
+  fixes don't reach this server: it runs stateless (no sessions to pile up),
+  its authorization server issues tokens only for itself, and two are
+  client-side. mcp 1.30 also turns the SDK's `/authorize` endpoint into an
+  ASGI app, which the binding-cookie wrapper in `auth/oauth_provider.py`
+  would have to follow. `test_ingest_accepts_a_request_body_over_4_mib`
+  (`tests/test_mcp.py`) fails with `413` under any SDK that caps the body.
 
 ## 1.3 Tools
 
