@@ -1306,6 +1306,24 @@ async def test_ingest_over_upload_limit(
     assert rows == []
 
 
+async def test_ingest_accepts_a_request_body_over_4_mib(mcp_connect: McpConnector) -> None:
+    """MCP takes uploads up to LIBRARY_MAX_UPLOAD_BYTES (100 MiB), so the
+    transport must not cap the request body below that. mcp 1.30 and mcp 2
+    add a 4 MiB default cap that fastmcp 3.4 cannot raise (docs/mcp.md §1.2):
+    under it this call gets a bare HTTP 413 instead of a stored document.
+    5 MiB decoded is about 6.7 MiB of base64 on the wire."""
+    content = b"%PDF-1.4\n% body-limit guard\n" + secrets.token_bytes(5 * 1024 * 1024)
+    async with mcp_connect() as session:
+        result = payload(
+            await session.call_tool(
+                "ingest_document",
+                {"filename": "large.pdf", "content_base64": base64.b64encode(content).decode()},
+            )
+        )
+    assert result["sha256"] == hashlib.sha256(content).hexdigest()
+    assert result["duplicate"] is False
+
+
 async def test_ingest_deleted_duplicate(mcp_connect: McpConnector, api_database_url: str) -> None:
     """Content matching a document in the trash is refused (sha256 is unique),
     and the error says how to get past it without pointing at an API."""
