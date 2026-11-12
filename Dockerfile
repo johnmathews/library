@@ -45,7 +45,7 @@ COPY scripts/ scripts/
 # Pinned to -bookworm (matching the builder stage) so the compiled C-extension
 # venv copied from the builder runs against the same Debian/glibc. An unqualified
 # python:3.13-slim floats to newer Debian and risks an ABI mismatch.
-FROM python:3.13-slim-bookworm@sha256:fcbd8dfc2605ba7c2eca646846c5e892b2931e41f6227985154a596f26ab8ed7
+FROM python:3.15-slim-bookworm@sha256:96599df822d0e1c6bb700014a05c7f3c8cabc6e0f7ff3c4f9f69cee033b4b5d9
 
 # OCR system dependencies (per OCRmyPDF docs): tesseract + nld/eng tessdata,
 # ghostscript (PDF/A output), unpaper (--clean), pngquant (--optimize >= 2).
