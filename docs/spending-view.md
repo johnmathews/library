@@ -1,7 +1,7 @@
 # The spending view
 
-**Status:** active. **Last updated:** 2026-11-06 (§5: the footer's needs-attention block gains "labelled differently on a matching document": a payment whose twin documents carry different labels, so a chart for the twin's label does not count it). Earlier entries are in this file's history.
-**Last verified:** 2026-11-06 — method: partial, scoped to §5's needs-attention paragraph and example. Read `SpendingFooter.vue`'s rows and `charts/footer.py`'s `conflicting` bucket; `SpendingFooter.spec.ts` and `tests/test_chart_footer.py` cover it and were seen red first. §§1-4 and 6-9 were not re-checked.
+**Status:** active. **Last updated:** 2026-11-21 (§7: five palette slots from the design system's `category-1` to `category-5`, with the fold after five). Earlier entries are in this file's history.
+**Last verified:** 2026-11-21 — method: partial, scoped to §7. Read `utils/splitPalette.ts` (`SPLIT_PALETTE`, `OTHER_COLOUR`, `chartColour()`) and `spending/palette.ts` (`MAX_BANDS`) in the working tree. §§1-6 and 8-9 were not re-checked.
 **Covers:** frontend/src/views/SpendingWorkspaceView.vue, frontend/src/views/SpendingBoardView.vue, frontend/src/components/spending/, src/library/api/spending.py
 
 > **Note on examples.** This repository is public. Every sender, category and
@@ -229,10 +229,14 @@ than silently showing you the first hundred.
 
 A split value keeps the same colour across a chart's whole lifetime, so a
 category does not change colour when you change the range or the grain. The
-palette has **six** slots, validated for colour-blind separation and for
-contrast in both light and dark mode.
+palette has **five** slots, the design system's chart colours `category-1` to
+`category-5` (the same set as Family Finances). The design system's gate checks
+each against the chart background in both light and dark mode, and the values
+come from its tokens at runtime, so a palette change is a change to
+`tokens.json` ([brand.md](brand.md) §3).
 
-Past six values, the smallest are folded into a single grey **Other** band.
+Past five values, the smallest are folded into a single **Other (N)** band in
+`category-other`.
 The fold never changes the total — it is a grouping, not an omission — and
 clicking it shows what went into it, with each value clickable in turn.
 

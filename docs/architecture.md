@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-07 (the `ask_turns` entry names the per-turn backend, token split and model calls). Earlier entries are in this file's history.
-**Last verified:** 2026-11-07 — method: partial, scoped to the `ask_turns` entry, read against `AskTurn` in `src/library/models.py` and migration 0043. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-21 (the Web app bullet describes the Quiet design system and self-hosted Inter, not Mosaic with Google Fonts.) Earlier: 2026-11-07 (the `ask_turns` entry names the per-turn backend, token split and model calls). Earlier entries are in this file's history.
+**Last verified:** 2026-11-21 — method: partial, scoped to the Web app bullet, read against `frontend/src/assets/main.css` (tokens.css import, no Google Fonts import) and `frontend/src/assets/fonts/`. Earlier, 2026-11-07: partial, scoped to the `ask_turns` entry, read against `AskTurn` in `src/library/models.py` and migration 0043. The rest carries its earlier verifications forward.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -309,10 +309,13 @@ are stored as SHA-256 digests only:
   keyword or by meaning), reading, totalling amounts, fetching files,
   ingesting, writing notes, editing and commenting on documents from LLM
   clients. See [mcp.md](mcp.md).
-- **Web app** — Vue 3 SPA using the **Mosaic** (Cruip) theme: violet accent,
-  soft rounded-xl cards, dark mode, Inter loaded from Google Fonts. Content-first,
-  responsive 320px-up, accessible. (Reskinned from GOV.UK — see
-  [frontend.md](frontend.md) and `journal/260613-mosaic-reskin.md`.)
+- **Web app** — Vue 3 SPA on Library's design system, "Quiet", shared with
+  Family Finances: violet for actions, cards without outlines, light and dark
+  themes from one set of tokens, Inter Variable self-hosted. The Mosaic
+  (Cruip) sidebar shell stays, shared with journal insights. Content-first,
+  responsive 320px-up, accessible. See [brand.md](brand.md) and
+  [frontend.md](frontend.md); history in `journal/260613-mosaic-reskin.md` and
+  `journal/261121-quiet-design-system.md`.
 
 ### 1.4.1 Live job events
 
