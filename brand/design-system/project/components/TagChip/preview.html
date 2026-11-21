@@ -1,0 +1,41 @@
+<!-- @dsCard group="Documents" height=220 subtitle="Neutral chips, and the three states that carry colour" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TagChip — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Tag chips */
+.lb-tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; border-radius: var(--radius-full); background: var(--tile); color: var(--ink); font-size: 12.5px; line-height: 16px; font-weight: 600; white-space: nowrap; box-sizing: border-box; }
+.lb-tag .lb-i { width: 14px; height: 14px; }
+.lb-tag.attn { background: var(--attention-tint); color: var(--attention); }
+.lb-tag.fail { background: var(--deficit-tint); color: var(--error-ink); }
+.lb-tag button { all: unset; display: inline-grid; place-items: center; margin-right: -4px; border-radius: var(--radius-full); cursor: pointer; }
+
+.lb-rows { display: grid; gap: var(--space-3); }
+.lb-rows .lb-row { gap: 6px; }
+.lb-more { font-size: 13px; color: var(--ink-secondary); }
+</style>
+</head>
+<body>
+<div class="lb-pad"><div class="lb-rows">
+  <div class="lb-row"><span class="lb-state">Labels</span><span class="lb-tag">Energy</span><span class="lb-tag">House</span><span class="lb-tag">Car insurance</span><span class="lb-tag">Kitchen renovation</span><span class="lb-more">+2</span></div>
+  <div class="lb-row"><span class="lb-state">Type</span><span class="lb-tag">Invoice</span><span class="lb-tag">Email</span></div>
+  <div class="lb-row"><span class="lb-state">States</span><span class="lb-tag attn">Needs review</span><span class="lb-tag fail"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg>Failed</span><span class="lb-tag">Processing</span><span class="lb-tag"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Indexed</span></div>
+  <div class="lb-row"><span class="lb-state">Editing</span><span class="lb-tag">Energy <button aria-label="Remove tag Energy"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></button></span><span class="lb-tag">House <button aria-label="Remove tag House"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></button></span></div>
+</div></div>
+</body>
+</html>

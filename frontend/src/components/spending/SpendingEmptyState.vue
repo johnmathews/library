@@ -168,14 +168,14 @@ async function choose(proposal: Proposal): Promise<void> {
 
 <template>
   <div class="flex flex-col gap-4" data-testid="spending-empty-state">
-    <p class="text-sm text-gray-500 dark:text-gray-400">
+    <p class="text-sm text-ink-secondary">
       No charts yet. Start with the aggregate view below, or chart one of these.
     </p>
 
-    <p v-if="loadError" class="text-sm text-red-600 dark:text-red-400" data-testid="spending-empty-load-error">
+    <p v-if="loadError" class="text-sm text-error-ink" data-testid="spending-empty-load-error">
       {{ loadError }}
     </p>
-    <p v-if="saveError" class="text-sm text-red-600 dark:text-red-400" data-testid="spending-empty-save-error">
+    <p v-if="saveError" class="text-sm text-error-ink" data-testid="spending-empty-save-error">
       {{ saveError }}
     </p>
 
@@ -183,23 +183,23 @@ async function choose(proposal: Proposal): Promise<void> {
       <li v-for="proposal in proposals" :key="proposal.key">
         <button
           type="button"
-          class="card flex w-full items-center justify-between gap-3 p-4 text-left transition hover:border-violet-300 disabled:cursor-not-allowed disabled:opacity-60"
+          class="card flex w-full items-center justify-between gap-3 p-4 text-left transition hover:bg-tile disabled:cursor-not-allowed disabled:opacity-60"
           data-testid="spending-empty-proposal"
           :disabled="savingKey === proposal.key"
           @click="choose(proposal)"
         >
           <span class="min-w-0">
             <span
-              class="block truncate font-medium text-gray-800 dark:text-gray-100"
+              class="block truncate font-medium text-ink"
               data-testid="spending-empty-proposal-label"
             >
               {{ proposal.label }}
             </span>
-            <span v-if="proposal.detail" class="block text-xs text-gray-500 dark:text-gray-400">
+            <span v-if="proposal.detail" class="block text-xs text-ink-secondary">
               {{ proposal.detail }}
             </span>
           </span>
-          <span class="shrink-0 text-xs font-medium text-violet-600 dark:text-violet-400">
+          <span class="shrink-0 text-xs font-medium text-brand">
             {{ savingKey === proposal.key ? 'Saving…' : 'Chart it' }}
           </span>
         </button>

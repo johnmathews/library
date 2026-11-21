@@ -148,10 +148,10 @@ function isQueued(row: HeldEmailItem): boolean {
       description="Emails the ingest pipeline held for review instead of filing. Ingest one anyway, or dismiss it — the original message always stays recoverable."
     />
 
-    <!-- Control row (mosaic conventions: uppercase-xs label, native select). -->
+    <!-- Control row (sentence-case label over a native select). -->
     <div class="flex flex-wrap items-end gap-3 mb-4">
       <label class="flex flex-col gap-1">
-        <span class="text-xs font-medium uppercase tracking-wide text-gray-400">Status</span>
+        <span class="text-[13px] font-semibold text-ink-secondary">Status</span>
         <select
           :value="statusFilter"
           class="form-select py-1 text-sm"
@@ -166,7 +166,7 @@ function isQueued(row: HeldEmailItem): boolean {
       </label>
       <p
         v-if="!store.loading && store.items.length"
-        class="text-sm text-gray-500 dark:text-gray-400 py-1"
+        class="text-sm text-ink-secondary py-1"
         data-testid="held-emails-count"
       >
         {{ store.total }} {{ store.total === 1 ? 'email' : 'emails' }}
@@ -179,7 +179,7 @@ function isQueued(row: HeldEmailItem): boolean {
 
     <div
       v-if="store.loadError"
-      class="card p-4 text-gray-600 dark:text-gray-300"
+      class="card p-4 text-ink-secondary"
       data-testid="load-error"
     >
       {{ store.loadError }}
@@ -188,7 +188,7 @@ function isQueued(row: HeldEmailItem): boolean {
     <template v-else-if="!store.loading">
       <div
         v-if="!store.items.length"
-        class="card p-8 text-center text-gray-500 dark:text-gray-400"
+        class="card p-8 text-center text-ink-secondary"
         data-testid="held-emails-empty"
       >
         <template v-if="statusFilter === 'held'">
@@ -208,13 +208,13 @@ function isQueued(row: HeldEmailItem): boolean {
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
                 <span
-                  class="font-medium text-gray-800 dark:text-gray-100 break-all"
+                  class="font-medium text-ink break-all"
                   data-testid="held-email-sender"
                 >
                   {{ row.sender ?? 'Unknown sender' }}
                 </span>
                 <AppBadge
-                  :colour="row.verdict === 'llm_hold' ? 'purple' : 'grey'"
+                  colour="grey"
                   data-testid="held-email-verdict"
                 >
                   {{ verdictLabel(row.verdict) }}
@@ -227,26 +227,26 @@ function isQueued(row: HeldEmailItem): boolean {
                 </AppBadge>
               </div>
               <p
-                class="text-sm text-gray-600 dark:text-gray-300 mt-0.5 break-words"
+                class="text-sm text-ink-secondary mt-0.5 break-words"
                 data-testid="held-email-subject"
               >
                 {{ row.subject ?? '(no subject)' }}
               </p>
-              <p class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+              <p class="text-xs text-ink-secondary mt-0.5">
                 Held {{ formatDateTime(row.created_at) }}
                 <template v-if="row.owner"> · {{ row.owner }}</template>
                 <template v-if="row.resolved_at"> · resolved {{ formatDateTime(row.resolved_at) }}</template>
               </p>
               <p
                 v-if="row.reason"
-                class="text-xs text-gray-500 dark:text-gray-400 mt-1 break-words"
+                class="text-xs text-ink-secondary mt-1 break-words"
                 data-testid="held-email-reason"
               >
                 {{ row.reason }}
               </p>
               <p
                 v-if="row.document_ids.length"
-                class="text-xs text-gray-500 dark:text-gray-400 mt-1"
+                class="text-xs text-ink-secondary mt-1"
                 data-testid="held-email-documents"
               >
                 Created:
@@ -254,7 +254,7 @@ function isQueued(row: HeldEmailItem): boolean {
                   v-for="documentId in row.document_ids"
                   :key="documentId"
                   :to="{ name: 'document-detail', params: { id: documentId } }"
-                  class="text-violet-600 dark:text-violet-400 hover:underline mr-1.5"
+                  class="font-medium text-brand underline underline-offset-3 mr-1.5"
                   data-testid="held-email-document-link"
                 >
                   #{{ documentId }}
@@ -262,7 +262,7 @@ function isQueued(row: HeldEmailItem): boolean {
               </p>
               <p
                 v-if="row.last_error"
-                class="text-xs text-amber-700 dark:text-amber-400 mt-1 break-words"
+                class="text-xs text-error-ink mt-1 break-words"
                 data-testid="held-email-error"
               >
                 {{ row.last_error }}
@@ -272,7 +272,7 @@ function isQueued(row: HeldEmailItem): boolean {
             <div class="flex flex-wrap items-center gap-2 sm:shrink-0">
               <button
                 type="button"
-                class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
+                class="btn-sm border-control-border bg-panel text-ink hover:bg-tile"
                 :aria-expanded="expandedIds.has(row.id)"
                 data-testid="held-email-trace-toggle"
                 @click="toggleTrace(row.id)"
@@ -282,7 +282,7 @@ function isQueued(row: HeldEmailItem): boolean {
               <template v-if="row.status === 'held'">
                 <span
                   v-if="isQueued(row)"
-                  class="text-sm font-medium text-violet-600 dark:text-violet-400"
+                  class="text-sm font-medium text-ink-secondary"
                   data-testid="held-email-queued"
                 >
                   Queued — ingesting…
@@ -290,7 +290,7 @@ function isQueued(row: HeldEmailItem): boolean {
                 <template v-else>
                   <button
                     type="button"
-                    class="btn-sm border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-60 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20"
+                    class="btn-sm border-control-border bg-panel text-ink hover:bg-tile disabled:opacity-60"
                     :disabled="Boolean(store.acting[row.id])"
                     data-testid="held-email-ingest"
                     @click="store.ingest(row.id)"
@@ -299,7 +299,7 @@ function isQueued(row: HeldEmailItem): boolean {
                   </button>
                   <button
                     type="button"
-                    class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 disabled:opacity-60"
+                    class="btn-sm border-control-border bg-panel text-ink hover:bg-tile disabled:opacity-60"
                     :disabled="Boolean(store.acting[row.id])"
                     data-testid="held-email-dismiss"
                     @click="store.dismiss(row.id)"
@@ -315,18 +315,18 @@ function isQueued(row: HeldEmailItem): boolean {
                triage breakdown; loaded lazily on first expand). -->
           <div
             v-if="expandedIds.has(row.id)"
-            class="mt-3 border-t border-gray-200 dark:border-gray-700/60 pt-3"
+            class="mt-3 border-t border-line pt-3"
             data-testid="held-email-trace"
           >
             <p
               v-if="traces[row.id]?.state === 'loading'"
-              class="text-xs text-gray-400 dark:text-gray-500"
+              class="text-xs text-ink-secondary"
             >
               Loading trace…
             </p>
             <p
               v-else-if="traces[row.id]?.state === 'error'"
-              class="text-xs text-amber-700 dark:text-amber-400"
+              class="text-xs text-error-ink"
             >
               Sorry, the trace could not be loaded. Try again later.
             </p>
@@ -341,8 +341,8 @@ function isQueued(row: HeldEmailItem): boolean {
                   class="text-xs break-words"
                   :class="
                     line.isAmbiguous
-                      ? 'text-violet-600 dark:text-violet-300 font-medium'
-                      : 'text-gray-500 dark:text-gray-400'
+                      ? 'text-ink font-medium'
+                      : 'text-ink-secondary'
                   "
                   data-testid="held-email-trace-item"
                 >
@@ -352,7 +352,7 @@ function isQueued(row: HeldEmailItem): boolean {
                   <span v-if="line.reason"> ({{ line.reason }})</span>
                 </li>
               </ul>
-              <p v-else class="text-xs text-gray-400 dark:text-gray-500">
+              <p v-else class="text-xs text-ink-secondary">
                 No per-item trace was recorded for this email.
               </p>
               <div
@@ -362,10 +362,10 @@ function isQueued(row: HeldEmailItem): boolean {
                 <span
                   v-for="chip in traceChips((traces[row.id] as { trace: Record<string, unknown> }).trace)"
                   :key="chip.label"
-                  class="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-gray-700/50 px-2 py-0.5 text-xs text-gray-600 dark:text-gray-300"
+                  class="inline-flex items-center gap-1 rounded-full bg-tile px-2 py-0.5 text-xs text-ink-secondary"
                   data-testid="held-email-trace-chip"
                 >
-                  <span class="uppercase tracking-wide text-[10px] text-gray-400 dark:text-gray-500">
+                  <span class="text-xs text-ink-secondary">
                     {{ chip.label }}
                   </span>
                   <span class="font-medium break-all">{{ chip.value }}</span>

@@ -1,0 +1,384 @@
+<title>Documents on Quiet</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="tokens.css">
+<!--
+  Library's Documents screen and a document's detail, restyled onto Family Finances' Quiet system
+  (approved spec: docs/superpowers/specs/2026-11-21-brand-design.md). One open question: how a
+  document type's colour shows on a tile now that cards have no outline. The screens are drawn at
+  real desktop size (1180px) and scaled down to fit the pane; the phone frame is 375px at 1:1.
+  Data is invented. Proposed type colours are --candidate-kind-* (Quiet's category palette).
+-->
+<style>
+  body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); }
+  .mockup-page {
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: var(--space-8, 32px) var(--space-16, 64px);
+    max-width: 1280px; margin: 0 auto; display: grid; gap: var(--space-12, 48px);
+  }
+  .mockup-head { display: grid; gap: var(--space-2, 8px); max-width: 74ch; }
+  .mockup-head h1, .option h2, .part h2 { margin: 0; text-wrap: balance; }
+  .mockup-head p, .option p, .part > p { margin: 0; max-width: 80ch; }
+  .mockup-meta { color: var(--ink-secondary); }
+  .option, .part { display: grid; gap: var(--space-4, 16px); }
+  .option-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2, 8px) var(--space-3, 12px); }
+  .option-tag { color: var(--ink-secondary); }
+  .option[data-recommended] .option-tag::after { content: " · Recommended"; color: var(--ink); }
+  .panes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: var(--space-4, 16px); }
+  .panes.stack { grid-template-columns: 1fr; }
+  .pane { min-width: 0; background: var(--canvas); color: var(--ink); border: 1px solid var(--line);
+          border-radius: var(--radius-lg, 12px); padding: var(--space-4, 16px); overflow-x: auto;
+          display: grid; gap: var(--space-4, 16px); }
+  .pane-label { color: var(--ink-secondary); margin: 0; }
+  .measures { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-2, 8px); }
+  .measures li { border: 1px solid var(--line); border-radius: 4px; padding: 2px var(--space-2, 8px); font-variant-numeric: tabular-nums; }
+  .measures li[data-pass="no"] { border-color: currentColor; }
+  :focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  .part-q { color: var(--ink-secondary); }
+
+  /* Candidate type colours: Quiet's category-1..5, the same in both themes. */
+  .mockup-page {
+    --candidate-kind-letter: var(--category-1);
+    --candidate-kind-receipt: var(--category-2);
+    --candidate-kind-invoice: var(--category-3);
+    --candidate-kind-warranty: var(--category-4);
+    --candidate-kind-contract: var(--category-5);
+  }
+
+  /* ---- A desktop screen, drawn at 1180px and scaled to the frame by script. ---- */
+  .frame { width: 100%; overflow: hidden; border-radius: var(--radius-md, 10px); box-shadow: 0 0 0 1px var(--line); }
+  .screen { width: 1180px; display: grid; grid-template-columns: 232px 1fr; background: var(--canvas);
+            color: var(--ink); font-size: 14px; line-height: 21px; transform-origin: 0 0; }
+
+  /* Sidebar: panel, the logo at the top, then sections. */
+  .side { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 14px; display: grid;
+          align-content: start; gap: 2px; min-height: 860px; }
+  .logo { display: flex; align-items: center; gap: 10px; padding: 0 6px 22px; color: var(--ink); text-decoration: none; }
+  .logo .name { font-size: 18px; line-height: 24px; font-weight: 650; letter-spacing: -0.015em; }
+  .nav { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border-radius: var(--radius-sm, 8px);
+         color: var(--ink); font-weight: 500; }
+  .nav svg { color: var(--ink-secondary); flex: none; }
+  .nav.on { background: var(--brand-tint); color: var(--brand-on-tint); font-weight: 600; }
+  .nav.on svg { color: var(--brand-on-tint); }
+  .nav-gap { height: 14px; }
+
+  .main { display: grid; align-content: start; gap: 18px; padding: 0 32px 32px; min-width: 0; }
+  .bar { display: flex; align-items: center; gap: 12px; height: 64px; border-bottom: 1px solid var(--line); margin: 0 -32px; padding: 0 32px; }
+  .bar h1 { margin: 0; font-size: 24px; line-height: 30px; font-weight: 650; letter-spacing: -0.015em; flex: 1; }
+  .icon-btn { width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--radius-sm, 8px); color: var(--ink-secondary); }
+
+  .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .search { display: flex; align-items: center; gap: 8px; width: 320px; height: 36px; padding: 0 12px; background: var(--panel);
+            border: 1px solid var(--control-border); border-radius: var(--radius-sm, 8px); color: var(--ink-secondary); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 999px;
+          border: 1px solid var(--control-border); background: var(--panel); color: var(--ink); font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .chip.on { background: var(--brand-tint); border-color: var(--brand); color: var(--brand-on-tint); }
+  .chip .x { font-weight: 400; }
+  .spacer { flex: 1; }
+  .sort { color: var(--ink-secondary); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .sort b { color: var(--ink); font-weight: 600; }
+
+  .todo { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius-md, 10px);
+          background: var(--attention-tint); color: var(--ink); }
+  .todo .lab { color: var(--attention); font-weight: 650; }
+  .todo a, .link { color: var(--brand); font-weight: 600; text-decoration: none; }
+
+  .grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; }
+  .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  /* ---- A document tile: panel, shadow-card, no outline. ---- */
+  .tile { position: relative; align-self: start; background: var(--panel); border-radius: var(--radius-md, 10px); box-shadow: var(--shadow-card);
+          overflow: hidden; display: grid; }
+  .thumb { aspect-ratio: 4 / 3; background: var(--tile); display: grid; place-items: center; overflow: hidden; }
+  .page { width: 62%; height: 112%; margin-top: 16%; background: #fdfdfc; border-radius: 2px;
+          box-shadow: 0 1px 3px rgba(16,24,40,.18); padding: 12% 10%; display: grid; align-content: start; gap: 7px; }
+  .page i { display: block; height: 4px; border-radius: 2px; background: #d6d9de; }
+  .page i.h { height: 7px; width: 55%; background: #b8bdc6; margin-bottom: 6px; }
+  .page i.s { width: 40%; } .page i.m { width: 75%; }
+  .page.note { width: 86%; height: auto; margin: 0; padding: 14px 16px; gap: 6px; text-align: left; font-size: 12px;
+               line-height: 16px; color: #4b5563; box-shadow: none; background: transparent; }
+  .page.note b { color: #1f2937; font-size: 13px; }
+  [data-theme="dark"] .page.note { color: #b9bfca; } [data-theme="dark"] .page.note b { color: #eef0f3; }
+  .body { padding: 14px 16px 16px; display: grid; gap: 8px; align-content: start; }
+  .line { font-size: 13px; line-height: 18px; color: var(--ink-secondary); }
+  .line .sep { padding: 0 4px; }
+  .title { margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; }
+  .title a { color: var(--ink); text-decoration: none; }
+  .title a::after { content: ""; position: absolute; inset: 0; }
+  .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 13px; line-height: 18px; color: var(--ink-secondary); }
+  .tag { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 999px;
+         background: var(--tile); color: var(--ink); font-size: 12.5px; font-weight: 600; }
+  .tag.attn { background: var(--attention-tint); color: var(--attention); }
+  .tag .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--kind); }
+  .sum { margin: 0; font-size: 13px; line-height: 18px; color: var(--ink-secondary);
+         display: -webkit-box; -webkit-line-clamp: 2; align-self: start; -webkit-box-orient: vertical; overflow: hidden; }
+  .amount { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  /* The three ways to show a type's colour. */
+  [data-opt="a"] .tile[style*="--kind"] { border-top: 4px solid var(--kind); }
+  [data-opt="b"] .tile[style*="--kind"] { box-shadow: var(--shadow-card), inset 4px 0 0 var(--kind); }
+  [data-opt="b"] .tile[style*="--kind"] .thumb { margin-left: 4px; }
+  .tag .dot { display: none; }
+  [data-opt="c"] .tag .dot { display: block; }
+
+  /* ---- The detail screen. ---- */
+  .back { color: var(--brand); font-weight: 600; text-decoration: none; font-size: 13px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: var(--radius-sm, 8px);
+         font-size: 13px; font-weight: 600; border: 1px solid var(--control-border); background: var(--panel); color: var(--ink); white-space: nowrap; }
+  .btn.primary { background: var(--brand-fill); border-color: var(--brand-fill); color: var(--on-brand); }
+  .cols { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  .card { background: var(--panel); border-radius: var(--radius-md, 10px); box-shadow: var(--shadow-card); padding: 20px 22px; display: grid; gap: 14px; }
+  .card h2 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 650; }
+  .preview { background: var(--tile); border-radius: var(--radius-sm, 8px); display: grid; place-items: center; padding: 28px 0; }
+  .preview .page { width: 70%; height: auto; aspect-ratio: 1 / 1.414; margin: 0; padding: 9% 9%; gap: 11px; }
+  .preview .page i { height: 6px; } .preview .page i.h { height: 10px; }
+  .pager { display: flex; justify-content: space-between; align-items: center; color: var(--ink-secondary); font-size: 13px; }
+  dl { margin: 0; display: grid; grid-template-columns: 150px 1fr; }
+  dt, dd { margin: 0; padding: 10px 0; border-top: 1px solid var(--line); }
+  dt:first-of-type, dt:first-of-type + dd { border-top: 0; }
+  dt { color: var(--ink-secondary); font-size: 13px; font-weight: 600; }
+  dd { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .lead { margin: 0; color: var(--ink-secondary); font-size: 15px; line-height: 22px; }
+  .comment { display: grid; gap: 2px; }
+  .comment small { color: var(--ink-secondary); font-size: 12.5px; }
+  .field { height: 64px; border: 1px solid var(--control-border); border-radius: var(--radius-sm, 8px); background: var(--panel);
+           padding: 8px 12px; color: var(--ink-secondary); }
+  .row-end { display: flex; justify-content: flex-end; gap: 8px; }
+  .history { display: flex; justify-content: space-between; color: var(--ink); }
+  .history span { color: var(--ink-secondary); }
+
+  /* ---- The phone frame, 375px at 1:1. ---- */
+  .phone { width: 375px; border-radius: 28px; overflow: hidden; box-shadow: 0 0 0 1px var(--line); background: var(--canvas); color: var(--ink);
+           font-size: 14px; line-height: 21px; }
+  .pbar { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .pbar h1 { margin: 0; font-size: 18px; font-weight: 650; flex: 1; }
+  .pmain { padding: 14px 16px 20px; display: grid; gap: 12px; }
+  .phone .search { width: auto; }
+  .phone .filters { flex-wrap: nowrap; overflow: hidden; }
+  .phone .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .phone .body { padding: 10px 10px 12px; gap: 6px; }
+  .phone .title { font-size: 14px; line-height: 18px; }
+  .phone .sum { display: none; }
+  .phones { display: flex; flex-wrap: wrap; gap: var(--space-6, 24px); }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- The app icon's mark, option B of 261121-app-icon (decided). -->
+  <symbol id="mark" viewBox="0 0 32 32">
+    <g transform="translate(-1 -1)" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 5 H17 L22 10 V24 A2 2 0 0 1 20 26 H9 A2 2 0 0 1 7 24 V7 A2 2 0 0 1 9 5 Z"/>
+      <polyline points="17,5 17,10 22,10"/>
+      <line x1="11" y1="14" x2="17" y2="14"/>
+      <line x1="11" y1="18" x2="14.5" y2="18"/>
+      <circle cx="22" cy="22" r="6.75" style="fill: var(--brand-fill)" stroke="none"/>
+      <circle cx="22" cy="22" r="4.5" style="fill: var(--brand-fill)"/>
+      <line x1="25.5" y1="25.5" x2="28" y2="28" stroke-width="3"/>
+    </g>
+  </symbol>
+  <!-- Nav icons: 24px grid, 2px round strokes. -->
+  <symbol id="i-docs" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></g></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><line x1="16" y1="16" x2="20" y2="20"/></g></symbol>
+  <symbol id="i-ask" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h0.5A2.5 2.5 0 0 1 5 13.5z"/></g></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V5"/><path d="M8 9l4-4 4 4"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></g></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h8l4 4v12H6z"/><path d="M9 13h6M9 16.5h4"/></g></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 19V11M10 19V6M15 19v-5M20 19V9"/></g></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></g></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5.5A1.5 1.5 0 0 1 6.5 4H19v14H6.5A1.5 1.5 0 0 0 5 19.5z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19"/></g></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5" stroke-dasharray="3 2.9"/></g></symbol>
+  <symbol id="i-bin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M10 4h4M7 7l1 13h8l1-13"/></g></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5z"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M5 7h14M5 12h14M5 17h14"/></symbol>
+</svg>
+
+<main class="mockup-page">
+  <header class="mockup-head">
+    <p class="caption mockup-meta">Mockup · 2026-11-21 · Library</p>
+    <h1 class="title-1">Documents on Quiet</h1>
+    <p class="body">Library's Documents screen and a document's detail, restyled onto Family Finances' Quiet system as the approved spec describes: cards without outlines, sentence-case labels, violet only on what can be acted on, yellow for what needs you, and the new logo in the sidebar. The data is invented.</p>
+    <p class="body">One question is open: <strong>how a document type's colour shows on a tile</strong>, now that tiles have no border to paint. The type colours shown are Quiet's chart palette rather than today's sky, green, violet, amber and red, since red and violet already mean "failed" and "you can act on this".</p>
+  </header>
+</main>
+
+<script>
+  const ICON = (id, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true"><use href="#${id}"/></svg>`
+  const SQUARE = (size) => `<svg width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true" style="flex:none"><rect width="32" height="32" rx="7" fill="var(--brand-fill)"/><use href="#mark" style="color:var(--on-brand)"/></svg>`
+  const page = (kind = 'doc') => kind === 'doc'
+    ? '<div class="page"><i class="h"></i><i></i><i class="m"></i><i></i><i class="s"></i><i></i><i class="m"></i></div>'
+    : kind
+
+  const DOCS = [
+    { t: 'Annual energy statement 2026', kind: 'invoice', type: 'Invoice', from: 'Energiebedrijf Noord', date: '14 Nov 2026', amount: '€1,284.50 due', sum: 'Final statement for the year: usage was 2,940 kWh and 1,120 m³, and the balance is due by 28 Nov.', review: true },
+    { t: 'Dental check-up receipt', kind: 'receipt', type: 'Receipt', from: 'Tandartspraktijk De Kroon', date: '11 Nov 2026', amount: '€86.00 paid', sum: 'Routine check-up and cleaning, paid by card at the practice.' },
+    { t: 'Health insurance policy 2027', kind: 'contract', type: 'Contract', from: 'Zorgverzekeraar Delta', date: '9 Nov 2026', sum: 'Basic cover plus dental, starting 1 Jan 2027. The monthly premium rises by €6.40.' },
+    { t: 'Re: moving the boiler service', kind: null, type: 'Email', from: 'Installatiebedrijf Zuid', date: '7 Nov 2026', note: true, sum: 'They can come on 3 Dec between 8:00 and 12:00.' },
+    { t: 'Washing machine warranty', kind: 'warranty', type: 'Warranty', from: 'Witgoed Centrum', date: '2 Nov 2026', sum: 'Five-year warranty on parts and labour, registered with the serial number on the back.' },
+    { t: 'Letter about the parking permit', kind: 'letter', type: 'Letter', from: 'Gemeente', date: '30 Oct 2026', sum: 'The permit renews automatically in January. Nothing needs doing unless the car changes.', review: true },
+    { t: 'Water bill, October', kind: 'invoice', type: 'Invoice', from: 'Waterbedrijf West', date: '28 Oct 2026', amount: '€41.20 due', sum: 'Monthly advance for October, collected on 1 Nov.' },
+    { t: 'Bike repair receipt', kind: 'receipt', type: 'Receipt', from: 'Fietsenmaker Oost', date: '25 Oct 2026', amount: '€34.95 paid', sum: 'New brake pads and a chain.' },
+  ]
+
+  function tile(d) {
+    const style = d.kind ? ` style="--kind: var(--candidate-kind-${d.kind})"` : ''
+    const thumb = d.note
+      ? `<div class="page note"><b>${d.t}</b><span>From ${d.from}</span><span>Date ${d.date}</span></div>`
+      : page()
+    return `<li class="tile"${style}>
+      <div class="thumb">${thumb}</div>
+      <div class="body">
+        <h2 class="title"><a href="#">${d.t}</a></h2>
+        <div class="meta">
+          ${d.review ? '<span class="tag attn">Needs review</span>' : ''}
+          <span class="tag"><span class="dot"></span>${d.type}</span>
+        </div>
+        <div class="line">${d.from}<br>${d.date}${d.amount ? `<span class="sep">·</span><span class="amount">${d.amount}</span>` : ''}</div>
+        <p class="sum">${d.sum}</p>
+      </div></li>`
+  }
+
+  function side(active) {
+    const items = [['i-docs', 'Documents'], ['i-search', 'Search'], ['i-ask', 'Ask'], ['i-up', 'Upload'], ['i-note', 'New note'],
+      ['i-chart', 'Charts'], ['i-folder', 'Projects'], ['i-folder', 'Matters'], ['gap'], ['i-book', 'Vocabulary'], ['i-chart', 'Jobs'],
+      ['i-bin', 'Recently deleted'], ['i-gear', 'Settings']]
+    return `<nav class="side"><a class="logo" href="#" aria-label="Library home">${SQUARE(32)}<span class="name">Library</span></a>
+      ${items.map(([i, n]) => i === 'gap' ? '<div class="nav-gap"></div>' : `<div class="nav${n === active ? ' on' : ''}">${ICON(i)}${n}</div>`).join('')}</nav>`
+  }
+
+  function documentsScreen() {
+    return `<div class="screen">${side('Documents')}<div class="main">
+      <div class="bar"><h1>Documents</h1><span class="icon-btn">${ICON('i-moon', 18)}</span></div>
+      <div class="filters">
+        <span class="search">${ICON('i-search')}Search documents…</span>
+        <span class="chip">Kind</span><span class="chip">Sender</span><span class="chip">Recipient</span>
+        <span class="chip on">Date: last 3 months <span class="x">×</span></span><span class="chip">Tag</span>
+        <span class="spacer"></span><span class="sort">Sort <b>Date on document ↓</b></span>
+      </div>
+      <div class="todo"><span class="lab">To do</span><span>2 documents need review.</span><a href="#">Review them one by one</a></div>
+      <ul class="grid">${DOCS.map(tile).join('')}</ul>
+    </div></div>`
+  }
+
+  function detailScreen() {
+    const d = DOCS[0]
+    return `<div class="screen">${side('Documents')}<div class="main">
+      <div class="bar"><h1>${d.t}</h1><span class="btn">Edit details</span><span class="btn">Download</span><span class="btn primary">Ask about this</span></div>
+      <a class="back" href="#">← Documents</a>
+      <div class="todo"><span class="lab">To do</span><span>The amount was read with low confidence.</span><a href="#">Check it</a></div>
+      <div class="cols">
+        <section class="card"><div class="preview">${page().replace('class="page"', 'class="page"')}</div>
+          <div class="pager"><span>Page 1 of 2</span><a class="link" href="#">Next page</a></div></section>
+        <div style="display:grid;gap:24px">
+          <section class="card"><h2>Summary</h2><p class="lead">${d.sum}</p></section>
+          <section class="card"><h2>Details</h2><dl>
+            <dt>Type</dt><dd><span class="tag" style="--kind: var(--candidate-kind-invoice)"><span class="dot"></span>Invoice</span></dd>
+            <dt>Sender</dt><dd>${d.from}</dd>
+            <dt>Recipient</dt><dd>The household</dd>
+            <dt>Date on document</dt><dd>${d.date}</dd>
+            <dt>Amount</dt><dd><span><span class="amount">€1,284.50</span> due by 28 Nov 2026</span></dd>
+            <dt>Tags</dt><dd><span class="tag">Energy</span><span class="tag">House</span></dd>
+            <dt>File</dt><dd style="font-family:var(--font-mono);font-size:13px">jaarafrekening-2026.pdf</dd>
+          </dl></section>
+          <section class="card"><h2>Comments</h2>
+            <div class="comment"><span>Paid from the joint account on 20 Nov.</span><small>Added 20 Nov 2026</small></div>
+            <div class="field">Add a comment</div><div class="row-end"><span class="btn primary">Add comment</span></div></section>
+          <section class="card"><div class="history"><b>History</b><span>4 changes · Show</span></div></section>
+        </div>
+      </div>
+    </div></div>`
+  }
+
+  function phoneScreen() {
+    return `<div class="phone"><div class="pbar">${SQUARE(28)}<h1>Documents</h1><span class="icon-btn">${ICON('i-menu', 20)}</span></div>
+      <div class="pmain"><span class="search">${ICON('i-search')}Search documents…</span>
+        <div class="filters"><span class="chip">Kind</span><span class="chip">Sender</span><span class="chip">Recipient</span><span class="chip">Date</span></div>
+        <div class="todo"><span class="lab">To do</span><span>2 need review.</span><a href="#">Review</a></div>
+        <ul class="grid">${DOCS.slice(0, 6).map(tile).join('')}</ul></div></div>`
+  }
+
+  const main = document.querySelector('.mockup-page')
+  const scaled = (html) => `<div class="frame">${html}</div>`
+  const panes = (fn, cls = '') => `<div class="panes ${cls}">
+      <div class="pane" data-theme="light"><p class="label pane-label">Light</p>${fn()}</div>
+      <div class="pane" data-theme="dark"><p class="label pane-label">Dark</p>${fn()}</div></div>`
+
+  // 1. The open question, at the top.
+  const q = document.createElement('section'); q.className = 'part'
+  q.innerHTML = `<h2 class="title-2">1. How a type's colour shows on a tile (open)</h2>
+    <p class="body part-q">Today a type's colour paints the tile's 2px border. Quiet removes card borders, so the colour needs a new place. Each option below is the same grid; only that place differs.</p>`
+  main.append(q)
+  const OPTS = [
+    { id: 'a', name: 'A. A band across the top', rec: true, line: 'A 4px band in the type\'s colour along the top edge of the tile. Scans like today\'s borders across a full grid, without outlining the card.' },
+    { id: 'b', name: 'B. A stripe down the left', line: 'A 4px stripe down the tile\'s left edge, like a file tab. Reads as a label rather than a frame, but sits beside the thumbnail, where it is easy to miss.' },
+    { id: 'c', name: 'C. A dot in the type chip', line: 'Only a small dot beside the type\'s name in its chip. The quietest, and closest to Finances\' category chips, but no longer visible across the grid at a glance.' },
+  ]
+  for (const o of OPTS) {
+    const s = document.createElement('section'); s.className = 'option'; s.id = o.id; s.dataset.opt = o.id
+    if (o.rec) s.dataset.recommended = ''
+    s.innerHTML = `<div class="option-head"><h3 class="title-2" id="${o.id}-h" style="margin:0">${o.name}</h3><span class="label option-tag">Option ${o.id.toUpperCase()}</span></div>
+      <p class="body">${o.line}</p>
+      ${panes(() => `<ul class="grid three">${DOCS.slice(0, 3).map(tile).join('')}</ul>`)}`
+    main.append(s)
+  }
+  const m = document.createElement('ul'); m.className = 'measures caption'
+  m.innerHTML = ['letter', 'receipt', 'invoice', 'warranty', 'contract']
+    .map((k) => `<li data-fg="var(--candidate-kind-${k})" data-bg="var(--panel)" data-min="3">${k[0].toUpperCase() + k.slice(1)} colour on a tile</li>`).join('')
+  main.append(m)
+
+  // 2. The whole Documents screen, with option A.
+  const s2 = document.createElement('section'); s2.className = 'part'; s2.dataset.opt = 'a'
+  s2.innerHTML = `<h2 class="title-2">2. The Documents screen</h2>
+    <p class="body part-q">At 1180px wide, scaled to fit, with option A. The sidebar carries the new logo; the active section is violet on its tint. "Needs review" moves from a red button to the yellow to-do strip, since yellow means "needs you" and red means "failed".</p>
+    ${panes(() => scaled(documentsScreen()), 'stack')}`
+  main.append(s2)
+
+  // 3. A document's detail.
+  const s3 = document.createElement('section'); s3.className = 'part'; s3.dataset.opt = 'a'
+  s3.innerHTML = `<h2 class="title-2">3. A document's detail</h2>
+    <p class="body part-q">The page preview beside the summary, details, comments and history, each a card without an outline. Labels are sentence case, the one primary button is the solid violet, and the file name is in Plex Mono.</p>
+    ${panes(() => scaled(detailScreen()), 'stack')}`
+  main.append(s3)
+
+  // 4. Phone.
+  const s4 = document.createElement('section'); s4.className = 'part'; s4.dataset.opt = 'a'
+  s4.innerHTML = `<h2 class="title-2">4. On a phone</h2>
+    <p class="body part-q">375px wide, two tiles per row, option A. The sidebar folds into a bar with the icon square.</p>
+    <div class="panes"><div class="pane" data-theme="light"><p class="label pane-label">Light</p>${phoneScreen()}</div>
+    <div class="pane" data-theme="dark"><p class="label pane-label">Dark</p>${phoneScreen()}</div></div>`
+  main.append(s4)
+
+  // Scale each 1180px screen to its frame.
+  const fit = () => document.querySelectorAll('.frame').forEach((f) => {
+    const s = f.firstElementChild; const k = Math.min(1, f.clientWidth / 1180)
+    s.style.transform = `scale(${k})`; f.style.height = s.offsetHeight * k + 'px'
+  })
+  fit(); addEventListener('resize', fit)
+</script>
+
+<script>
+  // Measures: for each <li data-fg data-bg data-min>, the WCAG contrast of the two colours in each
+  // theme, resolved in place (so --candidate-* values apply), written after the label.
+  (() => {
+    const rgb = (value, scope, theme) => {
+      const probe = document.createElement('span')
+      probe.dataset.theme = theme
+      probe.style.color = value
+      scope.append(probe)
+      const parts = getComputedStyle(probe).color.match(/[\d.]+/g).map(Number)
+      probe.remove()
+      return parts.slice(0, 3)
+    }
+    const lum = ([r, g, b]) => [r, g, b]
+      .map((c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4 })
+      .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0)
+    const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05) }
+    for (const li of document.querySelectorAll('.measures li[data-fg]')) {
+      const scope = li.closest('.mockup-page') || document.body
+      const min = Number(li.dataset.min || 0)
+      const results = ['light', 'dark'].map((theme) => {
+        const r = ratio(rgb(li.dataset.fg, scope, theme), rgb(li.dataset.bg, scope, theme))
+        return { theme, r, ok: !min || r >= min }
+      })
+      li.dataset.pass = results.every((x) => x.ok) ? 'yes' : 'no'
+      li.append(`: ${results.map((x) => `${x.theme} ${x.r.toFixed(1)}:1${x.ok ? '' : ' (below ' + min + ':1)'}`).join(', ')}`)
+    }
+  })()
+</script>

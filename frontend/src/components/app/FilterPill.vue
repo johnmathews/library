@@ -35,14 +35,14 @@ const emit = defineEmits<{ 'update:open': [boolean] }>()
         class="inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-sm transition-colors"
         :class="
           props.active
-            ? 'border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-500 dark:bg-violet-500/15 dark:text-violet-200'
-            : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700/60'
+            ? 'border-brand bg-brand-tint text-brand'
+            : 'border-control-border bg-panel text-ink hover:bg-tile'
         "
         :aria-expanded="open"
         @click="toggle"
       >
         <span class="font-medium">{{ props.label }}</span>
-        <span v-if="props.active && props.valueLabel" class="text-gray-500 dark:text-gray-400"
+        <span v-if="props.active && props.valueLabel" class="text-ink-secondary"
           >: {{ props.valueLabel }}</span
         >
         <span v-if="props.active" class="sr-only"> (active)</span>

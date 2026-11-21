@@ -126,7 +126,7 @@ async function removeComment(id: number): Promise<void> {
 
 <template>
   <div id="document-comments-card" class="card p-5" data-testid="document-comments">
-    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Comments</h2>
+    <h2 class="text-base font-[650] text-ink mb-4">Comments</h2>
 
     <div class="mb-4">
       <AppTextarea
@@ -141,24 +141,25 @@ async function removeComment(id: number): Promise<void> {
       <div class="mt-2 flex justify-end">
         <AppButton
           type="button"
+          variant="secondary"
           size="sm"
           :disabled="!canAdd"
           data-testid="comment-add-submit"
           @click="addComment"
         >
-          {{ adding ? 'Adding…' : 'Add' }}
+          {{ adding ? 'Adding…' : 'Add comment' }}
         </AppButton>
       </div>
     </div>
 
     <p
       v-if="sortedComments.length === 0"
-      class="text-sm text-gray-500 dark:text-gray-400"
+      class="text-sm text-ink-secondary"
       data-testid="comments-empty"
     >
       No comments yet.
     </p>
-    <ul v-else class="divide-y divide-gray-200 dark:divide-gray-700/60">
+    <ul v-else class="divide-y divide-line">
       <li
         v-for="comment in sortedComments"
         :key="comment.id"
@@ -178,7 +179,7 @@ async function removeComment(id: number): Promise<void> {
           <div class="mt-2 flex gap-2">
             <button
               type="button"
-              class="btn-sm border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 dark:border-violet-500/40 dark:bg-violet-500/15 dark:text-violet-300"
+              class="btn-sm border-control-border bg-panel text-ink hover:bg-tile"
               :disabled="editSaving"
               data-testid="comment-edit-save"
               @click="saveEdit(comment.id)"
@@ -187,7 +188,7 @@ async function removeComment(id: number): Promise<void> {
             </button>
             <button
               type="button"
-              class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
+              class="btn-sm border-control-border bg-panel text-ink hover:bg-tile"
               :disabled="editSaving"
               data-testid="comment-edit-cancel"
               @click="cancelEdit"
@@ -197,17 +198,17 @@ async function removeComment(id: number): Promise<void> {
           </div>
         </template>
         <template v-else>
-          <p class="whitespace-pre-wrap break-words text-sm text-gray-800 dark:text-gray-100">{{
+          <p class="whitespace-pre-wrap break-words text-sm text-ink">{{
             comment.body
           }}</p>
           <div class="mt-1 flex items-center justify-between gap-3">
-            <span class="text-xs text-gray-400 dark:text-gray-500">{{
+            <span class="text-xs text-ink-secondary">{{
               formatDateTime(comment.created_at)
             }}</span>
             <div class="flex gap-2">
               <button
                 type="button"
-                class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
+                class="btn-sm border-control-border bg-panel text-ink hover:bg-tile"
                 :data-testid="`comment-edit-${comment.id}`"
                 @click="startEdit(comment)"
               >
@@ -215,7 +216,7 @@ async function removeComment(id: number): Promise<void> {
               </button>
               <button
                 type="button"
-                class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-red-600 dark:text-red-400"
+                class="btn-sm border-control-border bg-panel text-ink hover:bg-tile"
                 :disabled="deletingId === comment.id"
                 :data-testid="`comment-delete-${comment.id}`"
                 @click="removeComment(comment.id)"
@@ -226,7 +227,7 @@ async function removeComment(id: number): Promise<void> {
           </div>
           <p
             v-if="deleteErrors[comment.id]"
-            class="mt-1 text-xs text-red-600 dark:text-red-400"
+            class="mt-1 text-xs text-error-ink"
           >
             {{ deleteErrors[comment.id] }}
           </p>

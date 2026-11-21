@@ -1,18 +1,21 @@
 /**
- * Per-kind tile-border colour — computed-style regression guard (W3).
+ * Per-kind tile colour — computed-style regression guard (W3, restyled W7).
  *
- * The border-accent feature shipped invisibly because the accent rule lived in
- * Tailwind's `components` cascade layer while the tile's `border-gray-200`
- * utility lived in the higher-ranked `utilities` layer, which wins regardless of
- * specificity — so the coloured border never painted. The unit test only
- * asserted the CSS *class* was attached (jsdom has no layered-cascade
- * resolution), so it passed while the border stayed grey.
+ * A kind's colour is a 4px band across the tile's top edge (mockup
+ * 261121-documents, option A); a kind with no colour has no band at all.
  *
- * This spec closes that gap by reading the REAL browser's computed
- * `border-top-color` on a real tile: it sets a distinctive per-kind override
- * and asserts the tile actually paints that colour (not the neutral grey it
- * would show if the utility still won). Same contract as the other specs:
- * requires the real stack + `e2e` user; self-skips when E2E_BASE_URL is unset.
+ * History: the border accent first shipped invisibly because the accent rule
+ * lived in Tailwind's `components` cascade layer while the tile's border
+ * utility lived in the higher-ranked `utilities` layer, which wins regardless
+ * of specificity. The unit test only asserted the CSS *class* was attached
+ * (jsdom has no layered-cascade resolution), so it passed while nothing
+ * painted.
+ *
+ * This spec closes that gap by reading the REAL browser's computed top edge on
+ * real tiles: it sets a distinctive per-kind override and asserts the accented
+ * tile paints that colour at 4px, and that a neutral tile paints no band. Same
+ * contract as the other specs: requires the real stack + `e2e` user;
+ * self-skips when E2E_BASE_URL is unset.
  */
 import { expect, test, type Page } from '@playwright/test'
 
@@ -21,8 +24,8 @@ import { requireStack } from './fixtures/require-stack'
 const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-password-123'
 
-// #ff2d55 — a colour no neutral/hover border ever uses, so a match proves the
-// accent (not Tailwind's grey utility) is what painted.
+// #ff2d55 — a colour no neutral edge or default kind colour ever uses, so a
+// match proves the per-kind override (not a utility or a default) painted.
 const OVERRIDE_HEX = '#ff2d55'
 const OVERRIDE_RGB = 'rgb(255, 45, 85)'
 
@@ -43,37 +46,42 @@ async function csrfHeader(page: Page): Promise<Record<string, string>> {
   return { 'X-CSRF-Token': csrf!.value }
 }
 
-test('per-kind accent: tile paints the override border colour (cascade layer fix)', async ({
+test('per-kind accent: an accented tile paints a 4px top band; a neutral tile has none', async ({
   page,
 }, testInfo) => {
-  // Force light mode so the asserted value is the raw override hex (dark mode
-  // adapts it via color-mix). The app's dark styling is class-driven and off by
-  // default here, but this keeps the assertion robust.
+  // Force light mode so the asserted value is the raw override hex. The app's
+  // dark styling is class-driven and off by default here, but this keeps the
+  // assertion robust.
   await page.emulateMedia({ colorScheme: 'light' })
   await signIn(page)
   const headers = await csrfHeader(page)
 
-  // Seed a document and give it a known kind + a unique tag so we can filter the
-  // dashboard down to exactly this tile.
+  // Seed two documents sharing one unique tag, so the dashboard can be filtered
+  // down to exactly these tiles: one `invoice` (gets the override) and one
+  // `other` (no default colour, no override — the neutral tile).
   const marker = `w3-accent-${testInfo.project.name}-${Date.now()}`
-  const create = await page.request.post('/api/documents', {
-    headers,
-    multipart: {
-      file: {
-        name: `${marker}.txt`,
-        mimeType: 'text/plain',
-        buffer: Buffer.from(`Tile border colour fixture — ${marker}.`),
+  async function seed(kindSlug: string): Promise<number> {
+    const create = await page.request.post('/api/documents', {
+      headers,
+      multipart: {
+        file: {
+          name: `${marker}-${kindSlug}.txt`,
+          mimeType: 'text/plain',
+          buffer: Buffer.from(`Tile colour fixture (${kindSlug}) — ${marker}.`),
+        },
       },
-    },
-  })
-  expect(create.status()).toBe(201)
-  const { id } = (await create.json()) as { id: number }
-
-  const patch = await page.request.patch(`/api/documents/${id}`, {
-    headers,
-    data: { kind_slug: 'invoice', tags: [marker] },
-  })
-  expect(patch.ok(), await patch.text()).toBeTruthy()
+    })
+    expect(create.status()).toBe(201)
+    const { id } = (await create.json()) as { id: number }
+    const patch = await page.request.patch(`/api/documents/${id}`, {
+      headers,
+      data: { kind_slug: kindSlug, tags: [marker] },
+    })
+    expect(patch.ok(), await patch.text()).toBeTruthy()
+    return id
+  }
+  const accentedId = await seed('invoice')
+  const neutralId = await seed('other')
 
   // Set a distinctive per-kind override for `invoice`.
   const colours = await page.request.put('/api/settings/kind-colors', {
@@ -82,19 +90,32 @@ test('per-kind accent: tile paints the override border colour (cascade layer fix
   })
   expect(colours.ok(), await colours.text()).toBeTruthy()
 
-  // Load the dashboard filtered to just our document.
+  // Load the dashboard filtered to just our documents.
   await page.goto(`/?tag=${marker}`)
-  const tile = page.locator(`#doc-card-${id}`)
-  await expect(tile).toBeVisible()
-  await expect(tile).toHaveClass(/app-doc-card--accented/)
+  const accented = page.locator(`#doc-card-${accentedId}`)
+  const neutral = page.locator(`#doc-card-${neutralId}`)
+  await expect(accented).toBeVisible()
+  await expect(neutral).toBeVisible()
+  await expect(accented).toHaveClass(/app-doc-card--accented/)
+  await expect(neutral).not.toHaveClass(/app-doc-card--accented/)
 
-  // The real, resolved border must be the override colour — not the neutral grey
-  // (rgb(229, 231, 235)) that a utility-layer win would leave — and 2px thick so
-  // the colour reads on a phone (neutral tiles stay 1px).
-  const border = await tile.evaluate((el) => {
+  const topEdge = (el: Element): { color: string; width: string } => {
     const s = getComputedStyle(el)
     return { color: s.borderTopColor, width: s.borderTopWidth }
+  }
+
+  // The real, resolved top edge must be the override colour at 4px: a band, not
+  // an outline (the other three edges stay unpainted).
+  const band = await accented.evaluate(topEdge)
+  expect(band.color).toBe(OVERRIDE_RGB)
+  expect(band.width).toBe('4px')
+  const sides = await accented.evaluate((el) => {
+    const s = getComputedStyle(el)
+    return [s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth]
   })
-  expect(border.color).toBe(OVERRIDE_RGB)
-  expect(border.width).toBe('2px')
+  expect(sides).toEqual(['0px', '0px', '0px'])
+
+  // A kind with no colour has no band at all.
+  const none = await neutral.evaluate(topEdge)
+  expect(none.width).toBe('0px')
 })

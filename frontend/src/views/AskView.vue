@@ -431,10 +431,10 @@ onMounted(() => {
             class="mx-auto flex min-h-[50dvh] max-w-md flex-col items-center justify-center gap-5 text-center"
           >
             <div>
-              <h2 class="text-2xl font-semibold text-gray-800 dark:text-gray-100">
+              <h2 class="text-2xl font-[650] text-ink">
                 Ask your documents
               </h2>
-              <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+              <p class="mt-2 text-sm text-ink-secondary">
                 Ask a question in plain language and get an answer with citations.
               </p>
             </div>
@@ -444,7 +444,7 @@ onMounted(() => {
                 :key="prompt"
                 type="button"
                 data-testid="ask-example-prompt"
-                class="rounded-xl border border-gray-200 px-4 py-2.5 text-left text-sm text-gray-700 transition hover:border-violet-400 hover:bg-violet-50 dark:border-gray-700/60 dark:text-gray-200 dark:hover:bg-violet-500/10"
+                class="rounded-sm border border-control-border px-4 py-2.5 text-left text-sm text-ink transition hover:bg-tile"
                 @click="usePrompt(prompt)"
               >
                 {{ prompt }}
@@ -466,7 +466,7 @@ onMounted(() => {
            page, not as another surface. -->
       <div
         aria-hidden="true"
-        class="pointer-events-none absolute inset-x-0 -top-8 h-8 bg-linear-to-t from-(--app-canvas) to-transparent dark:from-gray-900"
+        class="pointer-events-none absolute inset-x-0 -top-8 h-8 bg-linear-to-t from-canvas to-transparent"
       ></div>
       <div class="mx-auto w-full max-w-3xl">
         <AskComposer

@@ -1,0 +1,42 @@
+<!-- @dsCard group="Messages" height=250 subtitle="A decision over the page" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dialog — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Buttons */
+.lb-btn { font: 600 13.5px/1 var(--font-sans); display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: var(--radius-sm); border: 1px solid var(--control-border); background: var(--panel); color: var(--ink); white-space: nowrap; cursor: pointer; text-decoration: none; box-sizing: border-box; }
+.lb-btn:hover, .lb-btn.is-hover { background: var(--tile); }
+.lb-btn.primary { background: var(--brand-fill); border-color: var(--brand-fill); color: var(--on-brand); }
+.lb-btn.primary:hover, .lb-btn.primary.is-hover { filter: brightness(1.1); }
+.lb-btn.ghost { border-color: transparent; background: transparent; color: var(--brand); }
+.lb-btn.icon { width: 34px; padding: 0; justify-content: center; }
+.lb-btn.round { border-radius: var(--radius-full); }
+.lb-btn[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+
+.lb-scrim { background: var(--tile); padding: var(--space-6) var(--space-4); display: grid; grid-template-columns: minmax(0, 420px); justify-content: center; }
+.lb-dialog { width: 100%; box-sizing: border-box; background: var(--panel); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); padding: var(--space-6); display: grid; gap: 10px; }
+.lb-dialog h2 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 650; }
+.lb-dialog p { margin: 0; color: var(--ink-secondary); }
+.lb-acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+@media (max-width: 640px) { .lb-dialog { padding: var(--space-5); } }
+</style>
+</head>
+<body>
+<div class="lb-scrim"><div class="lb-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-t"><h2 id="dlg-t">Delete permanently?</h2><p>“Annual energy statement 2026” will be deleted for good, with its comments and history. This can't be undone.</p><div class="lb-acts"><button class="lb-btn">Cancel</button><button class="lb-btn primary">Delete permanently</button></div></div></div>
+</body>
+</html>

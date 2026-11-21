@@ -36,9 +36,11 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for notable changes and
   any bar or any footer count to the documents behind it, where labels and
   payment merges can be corrected in place. See
   [`docs/spending-view.md`](docs/spending-view.md).
-- **Web app:** Vue 3 SPA styled with the Mosaic design language (Cruip) —
-  Tailwind 4, the Inter typeface, a violet accent, and dark mode —
-  installable on iOS/Android, responsive to 320px.
+- **Web app:** Vue 3 SPA on Library's design system, "Quiet", shared with
+  Family Finances (Tailwind 4, self-hosted Inter, violet for actions, cards
+  without outlines, light and dark themes from one set of tokens; see
+  [`docs/brand.md`](docs/brand.md)). Installable on iOS/Android, responsive
+  to 320px.
 - **Live jobs & notifications:** a Jobs view of current and historical
   background work, a navbar running-jobs indicator, and toasts when a
   document finishes — pushed live over Server-Sent Events (no polling).
@@ -54,8 +56,9 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for notable changes and
 
 - **Backend:** Python 3.13, FastAPI, SQLAlchemy 2 (async), PostgreSQL 17,
   Procrastinate (Postgres-native job queue) — managed with [uv](https://docs.astral.sh/uv/)
-- **Frontend:** Vue 3 + TypeScript, Vite, vue-router, Pinia — Mosaic design
-  language (Tailwind 4 + Inter), see [`docs/frontend.md`](docs/frontend.md)
+- **Frontend:** Vue 3 + TypeScript, Vite, vue-router, Pinia, Tailwind 4 on the
+  design system in [`brand/design-system/`](brand/design-system/) — see
+  [`docs/brand.md`](docs/brand.md) and [`docs/frontend.md`](docs/frontend.md)
 - **Deployment:** Docker Compose (api + worker + db; the api image also
   serves the built frontend); images published to
   `ghcr.io/johnmathews/library`
@@ -101,14 +104,16 @@ docker compose up --build
 Run the checks CI runs:
 
 ```bash
-make lint test                      # backend
+make lint test                      # backend, docs stamps and the design-system gate
 cd frontend && npm run lint && npm run type-check && npm run test:unit
 ```
 
 ## Documentation
 
-Project documentation lives in [`docs/`](docs/) — architecture,
-deployment, API, MCP, ingestion, frontend, admin role & views, jobs &
+Project documentation lives in [`docs/`](docs/), indexed in
+[`docs/README.md`](docs/README.md) — architecture, deployment, API, MCP,
+ingestion, frontend, the brand and design system
+([`docs/brand.md`](docs/brand.md)), admin role & views, jobs &
 notifications, paperless migration, and the OCR benchmark. Operational
 runbooks live in [`docs/runbooks/`](docs/runbooks/) — e.g. the
 [deploy runbook](docs/runbooks/deploy.md) (`make deploy` verifies the

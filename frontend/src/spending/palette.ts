@@ -3,8 +3,8 @@
  * bands every chart component draws (spec §4.12, §9.2).
  *
  * A split axis can carry far more distinct values than a stacked bar can
- * legibly show, and the shared six-slot palette (`@/utils/splitPalette`) has
- * exactly six colours to hand out. This module is the one place that: sums
+ * legibly show, and the shared five-slot palette (`@/utils/splitPalette`) has
+ * exactly five colours to hand out. This module is the one place that: sums
  * cell totals per split value in exact integer cents; decides which values
  * are big enough to earn their own band and folds the rest into a single
  * "Other" bucket without losing a cent of the total; fixes a deterministic
@@ -17,14 +17,15 @@
  */
 
 import type { Cell, SplitValue } from '@/api/spending'
-import { deriveSlot, SPLIT_PALETTE } from '@/utils/splitPalette'
+import { deriveSlot, OTHER_COLOUR, SPLIT_PALETTE, slotForStored } from '@/utils/splitPalette'
 import { toCents } from './money'
 
 /** Sentinel band value for the folded tail. Never a real split value. */
 export const OTHER_VALUE = Symbol.for('spending.other')
 
-/** Fixed colour for the Other band (gray-400) — it never claims a palette slot. */
-export const OTHER_COLOUR = { light: '#9ca3af', dark: '#9ca3af' } as const
+// Re-exported so a consumer of `bands()` names the Other colour from the same
+// module it reads bands from.
+export { OTHER_COLOUR }
 
 const MAX_BANDS = SPLIT_PALETTE.length
 
@@ -39,8 +40,13 @@ const cmpKey = (a: string | null, b: string | null): number =>
 export interface Band {
   value: string | null | typeof OTHER_VALUE
   label: string
-  light: string
-  dark: string
+  /**
+   * What paints the band: a palette role as a CSS reference
+   * (`var(--category-3)`, `var(--category-other)`), or an owner's stored hex
+   * from outside the palette, verbatim. A DOM swatch paints it directly; a
+   * canvas resolves it with `chartColour()`.
+   */
+  colour: string
   totalCents: number
   members: SplitValue[]
   isOther: boolean
@@ -70,7 +76,7 @@ type Survivor =
  * `splits` is empty for an unsplit chart, in which case there are no bands
  * at all (the chart draws a single unstacked series). Otherwise every entry
  * in `splits` gets a band — even one with no matching cells, which is a real
- * zero, not an absence — until more than six survive the rank, at which
+ * zero, not an absence — until more than five survive the rank, at which
  * point the lowest-ranked tail folds into one `Other` band.
  */
 export function bands(splits: SplitValue[], cells: Cell[]): Band[] {
@@ -86,7 +92,7 @@ export function bands(splits: SplitValue[], cells: Cell[]): Band[] {
 
   // Rank order decides what folds: total descending, ties broken by key
   // ascending so a forced tie (e.g. every band at the same total) still
-  // picks a fixed six, not whatever order the caller happened to pass.
+  // picks a fixed five, not whatever order the caller happened to pass.
   const ranked: Ranked[] = splits.map((s) => ({
     value: s.value,
     label: s.label,
@@ -127,7 +133,7 @@ export function bands(splits: SplitValue[], cells: Cell[]): Band[] {
   })
 
   const taken = new Set<number>()
-  const resolved = new Map<number, { light: string; dark: string }>()
+  const resolved = new Map<number, string>()
 
   // Pass 1: a stored colour claims its slot before any derived one is
   // handed out, so an owner's override always wins — but only the FIRST
@@ -141,14 +147,15 @@ export function bands(splits: SplitValue[], cells: Cell[]): Band[] {
   // at all is still used verbatim and claims nothing (unchanged).
   survivors.forEach((s, i) => {
     if (s.isOther || s.colour === null) return
-    const idx = SPLIT_PALETTE.findIndex((slot) => slot.light === s.colour)
-    if (idx === -1) {
-      resolved.set(i, { light: s.colour, dark: s.colour })
+    const slot = slotForStored(s.colour)
+    if (!slot) {
+      resolved.set(i, s.colour)
       return
     }
+    const idx = SPLIT_PALETTE.indexOf(slot)
     if (taken.has(idx)) return // collides with an earlier claimant — pass 2 resolves it
     taken.add(idx)
-    resolved.set(i, { light: SPLIT_PALETTE[idx]!.light, dark: SPLIT_PALETTE[idx]!.dark })
+    resolved.set(i, slot.colour)
   })
 
   // Pass 2: everything pass 1 didn't resolve — colour-less survivors AND
@@ -165,16 +172,14 @@ export function bands(splits: SplitValue[], cells: Cell[]): Band[] {
       steps++
     }
     taken.add(idx)
-    resolved.set(i, { light: SPLIT_PALETTE[idx]!.light, dark: SPLIT_PALETTE[idx]!.dark })
+    resolved.set(i, SPLIT_PALETTE[idx]!.colour)
   })
 
   return survivors.map((s, i) => {
-    const colour = s.isOther ? OTHER_COLOUR : resolved.get(i)!
     return {
       value: s.value,
       label: s.label,
-      light: colour.light,
-      dark: colour.dark,
+      colour: s.isOther ? OTHER_COLOUR : resolved.get(i)!,
       totalCents: s.totalCents,
       members: s.isOther ? s.members : [{ value: s.value, label: s.label, colour: s.colour }],
       isOther: s.isOther,

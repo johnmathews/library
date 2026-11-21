@@ -118,21 +118,21 @@ function money(amount: string, currency: string | null): string {
 
 <template>
   <div data-testid="drill-cell-body">
-    <p class="mb-4 text-sm text-gray-500 dark:text-gray-400" data-testid="drill-cell-context">
+    <p class="mb-4 text-sm text-ink-secondary" data-testid="drill-cell-context">
       {{ chartName }}<span v-if="cell?.label">&nbsp;&middot; {{ cell.label }}</span>
     </p>
 
-    <p v-if="error" role="alert" class="text-sm text-red-600 dark:text-red-400" data-testid="drill-error">
+    <p v-if="error" role="alert" class="text-sm text-error-ink" data-testid="drill-error">
       {{ error }}
     </p>
 
-    <p v-else-if="loading" class="text-sm text-gray-500 dark:text-gray-400" data-testid="drill-loading">
+    <p v-else-if="loading" class="text-sm text-ink-secondary" data-testid="drill-loading">
       Loading…
     </p>
 
     <template v-else-if="cell">
       <p
-        class="mb-4 text-lg font-semibold tabular-nums text-gray-800 dark:text-gray-100"
+        class="mb-4 text-lg font-[650] tabular-nums text-ink"
         :data-amount="cell.total"
         data-testid="drill-cell-total"
       >
@@ -143,11 +143,11 @@ function money(amount: string, currency: string | null): string {
         <li
           v-for="payment in cell.payments"
           :key="payment.payment_id"
-          class="flex flex-col gap-3 border-t border-gray-200 pt-4 first:border-t-0 first:pt-0 dark:border-gray-700/60"
+          class="flex flex-col gap-3 border-t border-line pt-4 first:border-t-0 first:pt-0"
           data-testid="drill-payment"
         >
           <p
-            class="text-sm font-medium tabular-nums text-gray-800 dark:text-gray-100"
+            class="text-sm font-medium tabular-nums text-ink"
             :data-amount="payment.total"
             data-testid="drill-payment-total"
           >
@@ -157,7 +157,7 @@ function money(amount: string, currency: string | null): string {
           <div
             v-for="doc in payment.documents"
             :key="doc.id"
-            class="flex flex-col gap-2 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40"
+            class="flex flex-col gap-2 rounded-md bg-tile p-3"
             data-testid="drill-document"
           >
             <div class="flex items-baseline justify-between gap-3">
@@ -165,7 +165,7 @@ function money(amount: string, currency: string | null): string {
                 {{ doc.title ?? `Document #${doc.id}` }}
               </RouterLink>
               <span
-                class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100"
+                class="shrink-0 tabular-nums text-ink"
                 :data-amount="doc.amount ?? undefined"
                 data-testid="drill-document-amount"
               >
@@ -173,7 +173,7 @@ function money(amount: string, currency: string | null): string {
                 <template v-else>No amount recorded</template>
               </span>
             </div>
-            <p class="text-xs text-gray-500 dark:text-gray-400">
+            <p class="text-xs text-ink-secondary">
               <span v-if="doc.amount_kind">{{ doc.amount_kind }}</span>
               <span v-if="formatDate(doc.date)"> &middot; {{ formatDate(doc.date) }}</span>
               <span v-if="doc.reference"> &middot; {{ doc.reference }}</span>
@@ -191,7 +191,7 @@ function money(amount: string, currency: string | null): string {
         </li>
       </ul>
 
-      <p v-else class="text-sm text-gray-500 dark:text-gray-400" data-testid="drill-empty">
+      <p v-else class="text-sm text-ink-secondary" data-testid="drill-empty">
         No payments in this period.
       </p>
     </template>

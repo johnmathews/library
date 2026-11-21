@@ -191,7 +191,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
       </h3>
       <p v-for="entry in successes" :key="entry.key">
         <RouterLink
-          class="text-violet-600 dark:text-violet-400 underline"
+          class="text-brand underline"
           :to="{ name: 'document-detail', params: { id: entry.documentId! } }"
         >
           {{ entry.name }}
@@ -203,7 +203,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
       <p v-for="entry in duplicates" :key="entry.key">
         {{ entry.name }} is already in your library.
         <RouterLink
-          class="text-violet-600 dark:text-violet-400 underline"
+          class="text-brand underline"
           :to="{ name: 'document-detail', params: { id: entry.documentId! } }"
         >
           View the document</RouterLink
@@ -239,7 +239,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
         :key="entry.key"
         class="flex items-center gap-3 card px-4 py-3"
       >
-        <span class="flex-1 min-w-0 truncate text-sm text-gray-800 dark:text-gray-100">{{
+        <span class="flex-1 min-w-0 truncate text-sm text-ink">{{
           entry.name
         }}</span>
         <AppProgressBar
@@ -253,7 +253,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
         </AppBadge>
         <RouterLink
           v-if="entry.phase === 'indexed' && entry.documentId !== null"
-          class="text-sm text-violet-600 dark:text-violet-400 underline whitespace-nowrap"
+          class="text-sm font-semibold text-brand hover:underline whitespace-nowrap"
           :to="{ name: 'document-detail', params: { id: entry.documentId } }"
         >
           View<span class="sr-only"> {{ entry.name }}</span>

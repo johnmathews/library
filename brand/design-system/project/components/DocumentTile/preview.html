@@ -1,0 +1,72 @@
+<!-- @dsCard group="Documents" height=730 subtitle="A document's tile with its type band" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DocumentTile — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Tag chips */
+.lb-tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; border-radius: var(--radius-full); background: var(--tile); color: var(--ink); font-size: 12.5px; line-height: 16px; font-weight: 600; white-space: nowrap; box-sizing: border-box; }
+.lb-tag .lb-i { width: 14px; height: 14px; }
+.lb-tag.attn { background: var(--attention-tint); color: var(--attention); }
+.lb-tag.fail { background: var(--deficit-tint); color: var(--error-ink); }
+.lb-tag button { all: unset; display: inline-grid; place-items: center; margin-right: -4px; border-radius: var(--radius-full); cursor: pointer; }
+
+.lb-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--space-6); }
+.lb-dt { position: relative; align-self: start; background: var(--panel); border-radius: var(--radius-md); box-shadow: var(--shadow-card); overflow: hidden; display: grid; }
+.lb-dt[style*="--kind"] { border-top: 4px solid var(--kind); }
+.lb-dt:hover .title a, .lb-dt .title a:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.thumb { aspect-ratio: 4 / 3; background: var(--tile); display: grid; place-items: center; overflow: hidden; }
+.page { width: 60%; height: 110%; margin-top: 18%; box-sizing: border-box; background: var(--panel); border-radius: 2px; box-shadow: var(--shadow-card); padding: 12% 10%; display: grid; align-content: start; gap: 7px; }
+.page i { display: block; height: 4px; border-radius: 2px; background: var(--line); }
+.page i.h { height: 7px; width: 55%; background: var(--control-border); margin-bottom: 6px; }
+.page i.s { width: 40%; } .page i.m { width: 75%; }
+.facs { width: 100%; box-sizing: border-box; padding: 12px 14px; display: grid; gap: 4px; font-size: 12.5px; line-height: 16px; color: var(--ink-secondary); align-self: start; }
+.facs b { color: var(--ink); font-size: 13px; line-height: 18px; }
+.facs i { font-style: normal; font-weight: 600; }
+.body { padding: 14px 16px 16px; display: grid; gap: 8px; align-content: start; }
+.title { margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; }
+.title a { color: var(--ink); text-decoration: none; }
+.title a::after { content: ""; position: absolute; inset: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.line { margin: 0; font-size: 13px; line-height: 18px; color: var(--ink-secondary); }
+.sum { margin: 0; font-size: 13px; line-height: 18px; color: var(--ink-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 640px) {
+  .lb-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+  .body { padding: 10px 10px 12px; gap: 6px; }
+  .title { font-size: 14px; line-height: 18px; }
+  .sum { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="lb-pad"><ul class="lb-grid">
+  <li class="lb-dt" style="--kind: var(--category-3)">
+      <div class="thumb"><div class="page"><i class="h"></i><i></i><i class="m"></i><i></i><i class="s"></i></div></div>
+      <div class="body"><h2 class="title"><a href="#">Annual energy statement 2026</a></h2><div class="chips"><span class="lb-tag attn">Needs review</span><span class="lb-tag">Invoice</span></div><p class="line">Energiebedrijf Noord<br>14 Nov 2026 · <span class="lb-num">€1,284.50 due</span></p><p class="sum">Final statement for the year. The balance is due by 28 Nov.</p></div>
+    </li><li class="lb-dt" style="--kind: var(--category-2)">
+      <div class="thumb"><div class="page"><i class="h"></i><i></i><i class="m"></i><i></i><i class="s"></i></div></div>
+      <div class="body"><h2 class="title"><a href="#">Dental check-up receipt</a></h2><div class="chips"><span class="lb-tag">Receipt</span></div><p class="line">Tandartspraktijk De Kroon<br>11 Nov 2026 · <span class="lb-num">€86.00 paid</span></p><p class="sum">Routine check-up and cleaning, paid by card.</p></div>
+    </li><li class="lb-dt">
+      <div class="thumb"><div class="facs"><b>Re: moving the boiler service</b><span><i>From</i> Installatiebedrijf Zuid</span><span><i>Date</i> 7 Nov 2026</span></div></div>
+      <div class="body"><h2 class="title"><a href="#">Re: moving the boiler service</a></h2><div class="chips"><span class="lb-tag">Email</span></div><p class="line">Installatiebedrijf Zuid<br>7 Nov 2026</p><p class="sum">They can come on 3 Dec between 8:00 and 12:00.</p></div>
+    </li><li class="lb-dt" style="--kind: var(--category-5)">
+      <div class="thumb"><div class="page"><i class="h"></i><i></i><i class="m"></i><i></i><i class="s"></i></div></div>
+      <div class="body"><h2 class="title"><a href="#">Untitled document</a></h2><div class="chips"><span class="lb-tag fail"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg>Failed</span><span class="lb-tag">Contract</span></div><p class="line">No sender yet<br>Received 6 Nov 2026</p></div>
+    </li>
+</ul></div>
+</body>
+</html>

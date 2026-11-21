@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The home-screen icon: favicon.svg's mark on a full-bleed square at 80%.
+       iOS and Android round the corners themselves, and Android's maskable
+       crop keeps the central 80%, which is where the mark sits. -->
+  <rect width="32" height="32" fill="#5d47de"/>
+  <g transform="translate(3.2 3.2) scale(0.8)" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 5H13L19 11V23A2 2 0 0 1 17 25H7A2 2 0 0 1 5 23V7A2 2 0 0 1 7 5Z"/>
+    <path d="M13 5V11H19"/>
+    <path d="M9 15H14M9 19H11"/>
+    <circle cx="20" cy="22" r="7" fill="#5d47de" stroke="none"/>
+    <circle cx="20" cy="22" r="5" fill="#5d47de"/>
+    <path d="M23.5 25.5L26 28" stroke-width="3"/>
+  </g>
+</svg>

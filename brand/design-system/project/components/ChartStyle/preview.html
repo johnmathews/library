@@ -1,0 +1,65 @@
+<!-- @dsCard group="Charts" height=890 subtitle="Split bars, one series with a refund, grid and legend" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChartStyle — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Card */
+.lb-card { background: var(--panel); border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: var(--space-5) 22px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.lb-card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.lb-card h2, .lb-h2 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 650; }
+.lb-sub { margin: -10px 0 0; color: var(--ink-secondary); font-size: 13px; line-height: 18px; }
+.lb-lead { margin: 0; color: var(--ink-secondary); font-size: 15px; line-height: 22px; }
+@media (max-width: 640px) { .lb-card { padding: var(--space-4); } }
+
+.lb-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: var(--space-6); align-items: start; }
+.lb-chart svg { width: 100%; max-width: 520px; height: auto; display: block; }
+.lb-chart text { fill: var(--ink-secondary); font-size: 11px; font-family: var(--font-sans); }
+.lb-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; list-style: none; font-size: 13px; line-height: 18px; color: var(--ink-secondary); }
+.lb-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.lb-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
+.lb-legend b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.lb-total { margin: 0; font-size: 22px; line-height: 28px; font-weight: 650; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.lb-foot { margin: 0; font-size: 13px; line-height: 18px; color: var(--ink-secondary); }
+@media (max-width: 640px) { .lb-charts { gap: var(--space-4); } }
+</style>
+</head>
+<body>
+<div class="lb-pad"><div class="lb-charts">
+<section class="lb-card lb-chart"><h2>Energy and water</h2><p class="lb-sub">How much goes to energy and water each month?</p>
+  <p class="lb-total">€991.00</p>
+  <svg viewBox="0 0 360 204" role="img" aria-label="Spending per month, split by sender, June to November">
+    <line x1="40" x2="360" y1="16" y2="16" style="stroke:var(--chart-grid)"/><line x1="40" x2="360" y1="96" y2="96" style="stroke:var(--chart-grid)"/><line x1="40" x2="360" y1="176.5" y2="176.5" style="stroke:var(--control-border)"/>
+    <text x="32" y="180" text-anchor="end">€0</text><text x="32" y="100" text-anchor="end">€200</text><text x="32" y="20" text-anchor="end">€400</text>
+    <rect x="56" y="128.0" width="26" height="47.0" style="fill:var(--category-1)"/><rect x="56" y="111.6" width="26" height="15.4" style="fill:var(--category-2)"/><rect x="56" y="99.6" width="26" height="11.0" style="fill:var(--category-other)"/><text x="69" y="196" text-anchor="middle">Jun</text><rect x="106" y="128.8" width="26" height="46.2" style="fill:var(--category-1)"/><rect x="106" y="112.4" width="26" height="15.4" style="fill:var(--category-2)"/><text x="119" y="196" text-anchor="middle">Jul</text><rect x="156" y="173" width="26" height="3" rx="1.5" style="fill:var(--quiet)"/><text x="169" y="196" text-anchor="middle">Aug</text><rect x="206" y="126.4" width="26" height="48.6" style="fill:var(--category-1)"/><rect x="206" y="108.8" width="26" height="16.6" style="fill:var(--category-2)"/><rect x="206" y="88.0" width="26" height="19.8" style="fill:var(--category-other)"/><text x="219" y="196" text-anchor="middle">Sep</text><rect x="256" y="125.6" width="26" height="49.4" style="fill:var(--category-1)"/><rect x="256" y="109.2" width="26" height="15.4" style="fill:var(--category-2)"/><rect x="256" y="102.0" width="26" height="6.2" style="fill:var(--category-other)"/><text x="269" y="196" text-anchor="middle">Oct</text><rect x="306" y="123.6" width="26" height="51.4" style="fill:var(--category-1)"/><rect x="306" y="107.2" width="26" height="15.4" style="fill:var(--category-2)"/><rect x="306" y="81.6" width="26" height="24.6" style="fill:var(--category-other)"/><text x="319" y="196" text-anchor="middle">Nov</text>
+  </svg>
+  <ul class="lb-legend"><li><i style="background:var(--category-1)"></i>Energiebedrijf Noord <b>€619.00</b></li><li><i style="background:var(--category-2)"></i>Waterbedrijf West <b>€208.00</b></li><li><i style="background:var(--category-other)"></i>Other (2) <b>€164.00</b></li></ul>
+  <p class="lb-foot">No documents in August. 1 document is left out because its amount in pounds has no exchange rate.</p>
+</section>
+<section class="lb-card lb-chart"><h2>Household repairs</h2><p class="lb-sub">How much goes to repairs each month?</p>
+  <p class="lb-total">€795.00</p>
+  <svg viewBox="0 0 360 184" role="img" aria-label="Spending per month on repairs, with one refund in October">
+    <line x1="40" x2="360" y1="30" y2="30" style="stroke:var(--chart-grid)"/><line x1="40" x2="360" y1="75" y2="75" style="stroke:var(--chart-grid)"/><line x1="40" x2="360" y1="150" y2="150" style="stroke:var(--chart-grid)"/><line x1="40" x2="360" y1="120.5" y2="120.5" style="stroke:var(--control-border)"/>
+    <text x="32" y="124" text-anchor="end">€0</text><text x="32" y="79" text-anchor="end">€150</text><text x="32" y="34" text-anchor="end">€300</text><text x="32" y="154" text-anchor="end">−€100</text>
+    <rect x="56" y="64.2" width="26" height="55.8" rx="3" style="fill:var(--chart-spending)"/><text x="69" y="176" text-anchor="middle">Jun</text><rect x="106" y="97.8" width="26" height="22.2" rx="3" style="fill:var(--chart-spending)"/><text x="119" y="176" text-anchor="middle">Jul</text><rect x="156" y="117" width="26" height="3" rx="1.5" style="fill:var(--quiet)"/><text x="169" y="176" text-anchor="middle">Aug</text><rect x="206" y="56.4" width="26" height="63.6" rx="3" style="fill:var(--chart-spending)"/><text x="219" y="176" text-anchor="middle">Sep</text><rect x="256" y="76.5" width="26" height="43.5" rx="3" style="fill:var(--chart-spending)"/><rect x="256" y="121" width="26" height="18.0" rx="3" style="fill:var(--chart-income)"/><text x="269" y="176" text-anchor="middle">Oct</text><rect x="306" y="48.6" width="26" height="71.4" rx="3" style="fill:var(--chart-spending)"/><text x="319" y="176" text-anchor="middle">Nov</text>
+  </svg>
+  <ul class="lb-legend"><li><i style="background:var(--chart-spending)"></i>Spent <b>€855.00</b></li><li><i style="background:var(--chart-income)"></i>Refunded <b>+€60.00</b></li></ul>
+  <p class="lb-foot">Refunds are subtracted. Each payment counts once, even when several documents show it.</p>
+</section>
+</div></div>
+</body>
+</html>

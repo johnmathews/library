@@ -1,0 +1,71 @@
+<!-- @dsCard group="Documents" height=630 subtitle="A document's details, label beside value" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SummaryList — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Card */
+.lb-card { background: var(--panel); border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: var(--space-5) 22px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.lb-card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.lb-card h2, .lb-h2 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 650; }
+.lb-sub { margin: -10px 0 0; color: var(--ink-secondary); font-size: 13px; line-height: 18px; }
+.lb-lead { margin: 0; color: var(--ink-secondary); font-size: 15px; line-height: 22px; }
+@media (max-width: 640px) { .lb-card { padding: var(--space-4); } }
+
+/* Links */
+.lb-link { color: var(--brand); font-weight: 600; text-decoration: none; }
+.lb-link:hover, .lb-link.is-hover { text-decoration: underline; text-underline-offset: 3px; }
+.lb-link.inline { font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+.lb-link.quiet { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.lb-back { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+
+/* Tag chips */
+.lb-tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; border-radius: var(--radius-full); background: var(--tile); color: var(--ink); font-size: 12.5px; line-height: 16px; font-weight: 600; white-space: nowrap; box-sizing: border-box; }
+.lb-tag .lb-i { width: 14px; height: 14px; }
+.lb-tag.attn { background: var(--attention-tint); color: var(--attention); }
+.lb-tag.fail { background: var(--deficit-tint); color: var(--error-ink); }
+.lb-tag button { all: unset; display: inline-grid; place-items: center; margin-right: -4px; border-radius: var(--radius-full); cursor: pointer; }
+
+dl { margin: 0; display: grid; grid-template-columns: 150px minmax(0, 1fr); }
+dt, dd { margin: 0; padding: 10px 0; border-top: 1px solid var(--line); }
+dt:first-of-type, dt:first-of-type + dd { border-top: 0; }
+dt { color: var(--ink-secondary); font-size: 13px; line-height: 21px; font-weight: 600; }
+dd { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.missing { color: var(--ink-secondary); }
+@media (max-width: 640px) {
+  dl { grid-template-columns: 1fr; }
+  dt { padding-bottom: 0; }
+  dd { border-top: 0; padding-top: 2px; }
+}
+</style>
+</head>
+<body>
+<div class="lb-pad"><section class="lb-card">
+  <div class="lb-card-head"><h2>Details</h2><a class="lb-link" href="#">Edit details</a></div>
+  <dl>
+    <dt>Kind</dt><dd><span class="lb-tag">Invoice</span></dd>
+    <dt>Sender</dt><dd>Energiebedrijf Noord</dd>
+    <dt>Recipient</dt><dd>The household</dd>
+    <dt>Date on document</dt><dd>14 Nov 2026</dd>
+    <dt>Amount</dt><dd><span><span class="lb-num">€1,284.50</span> due by 28 Nov 2026</span></dd>
+    <dt>Tags</dt><dd><span class="lb-tag">Energy</span><span class="lb-tag">House</span></dd>
+    <dt>Matter</dt><dd class="missing">None yet</dd>
+    <dt>File</dt><dd class="lb-mono">jaarafrekening-2026.pdf</dd>
+  </dl>
+</section></div>
+</body>
+</html>

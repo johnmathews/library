@@ -58,15 +58,15 @@ function money(amount: string): string {
       <li v-for="row in rows" :key="row.value ?? '__null__'">
         <button
           type="button"
-          class="flex w-full items-baseline justify-between gap-3 rounded-lg px-2 py-1 text-left transition hover:bg-gray-100 dark:hover:bg-gray-700/50"
+          class="flex w-full items-baseline justify-between gap-3 rounded-sm px-2 py-1 text-left transition hover:bg-tile"
           data-testid="drill-other-row"
           @click="emit('pick', row.value)"
         >
-          <span class="min-w-0 truncate text-gray-800 dark:text-gray-100" data-testid="drill-other-label">
+          <span class="min-w-0 truncate text-ink" data-testid="drill-other-label">
             {{ row.label }}
           </span>
           <span
-            class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100"
+            class="shrink-0 tabular-nums text-ink"
             :data-amount="row.amount"
             data-testid="drill-other-amount"
           >
@@ -75,7 +75,7 @@ function money(amount: string): string {
         </button>
       </li>
     </ul>
-    <p v-else class="text-sm text-gray-500 dark:text-gray-400" data-testid="drill-empty">
+    <p v-else class="text-sm text-ink-secondary" data-testid="drill-empty">
       Nothing folded into Other for this period.
     </p>
   </div>

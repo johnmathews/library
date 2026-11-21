@@ -1,7 +1,7 @@
 # Documentation
 
-**Status:** active. **Last updated:** 2026-11-07 (the `llm-backends.md` row names the tool lockdown and subscription pricing; the `observability.md` row adds input size per model call). Earlier entries are in this file's history.
-**Last verified:** 2026-11-07 — method: partial, scoped to those two rows, read against `llm-backends.md` §3 and `observability.md` §3; `uv run python scripts/check_docs.py` clean. No row was added or removed.
+**Status:** active. **Last updated:** 2026-11-21 (adds `brand.md` and the visual-change pointer in §1; the `frontend.md` and `frontend-view-principles.md` rows name the design system). Earlier entries are in this file's history.
+**Last verified:** 2026-11-21 — method: partial, scoped to the three rows and the §1 pointer, read against `brand.md`, `frontend.md` §1.2 and `frontend-view-principles.md` §3; `uv run python scripts/check_docs.py` for the index rules. No other row changed.
 
 Reference documentation for Library — a self-hosted document archive (FastAPI
 backend + Vue 3 SPA, Postgres/pgvector, OCR ingestion, an MCP server, and an
@@ -15,6 +15,10 @@ New to the codebase? Read in this order:
 2. [`deployment.md`](deployment.md) — how to run it (local and on the live host); see also [`runbooks/deploy.md`](runbooks/deploy.md).
 3. [`api.md`](api.md) — the REST surface once the system is running.
 
+Changing anything visual (a screen, a component, a colour, an icon)? Read
+[`brand.md`](brand.md) first. A visual change starts as a mockup in
+`brand/design-system/mockups/` and waits for the owner's pick before any code.
+
 ## 2. Reference docs
 
 | Doc | What it covers |
@@ -27,8 +31,9 @@ New to the codebase? Read in this order:
 | [`mcp.md`](mcp.md) | The MCP server at `/mcp`: the tools LLM clients can call to search by keyword or meaning, read, total amounts, fetch files, ingest, write notes, edit and comment on documents, and OAuth sign-in for claude.ai and ChatGPT connectors (and Claude Code). |
 | [`llm-backends.md`](llm-backends.md) | The two ways library reaches Claude: metered API vs Claude subscription, which surfaces may use which, the tool lockdown that keeps the CLI's per-call cost to a few hundred tokens, how subscription cost is priced, and the credential runbook. |
 | [`observability.md`](observability.md) | What the app measures about itself: OpenTelemetry metrics for Ask (tokens by cache kind, cost, latency, tool-loop depth, input size per model call, errors) and for MCP tool calls (count and latency by tool and outcome, plus one log line per call), the Prometheus and OTLP exporters, and the content-logging guard that keeps document text out of telemetry. |
-| [`frontend.md`](frontend.md) | The Vue 3 SPA: views, components, stores, the Mosaic design language, dark mode, PWA wiring, tests. |
-| [`frontend-view-principles.md`](frontend-view-principles.md) | How to build a new view that is consistent the first time: layout, shared classes, form/filter recipes. |
+| [`brand.md`](brand.md) | The brand and design system: the Quiet direction shared with Family Finances, where the design system's source lives, how to change it and regenerate the app's tokens, mockups, the app icon, what each colour means, and the guards that hold the app to it. |
+| [`frontend.md`](frontend.md) | The Vue 3 SPA: views, components, stores, the design tokens and role utilities, dark mode, PWA wiring and icons, tests. |
+| [`frontend-view-principles.md`](frontend-view-principles.md) | How to build a new view that is consistent the first time: layout, the colour and component vocabulary, form/filter recipes. |
 | [`admin.md`](admin.md) | The admin role and admin views: users, taxonomy (senders/kinds/recipients), currencies, FX rates, business matters. |
 | [`jobs-and-notifications.md`](jobs-and-notifications.md) | Background jobs, the Jobs view, live SSE toasts, and Pushover notifications. |
 | [`facets.md`](facets.md) | The controlled facet vocabulary that replaced free-form tags: what a facet is, the shipped vocabulary, the closed-set rule and suggestion queue, vocabulary CRUD and its costs, `library label-archive`/`library recipients`, and the REST surface. |

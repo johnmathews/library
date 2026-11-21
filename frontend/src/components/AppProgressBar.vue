@@ -18,7 +18,7 @@ const clamped = computed(() => Math.max(0, Math.min(100, Math.round(props.value)
 <template>
   <div class="flex items-center gap-2">
     <div
-      class="flex-1 bg-gray-200 dark:bg-gray-700/60 rounded-full h-2 overflow-hidden"
+      class="flex-1 bg-tile rounded-full h-2 overflow-hidden"
       role="progressbar"
       :aria-label="props.label"
       :aria-valuenow="clamped"
@@ -26,10 +26,10 @@ const clamped = computed(() => Math.max(0, Math.min(100, Math.round(props.value)
       aria-valuemax="100"
     >
       <div
-        class="bg-violet-500 h-full rounded-full transition-all"
+        class="bg-brand-fill h-full rounded-full transition-all"
         :style="{ width: `${clamped}%` }"
       ></div>
     </div>
-    <span class="text-xs text-gray-500 tabular-nums" aria-hidden="true">{{ clamped }}%</span>
+    <span class="text-xs text-ink-secondary tabular-nums" aria-hidden="true">{{ clamped }}%</span>
   </div>
 </template>

@@ -75,7 +75,7 @@ function onDialogClick(event: MouseEvent): void {
 <template>
   <dialog
     ref="dialog"
-    class="app-confirm-dialog bg-white dark:bg-gray-800 shadow-lg p-0 backdrop:bg-gray-900/40"
+    class="app-confirm-dialog bg-panel shadow-lg p-0 backdrop:bg-ink/40"
     :aria-labelledby="'confirm-dialog-title'"
     data-testid="confirm-dialog"
     @close="onClose"
@@ -85,18 +85,18 @@ function onDialogClick(event: MouseEvent): void {
     <div class="p-5 max-w-sm">
       <h2
         id="confirm-dialog-title"
-        class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2"
+        class="text-lg font-semibold text-ink mb-2"
       >
         {{ props.title }}
       </h2>
-      <p v-if="props.message" class="text-sm text-gray-600 dark:text-gray-300 mb-5">
+      <p v-if="props.message" class="text-sm text-ink-secondary mb-5">
         {{ props.message }}
       </p>
       <div class="flex items-center justify-end gap-3">
         <button
           ref="cancelButton"
           type="button"
-          class="text-sm text-gray-500 dark:text-gray-400 underline disabled:opacity-50"
+          class="btn bg-panel border-control-border text-ink hover:bg-tile disabled:opacity-50"
           :disabled="props.busy"
           data-testid="confirm-cancel"
           @click="cancel"
@@ -104,7 +104,7 @@ function onDialogClick(event: MouseEvent): void {
           Cancel
         </button>
         <AppButton
-          variant="warning"
+          variant="primary"
           type="button"
           :disabled="props.busy"
           data-testid="confirm-accept"

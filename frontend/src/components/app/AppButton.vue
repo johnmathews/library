@@ -23,11 +23,15 @@ const props = withDefaults(
 const emit = defineEmits<{ (e: 'click', event: MouseEvent): void }>()
 
 const variantClasses: Record<NonNullable<typeof props.variant>, string> = {
-  primary: 'bg-violet-500 hover:bg-violet-600 text-white',
-  secondary:
-    'border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-800 dark:text-gray-300',
-  warning: 'bg-red-500 hover:bg-red-600 text-white',
-  inverse: 'bg-white text-violet-600 hover:bg-gray-100',
+  // Design system: Button. One primary per screen; everything else is outline.
+  primary: 'bg-brand-fill text-on-brand hover:brightness-110',
+  secondary: 'bg-panel border-control-border text-ink hover:bg-tile',
+  // No red button (design system: Button): red means "failed". A destructive
+  // action opens a confirmation, whose confirming button is the primary.
+  // `warning` stays as a name so call sites need not change, and renders as
+  // the outline button.
+  warning: 'bg-panel border-control-border text-ink hover:bg-tile',
+  inverse: 'bg-panel text-brand hover:bg-tile',
 }
 
 const sizeClass = computed(() =>

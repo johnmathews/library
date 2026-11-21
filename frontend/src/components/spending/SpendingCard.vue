@@ -433,7 +433,7 @@ function confirmDeleteChart(): void {
         />
         <h3
           v-else
-          class="min-w-0 truncate text-sm font-semibold text-gray-800 dark:text-gray-100"
+          class="min-w-0 truncate text-base font-[650] text-ink"
         >
           <RouterLink
             :to="`/charts/${chart.id}`"
@@ -449,7 +449,7 @@ function confirmDeleteChart(): void {
         <template v-if="renaming">
           <button
             type="button"
-            class="text-xs font-medium text-violet-600 transition hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:text-violet-400 dark:hover:text-violet-300"
+            class="text-xs font-medium text-brand transition hover:underline disabled:cursor-not-allowed disabled:opacity-50"
             data-testid="spending-card-rename-save"
             :disabled="renameBusy || !renameValue.trim()"
             @click="saveRename"
@@ -458,7 +458,7 @@ function confirmDeleteChart(): void {
           </button>
           <button
             type="button"
-            class="text-xs text-gray-400 transition hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:text-gray-200"
+            class="text-xs text-ink-secondary transition hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
             data-testid="spending-card-rename-cancel"
             :disabled="renameBusy"
             @click="cancelRename"
@@ -471,7 +471,7 @@ function confirmDeleteChart(): void {
           <button
             ref="deleteConfirmButtonEl"
             type="button"
-            class="text-xs font-medium text-red-500 transition hover:text-red-600 dark:hover:text-red-400"
+            class="text-xs font-medium text-error-ink transition hover:underline"
             data-testid="spending-card-delete-confirm"
             @click="confirmDeleteChart"
           >
@@ -479,7 +479,7 @@ function confirmDeleteChart(): void {
           </button>
           <button
             type="button"
-            class="text-xs text-gray-400 transition hover:text-gray-600 dark:hover:text-gray-200"
+            class="text-xs text-ink-secondary transition hover:text-ink"
             data-testid="spending-card-delete-cancel"
             @click="cancelDeleteConfirm"
           >
@@ -499,7 +499,7 @@ function confirmDeleteChart(): void {
             <button
               :ref="triggerRef"
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700/60 dark:hover:text-gray-200"
+              class="flex h-7 w-7 items-center justify-center rounded-sm text-ink-secondary transition hover:bg-tile hover:text-ink"
               data-testid="spending-card-menu"
               :aria-label="`${chart.name} actions`"
               :aria-expanded="isOpen"
@@ -517,7 +517,7 @@ function confirmDeleteChart(): void {
           <button
             type="button"
             role="menuitem"
-            class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:text-gray-200 dark:hover:bg-gray-700/60"
+            class="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-left text-sm text-ink transition hover:bg-tile disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
             data-testid="spending-card-move-up"
             :disabled="!canMoveUp"
             @click="chooseMoveUp"
@@ -530,7 +530,7 @@ function confirmDeleteChart(): void {
           <button
             type="button"
             role="menuitem"
-            class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:text-gray-200 dark:hover:bg-gray-700/60"
+            class="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-left text-sm text-ink transition hover:bg-tile disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
             data-testid="spending-card-move-down"
             :disabled="!canMoveDown"
             @click="chooseMoveDown"
@@ -540,11 +540,11 @@ function confirmDeleteChart(): void {
             </svg>
             Move down
           </button>
-          <div class="my-1 border-t border-gray-200 dark:border-gray-700/60" role="separator" />
+          <div class="my-1 border-t border-line" role="separator" />
           <button
             type="button"
             role="menuitem"
-            class="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700/60"
+            class="flex w-full items-center rounded-sm px-3 py-2 text-left text-sm text-ink transition hover:bg-tile"
             data-testid="spending-card-rename"
             @click="chooseRename"
           >
@@ -553,7 +553,7 @@ function confirmDeleteChart(): void {
           <button
             type="button"
             role="menuitem"
-            class="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-red-500 transition hover:bg-red-50 dark:hover:bg-red-500/10"
+            class="flex w-full items-center rounded-sm px-3 py-2 text-left text-sm text-ink transition hover:bg-tile"
             data-testid="spending-card-delete"
             @click="chooseDelete"
           >
@@ -565,13 +565,13 @@ function confirmDeleteChart(): void {
 
     <p
       v-if="renameError"
-      class="text-xs text-red-600 dark:text-red-400"
+      class="text-xs text-error-ink"
       data-testid="spending-card-rename-error"
     >
       {{ renameError }}
     </p>
 
-    <p v-if="error" class="text-sm text-red-600 dark:text-red-400" data-testid="spending-card-error">
+    <p v-if="error" class="text-sm text-error-ink" data-testid="spending-card-error">
       {{ error }}
     </p>
 
@@ -589,19 +589,19 @@ function confirmDeleteChart(): void {
         >
           {{ headlineLabel }}
         </p>
-        <p class="text-2xl font-semibold tabular-nums text-gray-900 dark:text-gray-50">
+        <p class="text-[22px] leading-7 font-[650] tabular-nums text-ink">
           {{ headlineFigure ?? '—' }}
         </p>
       </div>
 
       <p
         v-if="deltaGlyph"
-        class="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400"
+        class="flex items-center gap-1 text-sm text-ink-secondary"
         data-testid="spending-card-delta"
       >
         <span aria-hidden="true">{{ deltaGlyph }}</span>
         <span>{{ deltaFigure }}</span>
-        <span v-if="previousLabel" class="text-gray-400 dark:text-gray-500">vs {{ previousLabel }}</span>
+        <span v-if="previousLabel" class="text-ink-secondary">vs {{ previousLabel }}</span>
       </p>
 
       <div class="h-28 w-full">
@@ -626,7 +626,7 @@ function confirmDeleteChart(): void {
 
       <p
         v-if="attentionText"
-        class="text-xs text-amber-700 dark:text-amber-300/90"
+        class="text-xs text-attention"
         data-testid="spending-card-attention"
       >
         {{ attentionText }}

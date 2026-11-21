@@ -26,6 +26,7 @@ test:
 
 lint:
 	uv run ruff check . && uv run ruff format --check . && $(MAKE) lint-actions && \
+	python3 scripts/check_design_system.py brand/design-system --complete && \
 	uv run python scripts/build_journal_index.py --check && uv run mypy && \
 	$(MAKE) check-docs
 

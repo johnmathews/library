@@ -3,8 +3,10 @@
  * The `/charts` legend (spec §4.7).
  *
  * A display filter over the same `bands` prop `SpendingChart.vue` draws
- * from — it never derives a colour of its own, it renders `band.light` /
- * `band.dark` verbatim, exactly as the chart does. Click isolates a band
+ * from — it never derives a colour of its own, it renders `band.colour`
+ * verbatim, exactly as the chart does. That is a role reference
+ * (`var(--category-2)`) or an owner's stored hex, so the swatch follows the
+ * theme through CSS with no theme state of its own. Click isolates a band
  * (`isolate`); modifier-click (Cmd or Ctrl) excludes just that one
  * (`exclude`). Isolation and exclusion are both display filters the parent
  * applies as the `hidden` set on this component *and* on `SpendingChart` —
@@ -18,7 +20,6 @@
  * name already says what is plotted, and one colour needs no legend.
  */
 import { computed } from 'vue'
-import { useDark } from '@vueuse/core'
 import type { Band, OTHER_VALUE } from '@/spending/palette'
 import { formatMoney, fromCents } from '@/spending/money'
 
@@ -34,14 +35,6 @@ const emit = defineEmits<{
   exclude: [key: string | null | typeof OTHER_VALUE]
   reset: []
 }>()
-
-// Same call as ThemeToggle.vue / SpendingChart.vue — one source of truth for
-// "is dark active", reactive off the `html` class.
-const isDark = useDark({ selector: 'html' })
-
-function swatchColour(band: Band): string {
-  return isDark.value ? band.dark : band.light
-}
 
 function isHidden(band: Band): boolean {
   return props.hidden.has(band.value)
@@ -87,33 +80,33 @@ const anyHidden = computed(() => props.hidden.size > 0)
       v-for="band in bands"
       :key="typeof band.value === 'symbol' ? 'other' : (band.value ?? 'null')"
       type="button"
-      class="flex items-center gap-2 rounded-lg px-2 py-1 text-left transition hover:bg-gray-100 dark:hover:bg-gray-700/50"
+      class="flex items-center gap-2 rounded-sm px-2 py-1 text-left transition hover:bg-tile"
       :class="compact ? 'text-xs' : 'text-sm'"
       :aria-pressed="!isHidden(band)"
       data-testid="spending-legend-row"
       @click="onRowClick(band, $event)"
     >
       <span
-        class="h-3 w-3 shrink-0 rounded-full"
+        class="h-2.5 w-2.5 shrink-0 rounded-full"
         :class="{ 'opacity-40': isHidden(band) }"
-        :style="{ backgroundColor: swatchColour(band) }"
+        :style="{ backgroundColor: band.colour }"
         data-testid="spending-legend-swatch"
       />
       <span
-        class="min-w-0 flex-1 truncate text-gray-800 dark:text-gray-100"
+        class="min-w-0 flex-1 truncate text-ink"
         :class="{ 'opacity-60': isHidden(band) }"
       >
         {{ band.label }}
         <span
           v-if="band.isOther && !compact"
-          class="block truncate text-xs text-gray-500 dark:text-gray-400"
+          class="block truncate text-xs text-ink-secondary"
           data-testid="spending-legend-other-members"
         >
           {{ memberNames(band) }}
         </span>
       </span>
       <span
-        class="shrink-0 font-medium tabular-nums text-gray-800 dark:text-gray-100"
+        class="shrink-0 font-medium tabular-nums text-ink"
         :class="{ 'opacity-60': isHidden(band) }"
       >
         {{ amountOf(band) }}
@@ -122,7 +115,7 @@ const anyHidden = computed(() => props.hidden.size > 0)
     <button
       v-if="anyHidden"
       type="button"
-      class="self-start text-xs font-medium text-violet-600 hover:underline dark:text-violet-400"
+      class="self-start text-xs font-medium text-brand hover:underline"
       data-testid="spending-legend-reset"
       @click="emit('reset')"
     >

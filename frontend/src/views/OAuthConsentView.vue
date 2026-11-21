@@ -17,6 +17,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AppBanner, AppButton, AppErrorSummary } from '@/components/app'
+import AppLogo from '@/components/layout/AppLogo.vue'
 import { ApiError } from '@/api/client'
 import {
   approveAuthorizationRequest,
@@ -128,23 +129,24 @@ async function switchAccount(): Promise<void> {
 
 onMounted(load)
 
-const labelClass =
-  'block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400'
-const bodyClass = 'text-sm text-gray-600 dark:text-gray-300'
-const headingClass = 'text-2xl font-bold text-gray-800 dark:text-gray-100'
+const labelClass = 'block text-[13px] font-semibold text-ink-secondary'
+const bodyClass = 'text-sm text-ink-secondary'
+const headingClass = 'text-2xl font-[650] text-ink'
 </script>
 
 <template>
   <div
     id="oauth-consent-page"
-    class="min-h-[100dvh] flex items-start sm:items-center justify-center bg-gray-100 dark:bg-gray-900 px-4 py-8 sm:py-12"
+    class="min-h-[100dvh] flex items-start sm:items-center justify-center bg-canvas px-4 py-8 sm:py-12"
   >
     <main
       id="oauth-consent-card"
-      class="w-full max-w-lg bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6 sm:p-8"
+      class="card w-full max-w-lg p-6 sm:p-8"
       aria-labelledby="oauth-consent-title"
     >
-      <p class="text-sm font-semibold text-violet-500 mb-1">Library</p>
+      <div class="consent-logo mb-6" data-testid="consent-logo">
+        <AppLogo />
+      </div>
 
       <div v-if="state === 'loading'" id="oauth-consent-loading" data-testid="consent-loading" role="status">
         <h1 id="oauth-consent-title" :class="headingClass">Connect an app</h1>
@@ -210,11 +212,11 @@ const headingClass = 'text-2xl font-bold text-gray-800 dark:text-gray-100'
         <p :class="bodyClass" class="mt-2">Approve only if you started connecting it just now.</p>
 
         <dl class="mt-6 space-y-5">
-          <div id="oauth-consent-redirect" class="rounded-lg border border-violet-200 bg-violet-50 px-4 py-3 dark:border-violet-500/30 dark:bg-violet-500/10">
+          <div id="oauth-consent-redirect" class="rounded-md bg-tile px-4 py-3">
             <dt :class="labelClass">Sends you back to</dt>
             <dd class="mt-1">
               <span
-                class="block break-all font-mono text-lg font-semibold text-gray-800 dark:text-gray-100"
+                class="block break-all font-mono text-base font-[650] text-ink"
                 data-testid="consent-redirect-host"
               >{{ request.redirect_host }}</span>
               <span :class="bodyClass" class="mt-1 block">Check this is the app you started from.</span>
@@ -224,12 +226,12 @@ const headingClass = 'text-2xl font-bold text-gray-800 dark:text-gray-100'
           <div id="oauth-consent-account">
             <dt :class="labelClass">Connect as</dt>
             <dd class="mt-1">
-              <span class="block text-base font-medium text-gray-800 dark:text-gray-100" data-testid="consent-account">
+              <span class="block text-base font-medium text-ink" data-testid="consent-account">
                 {{ userLabel }}
               </span>
               <button
                 type="button"
-                class="mt-1 text-sm font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 cursor-pointer"
+                class="mt-1 text-sm font-medium text-brand hover:underline cursor-pointer"
                 :disabled="submitting"
                 data-testid="consent-switch-account"
                 @click="switchAccount"
@@ -242,7 +244,7 @@ const headingClass = 'text-2xl font-bold text-gray-800 dark:text-gray-100'
           <div id="oauth-consent-access">
             <dt :class="labelClass">{{ appName }} will be able to</dt>
             <dd class="mt-2" data-testid="consent-access">
-              <ul class="list-disc space-y-1 pl-5 text-sm text-gray-800 dark:text-gray-100">
+              <ul class="list-disc space-y-1 pl-5 text-sm text-ink">
                 <li>Search and read every document in the Library, including ones others added</li>
                 <li>Download document files</li>
                 <li>Add new documents</li>
@@ -286,3 +288,11 @@ const headingClass = 'text-2xl font-bold text-gray-800 dark:text-gray-100'
     </main>
   </div>
 </template>
+
+<style scoped>
+/* AppLogo hides its name at lg+ unless the desktop sidebar is expanded. This
+   page has no sidebar, so the name always shows here. */
+.consent-logo :deep(.app-logo__name) {
+  opacity: 1;
+}
+</style>

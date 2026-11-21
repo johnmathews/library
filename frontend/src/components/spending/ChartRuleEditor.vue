@@ -301,8 +301,8 @@ async function apply(): Promise<void> {
 <template>
   <section class="card p-4 flex flex-col gap-4" data-testid="chart-rule-editor">
     <div>
-      <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">What this chart matches</h2>
-      <p class="text-sm text-gray-500 dark:text-gray-400" data-testid="rule-editor-summary">
+      <h2 class="text-base font-[650] text-ink">What this chart matches</h2>
+      <p class="text-sm text-ink-secondary" data-testid="rule-editor-summary">
         {{ summary }}
       </p>
     </div>
@@ -366,7 +366,7 @@ async function apply(): Promise<void> {
           </FilterPill>
           <p
             v-if="unknownValuesFor(row).length"
-            class="text-sm text-amber-700 dark:text-amber-300"
+            class="text-sm text-attention"
             data-testid="rule-row-unknown-value"
           >
             No longer in the vocabulary: {{ unknownValuesFor(row).join(', ') }}
@@ -375,7 +375,7 @@ async function apply(): Promise<void> {
 
         <button
           type="button"
-          class="shrink-0 self-end text-sm text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400"
+          class="shrink-0 self-end text-sm text-ink-secondary hover:text-ink hover:underline"
           :data-testid="`rule-row-${row.id}-remove`"
           :aria-label="`Remove filter ${index + 1}`"
           @click="removeRow(index)"
@@ -397,7 +397,7 @@ async function apply(): Promise<void> {
 
     <p
       v-if="conflictFacet"
-      class="text-sm text-amber-700 dark:text-amber-300"
+      class="text-sm text-attention"
       data-testid="rule-editor-conflict-warning"
     >
       Two “is” filters both match on {{ conflictLabel }}. A document has only one
@@ -406,7 +406,7 @@ async function apply(): Promise<void> {
 
     <p
       v-if="unknownKeys.length"
-      class="text-sm text-amber-700 dark:text-amber-300"
+      class="text-sm text-attention"
       data-testid="rule-editor-unknown-warning"
     >
       Not in the vocabulary any more: {{ unknownKeys.join(', ') }}. Remove or
@@ -433,7 +433,7 @@ async function apply(): Promise<void> {
       </AppButton>
       <button
         type="button"
-        class="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+        class="text-sm text-ink-secondary hover:text-ink"
         data-testid="rule-editor-cancel"
         @click="emit('cancel')"
       >
@@ -443,7 +443,7 @@ async function apply(): Promise<void> {
 
     <p
       v-if="confirmingEmpty"
-      class="text-sm text-amber-700 dark:text-amber-300"
+      class="text-sm text-attention"
       data-testid="rule-editor-empty-warning"
     >
       This chart has no filters left, so it will match all spending in the
@@ -452,21 +452,21 @@ async function apply(): Promise<void> {
 
     <p
       v-if="previewError"
-      class="text-sm text-red-600 dark:text-red-400"
+      class="text-sm text-error-ink"
       data-testid="rule-editor-preview-error"
     >
       {{ previewError }}
     </p>
     <p
       v-if="saveError"
-      class="text-sm text-red-600 dark:text-red-400"
+      class="text-sm text-error-ink"
       data-testid="rule-editor-save-error"
     >
       {{ saveError }}
     </p>
 
     <div v-if="previewData" data-testid="rule-editor-preview-region">
-      <p class="text-sm text-gray-500 dark:text-gray-400">
+      <p class="text-sm text-ink-secondary">
         This rule would total
         <span data-testid="rule-editor-preview-total">{{ previewData.total }}</span>
         {{ previewData.currency }}.

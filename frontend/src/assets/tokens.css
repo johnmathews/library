@@ -1,0 +1,101 @@
+/* Library — generated from tokens.json */
+:root, [data-theme="light"] {
+  --canvas: #f4f5f7;
+  --panel: #ffffff;
+  --tile: #eef0f3;
+  --line: #e3e6ea;
+  --control-border: #7b8494;
+  --ink: #1f2937;
+  --on-ink: #ffffff;
+  --ink-secondary: #4b5563;
+  --error-ink: #c52727;
+  --focus: #1f2937;
+  --brand: #5d47de;
+  --brand-fill: #5d47de;
+  --on-brand: #ffffff;
+  --brand-tint: #f1eeff;
+  --brand-on-tint: #4c37c9;
+  --brand-solid: #8470ff;
+  --income: #15773a;
+  --income-tint: #d2ffe2;
+  --deficit: #c52727;
+  --deficit-tint: #ffe8e8;
+  --attention: #7a5c0f;
+  --attention-tint: #fdf3d4;
+  --chart-income: #239f52;
+  --chart-spending: #c52727;
+  --chart-grid: #e5e7eb;
+  --quiet: #9ca3af;
+  --category-1: #9333ea;
+  --category-2: #0d9488;
+  --category-3: #3b82f6;
+  --category-4: #d97706;
+  --category-5: #d946ef;
+  --category-other: #9ca3af;
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-pop: 0 8px 28px rgba(16, 24, 40, 0.14), 0 1px 3px rgba(16, 24, 40, 0.08);
+}
+.dark {
+  --canvas: #111318;
+  --panel: #1b1f27;
+  --tile: #232833;
+  --line: #2c323d;
+  --control-border: #8b93a3;
+  --ink: #eef0f3;
+  --on-ink: #111318;
+  --ink-secondary: #b9bfca;
+  --error-ink: #ff7474;
+  --focus: #eef0f3;
+  --brand: #b7acff;
+  --brand-fill: #5d47de;
+  --on-brand: #ffffff;
+  --brand-tint: #2b2a4a;
+  --brand-on-tint: #c9c0ff;
+  --brand-solid: #8470ff;
+  --income: #3ec972;
+  --income-tint: #203832;
+  --deficit: #ff7474;
+  --deficit-tint: #362930;
+  --attention: #f0bb33;
+  --attention-tint: #2f2a1a;
+  --chart-income: #239f52;
+  --chart-spending: #fa4949;
+  --chart-grid: #2c323d;
+  --quiet: #646b78;
+  --category-1: #9333ea;
+  --category-2: #0d9488;
+  --category-3: #3b82f6;
+  --category-4: #d97706;
+  --category-5: #d946ef;
+  --category-other: #6b7280;
+  --shadow-card: none;
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-full: 999px;
+  --font-sans: "Inter Variable", Inter, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+.type-display { font-family: var(--font-sans); font-size: 44px; line-height: 48px; font-weight: 650; letter-spacing: -0.025em; }
+.type-title-1 { font-family: var(--font-sans); font-size: 24px; line-height: 30px; font-weight: 650; letter-spacing: -0.015em; }
+.type-figure { font-family: var(--font-sans); font-size: 22px; line-height: 28px; font-weight: 650; letter-spacing: -0.01em; }
+.type-title-2 { font-family: var(--font-sans); font-size: 16px; line-height: 22px; font-weight: 650; letter-spacing: 0; }
+.type-lead { font-family: var(--font-sans); font-size: 15px; line-height: 22px; font-weight: 400; letter-spacing: 0; }
+.type-body { font-family: var(--font-sans); font-size: 14px; line-height: 21px; font-weight: 400; letter-spacing: 0; }
+.type-label { font-family: var(--font-sans); font-size: 13px; line-height: 18px; font-weight: 600; letter-spacing: 0; }
+.type-caption { font-family: var(--font-sans); font-size: 13px; line-height: 18px; font-weight: 400; letter-spacing: 0; }
+.type-small { font-family: var(--font-sans); font-size: 12.5px; line-height: 16px; font-weight: 400; letter-spacing: 0; }
+.type-code { font-family: var(--font-mono); font-size: 13px; line-height: 18px; font-weight: 400; letter-spacing: 0; }
+@font-face { font-family: "Inter Variable"; src: url("./fonts/inter-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "IBM Plex Mono"; src: url("./fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }

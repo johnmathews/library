@@ -50,19 +50,19 @@ const describedBy = computed(() => {
 <template>
   <div>
     <label
-      :class="props.hideLabel ? 'sr-only' : 'block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300'"
+      :class="props.hideLabel ? 'sr-only' : 'block text-sm font-medium mb-1 text-ink'"
       :for="props.id"
     >{{ props.label }}</label>
     <p
       v-if="props.hint"
       :id="`${props.id}-hint`"
-      class="text-sm text-gray-500 dark:text-gray-400 mb-1"
+      class="text-sm text-ink-secondary mb-1"
     >{{ props.hint }}</p>
     <div class="relative">
       <input
         v-model="model"
         class="form-input w-full"
-        :class="[props.widthClass, { 'border-red-300': props.errorMessage, 'pr-10': props.revealable }]"
+        :class="[props.widthClass, { 'border-error-ink': props.errorMessage, 'pr-10': props.revealable }]"
         :id="props.id"
         :name="props.name ?? props.id"
         :type="inputType"
@@ -78,7 +78,7 @@ const describedBy = computed(() => {
       <button
         v-if="props.revealable"
         type="button"
-        class="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+        class="absolute inset-y-0 right-0 flex items-center px-3 text-ink-secondary hover:text-ink-secondary"
         :data-testid="`${props.id}-reveal`"
         :aria-label="revealed ? 'Hide value' : 'Show value'"
         :aria-pressed="revealed"
@@ -121,7 +121,7 @@ const describedBy = computed(() => {
     <p
       v-if="props.errorMessage"
       :id="`${props.id}-error`"
-      class="text-sm text-red-500 mt-1"
+      class="text-sm text-error-ink mt-1"
     >{{ props.errorMessage }}</p>
   </div>
 </template>

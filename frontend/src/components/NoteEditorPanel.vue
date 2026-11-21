@@ -134,11 +134,11 @@ async function restoreVersion(versionNo: number): Promise<void> {
     class="card p-5"
   >
     <div class="mb-4 flex items-center justify-between gap-3">
-      <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Note</h2>
+      <h2 class="text-base font-[650] text-ink">Note</h2>
       <button
         v-if="!noteEditMode"
         type="button"
-        class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
+        class="btn-sm border-control-border bg-panel text-ink hover:bg-tile"
         data-testid="note-edit-button"
         @click="openNoteEditor"
       >
@@ -149,7 +149,7 @@ async function restoreVersion(versionNo: number): Promise<void> {
     <template v-if="noteEditMode">
       <div class="mb-4 flex justify-end">
         <div
-          class="inline-flex rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 p-0.5"
+          class="inline-flex rounded-sm border border-control-border bg-panel p-0.5"
           role="group"
           aria-label="Editor view"
         >
@@ -164,8 +164,8 @@ async function restoreVersion(versionNo: number): Promise<void> {
             class="px-3 py-1 text-sm font-medium rounded-md transition"
             :class="[
               editorMode === m.value
-                ? 'bg-violet-500 text-white'
-                : 'text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100',
+                ? 'bg-brand-fill text-on-brand'
+                : 'text-ink-secondary hover:bg-tile',
               m.wideOnly ? 'hidden lg:inline-flex' : 'inline-flex',
             ]"
             @click="editorMode = m.value"
@@ -189,10 +189,10 @@ async function restoreVersion(versionNo: number): Promise<void> {
           />
         </div>
         <div v-if="showPreview" data-testid="note-edit-preview-pane">
-          <span class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Preview</span>
+          <span class="block text-sm font-medium mb-1 text-ink">Preview</span>
           <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in noteDraftPreviewHtml -->
           <div
-            class="doc-markdown form-textarea w-full min-h-40 overflow-auto text-gray-800 dark:text-gray-100"
+            class="doc-markdown form-textarea w-full min-h-40 overflow-auto text-ink"
             data-testid="note-edit-preview"
             v-html="noteDraftPreviewHtml"
           />
@@ -221,10 +221,10 @@ async function restoreVersion(versionNo: number): Promise<void> {
     </template>
 
     <!-- Version history disclosure. -->
-    <div data-testid="note-versions" class="mt-4 border-t border-gray-200 dark:border-gray-700/60 pt-4">
+    <div data-testid="note-versions" class="mt-4 border-t border-line pt-4">
       <button
         type="button"
-        class="text-sm font-medium text-violet-500 hover:underline"
+        class="text-sm font-medium text-brand hover:underline"
         data-testid="note-versions-toggle"
         :aria-expanded="noteVersionsOpen"
         @click="toggleNoteVersions"
@@ -234,41 +234,41 @@ async function restoreVersion(versionNo: number): Promise<void> {
       <div v-if="noteVersionsOpen" class="mt-3">
         <p
           v-if="noteVersionsLoading"
-          class="text-sm text-gray-500 dark:text-gray-400"
+          class="text-sm text-ink-secondary"
           data-testid="note-versions-loading"
         >
           Loading…
         </p>
         <p
           v-else-if="noteVersionsError"
-          class="text-sm text-red-600 dark:text-red-400"
+          class="text-sm text-error-ink"
           data-testid="note-versions-error"
         >
           {{ noteVersionsError }}
         </p>
         <p
           v-else-if="noteVersions.length === 0"
-          class="text-sm text-gray-500 dark:text-gray-400"
+          class="text-sm text-ink-secondary"
           data-testid="note-versions-empty"
         >
           No earlier versions yet.
         </p>
-        <ul v-else class="divide-y divide-gray-200 dark:divide-gray-700/60">
+        <ul v-else class="divide-y divide-line">
           <li
             v-for="version in noteVersions"
             :key="version.version_no"
             class="flex items-center justify-between gap-3 py-2"
             :data-testid="`note-version-${version.version_no}`"
           >
-            <span class="min-w-0 text-sm text-gray-800 dark:text-gray-100">
+            <span class="min-w-0 text-sm text-ink">
               Version {{ version.version_no }}
-              <span class="block text-xs text-gray-400 dark:text-gray-500">
+              <span class="block text-xs text-ink-secondary">
                 {{ formatDateTime(version.created_at) }}
               </span>
             </span>
             <button
               type="button"
-              class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 whitespace-nowrap"
+              class="btn-sm border-control-border bg-panel text-ink hover:bg-tile whitespace-nowrap"
               :disabled="restoringVersion !== null"
               :data-testid="`note-restore-${version.version_no}`"
               @click="restoreVersion(version.version_no)"

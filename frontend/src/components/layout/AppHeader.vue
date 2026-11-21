@@ -51,11 +51,11 @@ async function handleSignOut() {
 <template>
   <header
     id="app-header"
-    class="sticky top-0 before:absolute before:inset-0 before:backdrop-blur-md max-lg:before:bg-white/90 dark:max-lg:before:bg-gray-800/90 before:-z-10 z-30 max-lg:shadow-xs lg:before:bg-gray-100/90 dark:lg:before:bg-gray-900/90"
+    class="sticky top-0 before:absolute before:inset-0 before:backdrop-blur-md max-lg:before:bg-panel/90 before:-z-10 z-30 max-lg:shadow-xs lg:before:bg-tile"
   >
     <div class="px-4 sm:px-6 lg:px-8">
       <div
-        class="flex items-center justify-between h-16 lg:border-b border-gray-200 dark:border-gray-700/60"
+        class="flex items-center justify-between h-16 lg:border-b border-line"
       >
         <!-- Left: hamburger (mobile) + the current page's title.
 
@@ -69,7 +69,7 @@ async function handleSignOut() {
         <div class="flex items-center gap-3 min-w-0">
           <button
             id="header-sidebar-toggle"
-            class="shrink-0 text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 lg:hidden"
+            class="shrink-0 text-ink-secondary hover:text-ink-secondary lg:hidden"
             aria-controls="sidebar"
             :aria-expanded="sidebarOpen"
             @click.stop="$emit('toggle-sidebar')"
@@ -90,7 +90,7 @@ async function handleSignOut() {
             v-if="pageTitle"
             :id="pageTitleId"
             data-testid="app-bar-title"
-            class="truncate text-lg lg:text-xl font-bold text-gray-800 dark:text-gray-100"
+            class="truncate text-lg lg:text-xl font-bold text-ink"
           >
             {{ pageTitle }}
           </h1>
@@ -124,7 +124,7 @@ async function handleSignOut() {
                   :ref="triggerRef"
                   id="header-jobs-button"
                   data-testid="header-jobs-button"
-                  class="relative w-8 h-8 flex items-center justify-center bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700/50 rounded-full"
+                  class="relative w-8 h-8 flex items-center justify-center bg-panel hover:bg-tile rounded-full"
                   aria-haspopup="true"
                   :aria-expanded="open"
                   :aria-label="`${jobsStore.activeCount} background job(s) running`"
@@ -132,7 +132,7 @@ async function handleSignOut() {
                 >
                   <span class="sr-only">Background jobs running</span>
                   <svg
-                    class="w-5 h-5 animate-spin text-violet-500"
+                    class="w-5 h-5 animate-spin text-brand"
                     viewBox="0 0 24 24"
                     fill="none"
                     xmlns="http://www.w3.org/2000/svg"
@@ -155,37 +155,37 @@ async function handleSignOut() {
                   <span
                     data-testid="header-jobs-count"
                     aria-live="polite"
-                    class="absolute -top-1 -right-1 min-w-4 h-4 px-1 flex items-center justify-center text-[10px] font-semibold text-white bg-violet-500 rounded-full"
+                    class="absolute -top-1 -right-1 min-w-4 h-4 px-1 flex items-center justify-center text-xs font-semibold text-on-brand bg-brand-fill rounded-full"
                     >{{ jobsStore.activeCount }}</span
                   >
                 </button>
               </template>
 
               <div
-                class="pt-0.5 pb-2 px-3 mb-1 border-b border-gray-200 dark:border-gray-700/60 text-xs font-semibold uppercase text-gray-400 dark:text-gray-500"
+                class="pt-0.5 pb-2 px-3 mb-1 border-b border-line text-xs font-semibold uppercase text-ink-secondary"
               >
                 Processing
               </div>
               <ul class="max-h-64 overflow-y-auto">
                 <li v-for="doc in jobsStore.activeList" :key="doc.id" data-testid="header-jobs-item">
                   <RouterLink
-                    class="flex items-center justify-between gap-3 text-sm py-1 px-3 hover:bg-gray-50 dark:hover:bg-gray-700/30"
+                    class="flex items-center justify-between gap-3 text-sm py-1 px-3 hover:bg-tile"
                     :to="`/documents/${doc.id}`"
                     @click="jobsMenuOpen = false"
                   >
-                    <span class="truncate text-gray-700 dark:text-gray-200">{{
+                    <span class="truncate text-ink">{{
                       doc.title || `Document #${doc.id}`
                     }}</span>
-                    <span class="shrink-0 text-xs text-gray-400 dark:text-gray-500">{{
+                    <span class="shrink-0 text-xs text-ink-secondary">{{
                       stageLabel(doc.status)
                     }}</span>
                   </RouterLink>
                 </li>
               </ul>
-              <div class="border-t border-gray-200 dark:border-gray-700/60 mt-1 pt-1">
+              <div class="border-t border-line mt-1 pt-1">
                 <RouterLink
                   data-testid="header-jobs-viewall"
-                  class="font-medium text-sm text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 flex items-center py-1 px-3"
+                  class="font-medium text-sm text-brand hover:text-brand flex items-center py-1 px-3"
                   to="/jobs"
                   @click="jobsMenuOpen = false"
                 >
@@ -198,13 +198,13 @@ async function handleSignOut() {
           <!-- Search trigger -->
           <button
             id="header-search-button"
-            class="w-8 h-8 flex items-center justify-center bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700/50 rounded-full"
+            class="w-8 h-8 flex items-center justify-center bg-panel hover:bg-tile rounded-full"
             data-testid="header-search-button"
             @click="$emit('open-search')"
           >
             <span class="sr-only">Search</span>
             <svg
-              class="fill-current text-gray-500/80 dark:text-gray-400/80"
+              class="fill-current text-ink-secondary/80"
               width="16"
               height="16"
               viewBox="0 0 16 16"
@@ -241,11 +241,11 @@ async function handleSignOut() {
                 >
                   <div class="flex items-center truncate">
                     <span
-                      class="truncate ml-2 text-sm font-medium text-gray-600 dark:text-gray-100 group-hover:text-gray-800 dark:group-hover:text-white"
+                      class="truncate ml-2 text-sm font-medium text-ink-secondary group-hover:text-ink"
                       >{{ displayName }}</span
                     >
                     <svg
-                      class="w-3 h-3 shrink-0 ml-1 fill-current text-gray-600 dark:text-gray-300"
+                      class="w-3 h-3 shrink-0 ml-1 fill-current text-ink-secondary"
                       viewBox="0 0 12 12"
                     >
                       <path d="M5.9 11.4L.5 6l1.4-1.4 4 4 4-4L11.3 6z" />
@@ -255,19 +255,19 @@ async function handleSignOut() {
               </template>
 
               <div
-                class="pt-0.5 pb-2 px-3 mb-1 border-b border-gray-200 dark:border-gray-700/60"
+                class="pt-0.5 pb-2 px-3 mb-1 border-b border-line"
               >
-                <div class="font-medium text-gray-800 dark:text-gray-100">
+                <div class="font-medium text-ink">
                   {{ displayName }}
                 </div>
-                <div class="text-xs text-gray-600 dark:text-gray-300 italic">
+                <div class="text-xs text-ink-secondary italic">
                   {{ authStore.user?.username }}
                 </div>
               </div>
               <ul>
                 <li>
                   <RouterLink
-                    class="font-medium text-sm text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 flex items-center py-1 px-3"
+                    class="font-medium text-sm text-brand hover:text-brand flex items-center py-1 px-3"
                     to="/settings"
                     @click="userMenuOpen = false"
                   >
@@ -276,7 +276,7 @@ async function handleSignOut() {
                 </li>
                 <li>
                   <button
-                    class="font-medium text-sm text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 flex items-center py-1 px-3 w-full text-left"
+                    class="font-medium text-sm text-brand hover:text-brand flex items-center py-1 px-3 w-full text-left"
                     @click="handleSignOut"
                   >
                     Sign Out

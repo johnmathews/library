@@ -48,11 +48,12 @@ export const DEFAULT_DASHBOARD_FIELDS: DashboardField[] = [
  * The page-canvas tones a user can pick (Settings → Appearance). The `swatch`
  * hex MUST match the colour assets/main.css maps each `[data-canvas="…"]` to,
  * so the picker preview equals what actually renders. Tones apply to light
- * mode only — dark mode keeps its gray-900 canvas. `neutral` is the default
- * (mirrors the backend's DEFAULT_BACKGROUND_TONE).
+ * mode only — dark mode keeps the design system's dark canvas. `neutral` is
+ * the default (mirrors the backend's DEFAULT_BACKGROUND_TONE) and is the
+ * design system's own `canvas`, #f4f5f7.
  */
 export const BACKGROUND_TONES = [
-  { value: 'neutral', text: 'Neutral', swatch: '#e5e7eb' },
+  { value: 'neutral', text: 'Neutral', swatch: '#f4f5f7' },
   { value: 'light', text: 'Light', swatch: '#f3f4f6' },
   { value: 'soft', text: 'Soft', swatch: '#e9ebef' },
   { value: 'slate', text: 'Slate', swatch: '#e9eaf2' },
@@ -111,42 +112,49 @@ export const DEFAULT_ASK_PROFILE = ''
 export const ASK_PROFILE_MAX_CHARS = 4000
 
 /**
- * The built-in default tile-border colour for each document kind, by slug. Only
- * the kinds that meaningfully occur are coloured; every other kind (incl.
- * `other`) has no entry and renders with the tile's neutral default border.
+ * The built-in default colour for each document kind, by slug: the 4px band
+ * across the top of a document tile. Only the kinds that meaningfully occur
+ * are coloured; every other kind (incl. `other`) has no entry and its tile has
+ * no band.
  *
- * These hues are the reference source of truth for the "Default"/reset action
- * and were validated colourblind-safe (worst adjacent ΔE ≈ 24–38, well above
- * the ≥12 target). The backend stores only per-user *overrides*; these defaults
- * live frontend-side so the palette can be retuned without a data migration.
+ * These are the design system's category palette (category-3, -2, -1, -4,
+ * -5), validated with the dataviz validator in the Family Finances design
+ * system and kept clear of red and violet, which already mean "failed" and
+ * "you can act on this" (brand spec §3.2; mockup 261121-documents). They are
+ * the reference source of truth for the "Default"/reset action. The backend
+ * stores only per-user *overrides*; these defaults live frontend-side so the
+ * palette can be retuned without a data migration, and stored overrides are
+ * left as the user chose them.
  */
 export const DEFAULT_KIND_COLORS: Record<string, string> = {
-  invoice: '#56b1f3', // sky
-  receipt: '#34bd68', // green
-  letter: '#755ff8', // violet
-  warranty: '#dfad2b', // amber
-  contract: '#fa4949', // red
+  invoice: '#3b82f6', // category-3, blue
+  receipt: '#0d9488', // category-2, teal
+  letter: '#9333ea', // category-1, purple
+  warranty: '#d97706', // category-4, amber
+  contract: '#d946ef', // category-5, fuchsia
 }
 
 /**
- * One-click colour presets shown beside the picker in Settings. A spread of
- * distinct, legible hues; the user can still pick any colour via the native
- * picker. Not required to be mutually colourblind-safe — they are conveniences,
- * not an auto-assigned series.
+ * One-click colour presets shown beside the picker in Settings: the five
+ * category colours first, then a slate. Red and violet are left out because
+ * they already mean "failed" and "you can act on this". The user can still
+ * pick any colour via the native picker; a picked colour is data and stays a
+ * hex.
  */
 export const SUGGESTED_COLORS = [
-  { name: 'Blue', hex: '#56b1f3' },
-  { name: 'Green', hex: '#34bd68' },
-  { name: 'Violet', hex: '#755ff8' },
-  { name: 'Amber', hex: '#dfad2b' },
-  { name: 'Red', hex: '#fa4949' },
-  { name: 'Orange', hex: '#eb6834' },
-  { name: 'Teal', hex: '#14b8a6' },
-  { name: 'Pink', hex: '#e87ba4' },
+  { name: 'Blue', hex: '#3b82f6' },
+  { name: 'Teal', hex: '#0d9488' },
+  { name: 'Purple', hex: '#9333ea' },
+  { name: 'Amber', hex: '#d97706' },
+  { name: 'Fuchsia', hex: '#d946ef' },
   { name: 'Slate', hex: '#6b7280' },
 ] as const
 
-/** The grey shown in the picker for a kind with no colour (a "no accent" stand-in). */
+/**
+ * The grey shown in the picker for a kind with no colour (a "no band"
+ * stand-in). A hex rather than a role because the native colour input only
+ * takes #rrggbb.
+ */
 export const NEUTRAL_KIND_COLOR = '#cbd0d8'
 
 /**

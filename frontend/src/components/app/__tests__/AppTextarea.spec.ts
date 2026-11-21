@@ -28,6 +28,6 @@ describe('AppTextarea', () => {
 
     expect(wrapper.text()).toContain('Required')
     expect(wrapper.find('#notes-error').exists()).toBe(true)
-    expect(wrapper.get('textarea').classes()).toContain('border-red-300')
+    expect(wrapper.get('textarea').classes()).toContain('border-error-ink')
   })
 })

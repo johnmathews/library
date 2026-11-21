@@ -96,7 +96,12 @@ describe('AppSidebar', () => {
     expect(wrapper.find('[data-testid="sidebar-documents-link"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="sidebar-upload-link"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="sidebar-settings-link"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('LIBRARY')
+    // The logo: the icon's square and the name in sentence case, linking home.
+    const logo = wrapper.find('[data-testid="sidebar-logo"]')
+    expect(logo.attributes('href')).toBe('/')
+    expect(logo.find('[data-testid="app-logo-square"]').exists()).toBe(true)
+    expect(logo.find('[data-testid="app-logo-name"]').text()).toBe('Library')
+    expect(wrapper.text()).not.toContain('LIBRARY')
   })
 
   it('renders a New note nav link to /notes/new', async () => {
@@ -138,7 +143,7 @@ describe('AppSidebar', () => {
     const deletedLink = wrapper.find('[data-testid="sidebar-deleted-link"]')
     expect(deletedLink.exists()).toBe(true)
     expect(deletedLink.attributes('href')).toBe('/deleted')
-    expect(deletedLink.text()).toContain('Recently Deleted')
+    expect(deletedLink.text()).toContain('Recently deleted')
   })
 
   it('orders the nav: Documents first, Recently Deleted last, with no Saved-views heading', async () => {

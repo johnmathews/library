@@ -126,8 +126,8 @@ function chart(overrides: Partial<Chart> = {}): Chart {
   }
 }
 
-// Seven split values so `bands()` folds the smallest (misc, 50.00) into
-// Other — MAX_BANDS is six (SPLIT_PALETTE's length) — which is what the
+// Seven split values so `bands()` folds the smallest two (monitoring and
+// misc) into Other — MAX_BANDS is five (SPLIT_PALETTE's length) — which is what the
 // "opens the Other body" test needs, while `hosting` (700.00, the largest)
 // stays a real, individually-clickable band for the isolate/headline tests.
 const SPLITS: SplitValue[] = [
@@ -344,7 +344,11 @@ describe('SpendingWorkspaceView', () => {
     await clickCell(wrapper, '2026-01-01', OTHER_VALUE)
     expect(wrapper.find('[data-testid="drill-other-body"]').exists()).toBe(true)
 
-    await wrapper.get('[data-testid="drill-other-row"]').trigger('click')
+    // Other folds two members (monitoring, misc); pick Misc by its label, not
+    // by position, so the test names the member it drills into.
+    const rows = wrapper.findAll('[data-testid="drill-other-row"]')
+    expect(rows.map((r) => r.get('[data-testid="drill-other-label"]').text())).toEqual(['Monitoring', 'Misc'])
+    await rows.find((r) => r.text().includes('Misc'))!.trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-testid="drill-cell-body"]').exists()).toBe(true)

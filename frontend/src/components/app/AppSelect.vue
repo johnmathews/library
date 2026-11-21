@@ -31,18 +31,18 @@ const describedBy = computed(() => {
 <template>
   <div>
     <label
-      :class="props.hideLabel ? 'sr-only' : 'block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300'"
+      :class="props.hideLabel ? 'sr-only' : 'block text-sm font-medium mb-1 text-ink'"
       :for="props.id"
     >{{ props.label }}</label>
     <p
       v-if="props.hint"
       :id="`${props.id}-hint`"
-      class="text-sm text-gray-500 dark:text-gray-400 mb-1"
+      class="text-sm text-ink-secondary mb-1"
     >{{ props.hint }}</p>
     <select
       v-model="model"
       class="form-select w-full"
-      :class="{ 'border-red-300': props.errorMessage }"
+      :class="{ 'border-error-ink': props.errorMessage }"
       :id="props.id"
       :name="props.name ?? props.id"
       :data-testid="props.testid"
@@ -61,7 +61,7 @@ const describedBy = computed(() => {
     <p
       v-if="props.errorMessage"
       :id="`${props.id}-error`"
-      class="text-sm text-red-500 mt-1"
+      class="text-sm text-error-ink mt-1"
     >{{ props.errorMessage }}</p>
   </div>
 </template>

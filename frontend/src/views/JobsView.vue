@@ -244,15 +244,18 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 const STATUS_COLOURS: Record<string, BadgeColour> = {
-  received: 'blue',
-  ocr: 'yellow',
-  extract: 'yellow',
-  markdown: 'yellow',
-  embed: 'yellow',
+  // Brand spec §3.2: nothing here waits on the owner, so queued and running
+  // stages are the neutral chip; finished is neutral with a check (green), and
+  // only a failure is red.
+  received: 'grey',
+  ocr: 'grey',
+  extract: 'grey',
+  markdown: 'grey',
+  embed: 'grey',
   indexed: 'green',
   failed: 'red',
-  todo: 'blue',
-  doing: 'yellow',
+  todo: 'grey',
+  doing: 'grey',
   succeeded: 'green',
 }
 
@@ -442,13 +445,13 @@ function cellValue(key: string, job: JobInfo): string {
           </div>
           <div v-if="inHistoryMode" class="pb-1.5" data-testid="jobs-document-chip">
             <span
-              class="inline-flex items-center gap-1.5 rounded-full bg-violet-100 dark:bg-violet-500/20 px-3 py-1 text-sm font-medium text-violet-700 dark:text-violet-300"
+              class="inline-flex items-center gap-1.5 rounded-full border border-brand bg-brand-tint px-3 py-1 text-sm font-medium text-brand"
             >
               Document: {{ documentChipTitle }}
               <button
                 type="button"
                 data-testid="jobs-document-chip-clear"
-                class="text-violet-500 hover:text-violet-700 dark:hover:text-violet-200"
+                class="text-brand hover:opacity-70"
                 aria-label="Clear document filter"
                 @click="clearDocumentFilter"
               >
@@ -459,12 +462,12 @@ function cellValue(key: string, job: JobInfo): string {
         </div>
       </template>
       <template #actions>
-        <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer">
+        <label class="flex items-center gap-2 text-sm text-ink-secondary cursor-pointer">
           <input
             v-model="showSystem"
             type="checkbox"
             data-testid="jobs-show-system"
-            class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
+            class="form-checkbox text-brand-fill"
           />
           Show system tasks
         </label>
@@ -482,7 +485,7 @@ function cellValue(key: string, job: JobInfo): string {
               :ref="triggerRef"
               type="button"
               data-testid="jobs-columns-button"
-              class="flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+              class="flex items-center gap-1.5 rounded-sm border border-control-border bg-panel px-3 py-1.5 text-sm font-medium text-ink hover:bg-tile"
               :aria-expanded="open"
               @click="toggle"
             >
@@ -500,13 +503,13 @@ function cellValue(key: string, job: JobInfo): string {
           <label
             v-for="col in COLUMNS"
             :key="col.key"
-            class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+            class="flex items-center gap-2 px-3 py-1.5 text-sm text-ink hover:bg-tile cursor-pointer"
           >
             <input
               type="checkbox"
               :checked="isVisible(col.key)"
               :data-testid="`jobs-col-toggle-${col.key}`"
-              class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
+              class="form-checkbox text-brand-fill"
               @change="toggleColumn(col.key)"
             />
             {{ col.label }}
@@ -515,7 +518,7 @@ function cellValue(key: string, job: JobInfo): string {
       </template>
     </PageHeader>
 
-    <p v-if="loading" data-testid="jobs-loading" class="text-gray-600 dark:text-gray-300">
+    <p v-if="loading" data-testid="jobs-loading" class="text-ink-secondary">
       Loading jobs…
     </p>
 
@@ -523,7 +526,7 @@ function cellValue(key: string, job: JobInfo): string {
       v-else-if="error"
       data-testid="jobs-error"
       role="alert"
-      class="bg-white dark:bg-gray-800 border-l-4 border-red-500 rounded-lg px-4 py-3 shadow-xs text-gray-700 dark:text-gray-200"
+      class="bg-deficit-tint rounded-md px-4 py-3 text-sm text-error-ink"
     >
       {{ error }}
     </div>
@@ -532,7 +535,7 @@ function cellValue(key: string, job: JobInfo): string {
       <p
         v-if="orderedJobs.length === 0"
         data-testid="jobs-empty"
-        class="text-sm text-gray-500 dark:text-gray-400"
+        class="text-sm text-ink-secondary"
       >
         {{ inHistoryMode ? 'No jobs for this document yet.' : 'No jobs yet.' }}
       </p>
@@ -540,14 +543,12 @@ function cellValue(key: string, job: JobInfo): string {
         <!-- Jobs table (tablet & desktop) — table-fixed with per-column <col>
              widths so the Document column clamps and stops dominating. Active
              rows sort first and carry a spinner in the Status cell. -->
-        <div class="hidden sm:block overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
+        <div class="card hidden sm:block overflow-x-auto">
           <table class="table-fixed w-full text-sm">
             <colgroup>
               <col v-for="col in visibleColumns" :key="col.key" :style="col.style" />
             </colgroup>
-            <thead
-              class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
-            >
+            <thead class="text-[13px] text-ink-secondary border-b border-line">
               <tr>
                 <th
                   v-for="col in visibleColumns"
@@ -559,13 +560,13 @@ function cellValue(key: string, job: JobInfo): string {
                 </th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
+            <tbody class="divide-y divide-line">
               <tr
                 v-for="job in orderedJobs"
                 :key="job.id"
                 data-testid="jobs-row"
                 :data-active="job.active ? 'true' : undefined"
-                :class="job.active ? 'bg-violet-50/40 dark:bg-violet-500/5' : undefined"
+                class="hover:bg-tile"
               >
                 <td
                   v-for="col in visibleColumns"
@@ -573,8 +574,10 @@ function cellValue(key: string, job: JobInfo): string {
                   :data-testid="`jobs-col-cell-${col.key}`"
                   class="px-4 py-3"
                   :class="{
-                    'text-gray-600 dark:text-gray-300': col.key !== 'error',
-                    'text-red-600 dark:text-red-400 truncate': col.key === 'error',
+                    // Red only when there IS an error: a meaningful colour means one thing.
+                    'text-ink-secondary': col.key !== 'error' || !job.error,
+                    'text-error-ink': col.key === 'error' && !!job.error,
+                    truncate: col.key === 'error',
                     'whitespace-nowrap': col.key === 'finished' || col.key === 'duration' || col.key === 'cost',
                   }"
                   :title="col.key === 'error' ? (job.error ?? '') : undefined"
@@ -583,12 +586,12 @@ function cellValue(key: string, job: JobInfo): string {
                     v-if="col.key === 'document' && job.document_id !== null"
                     :to="`/documents/${job.document_id}`"
                     :title="documentLabel(job)"
-                    class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 block truncate"
+                    class="text-brand hover:underline block truncate"
                     >{{ documentLabel(job) }}</RouterLink
                   >
                   <span
                     v-else-if="col.key === 'document'"
-                    class="inline-flex items-center gap-1.5 min-w-0 text-gray-500 dark:text-gray-400"
+                    class="inline-flex items-center gap-1.5 min-w-0 text-ink-secondary"
                     data-testid="jobs-system-label"
                   >
                     <AppBadge colour="grey">System</AppBadge>
@@ -598,7 +601,7 @@ function cellValue(key: string, job: JobInfo): string {
                     <svg
                       v-if="job.active"
                       data-testid="jobs-active-indicator"
-                      class="w-3.5 h-3.5 animate-spin text-violet-500 shrink-0"
+                      class="w-3.5 h-3.5 animate-spin text-ink-secondary shrink-0"
                       fill="none"
                       viewBox="0 0 24 24"
                       aria-label="In progress"
@@ -619,7 +622,7 @@ function cellValue(key: string, job: JobInfo): string {
         <!-- Jobs cards (mobile) — headline Document + Status, then the remaining
              visible columns as a meta grid (respects column prefs). -->
         <ul
-          class="sm:hidden bg-white dark:bg-gray-800 rounded-lg shadow-xs divide-y divide-gray-100 dark:divide-gray-700/60"
+          class="card sm:hidden divide-y divide-line"
           data-testid="jobs-cards"
         >
           <li
@@ -627,29 +630,28 @@ function cellValue(key: string, job: JobInfo): string {
             :key="job.id"
             class="p-4"
             data-testid="jobs-card"
-            :class="job.active ? 'bg-violet-50/40 dark:bg-violet-500/5' : undefined"
           >
             <div class="flex items-center justify-between gap-2">
               <RouterLink
                 v-if="isVisible('document') && job.document_id !== null"
                 :to="`/documents/${job.document_id}`"
-                class="font-medium text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
+                class="font-medium text-brand hover:underline truncate"
                 >{{ documentLabel(job) }}</RouterLink
               >
               <span
                 v-else-if="isVisible('document')"
-                class="inline-flex items-center gap-1.5 min-w-0 font-medium text-gray-500 dark:text-gray-400"
+                class="inline-flex items-center gap-1.5 min-w-0 font-medium text-ink-secondary"
               >
                 <AppBadge colour="grey">System</AppBadge>
                 <span class="truncate">{{ taskLabel(job.task_name) }}</span>
               </span>
-              <span v-else class="font-medium text-gray-800 dark:text-gray-100 truncate"
+              <span v-else class="font-medium text-ink truncate"
                 >Job #{{ job.id }}</span
               >
               <span v-if="isVisible('status')" class="inline-flex items-center gap-1.5 shrink-0">
                 <svg
                   v-if="job.active"
-                  class="w-3.5 h-3.5 animate-spin text-violet-500 shrink-0"
+                  class="w-3.5 h-3.5 animate-spin text-ink-secondary shrink-0"
                   fill="none"
                   viewBox="0 0 24 24"
                   aria-label="In progress"
@@ -664,10 +666,10 @@ function cellValue(key: string, job: JobInfo): string {
 
             <div v-if="cardMetaColumns.length" class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
               <div v-for="col in cardMetaColumns" :key="col.key">
-                <span class="text-gray-500 dark:text-gray-400">{{ col.label }}:</span>
+                <span class="text-ink-secondary">{{ col.label }}:</span>
                 <span
                   class="ml-1 break-words"
-                  :class="col.key === 'error' ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'"
+                  :class="col.key === 'error' && job.error ? 'text-error-ink' : 'text-ink'"
                   >{{ cellValue(col.key, job) }}</span
                 >
               </div>

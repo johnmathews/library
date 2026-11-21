@@ -78,7 +78,7 @@ test('soft-delete a document, find it under Recently Deleted, and restore it', a
   // The document now surfaces only under Recently Deleted, with a countdown and
   // a Restore action; the sidebar entry links there.
   await page.goto('/deleted')
-  await expect(page.getByRole('heading', { name: 'Recently Deleted' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Recently deleted' })).toBeVisible()
   const restore = page.getByTestId(`restore-${id}`)
   await expect(restore).toBeVisible()
 

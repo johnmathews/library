@@ -4,7 +4,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import DocumentListView from '../DocumentListView.vue'
 import type { DocumentListItem } from '@/api/documents'
-import type { DashboardField } from '@/api/settings'
+import { DEFAULT_KIND_COLORS, type DashboardField } from '@/api/settings'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import { useJobsStore } from '@/stores/jobs'
@@ -203,12 +203,12 @@ describe('DocumentListView', () => {
       .filter((url) => !(/review_status=needs_review/.test(url) && /[?&]limit=1(&|$)/.test(url)))
   }
 
-  it('accents a tile with its kind default colour (invoice → sky)', async () => {
+  it('accents a tile with its kind default colour (invoice → category blue)', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()])) // makeItem() is an invoice
     const w = await mountView()
     const tile = w.find('[data-testid="doc-card"]')
     expect(tile.classes()).toContain('app-doc-card--accented')
-    expect(tile.attributes('style') ?? '').toContain('--card-accent: #56b1f3')
+    expect(tile.attributes('style') ?? '').toContain(`--card-accent: ${DEFAULT_KIND_COLORS.invoice}`)
   })
 
   it('leaves a neutral kind (other) with no border accent', async () => {
@@ -259,7 +259,8 @@ describe('DocumentListView', () => {
     const titleLink = tile.find('.app-doc-card__title a')
     expect(titleLink.text()).toBe('Energierekening mei 2026')
     expect(titleLink.attributes('href')).toBe('/documents/12')
-    expect(titleLink.classes()).toContain('text-violet-600')
+    // Titles are ink, not violet: the whole tile is the link (mockup 261121-documents).
+    expect(titleLink.classes()).toContain('text-ink')
     expect(tile.find('.app-doc-card__meta').text()).toContain('Invoice')
     expect(tile.find('.app-doc-card__meta').text()).toContain('Dutch')
     expect(tile.find('.app-doc-card__sender').text()).toBe('Eneco')
@@ -650,7 +651,7 @@ describe('DocumentListView', () => {
     expect(link.text()).toContain('Saved views')
   })
 
-  it('shows a red "N documents need review" button with the count when some need review', async () => {
+  it('shows "N documents need review" in the yellow to-do strip when some need review', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     reviewCountResponse = () => jsonResponse(listBody([], 4))
     const w = await mountView()
@@ -658,10 +659,26 @@ describe('DocumentListView', () => {
     const button = w.find('[data-testid="needs-review-filter"]')
     expect(button.exists()).toBe(true)
     expect(button.text()).toContain('4 documents need review')
-    // Pale-red attention styling (not the old pill).
-    expect(button.classes()).toContain('bg-red-50')
-    expect(button.classes()).toContain('border-red-300')
-    expect(button.classes()).not.toContain('rounded-full')
+    expect(button.text()).toContain('Show them')
+    expect(button.attributes('aria-pressed')).toBe('false')
+    // It sits in the to-do strip: attention ground, a "To do" label (brand
+    // spec §3.2: yellow = the owner has something to do), not a red alarm.
+    const strip = w.find('[data-testid="attention-row"]')
+    expect(strip.element.contains(button.element)).toBe(true)
+    expect(strip.classes()).toContain('bg-attention-tint')
+    expect(strip.text()).toContain('To do')
+    expect(strip.classes().join(' ')).not.toMatch(/red|deficit|error/)
+  })
+
+  it('says the review filter is active and offers to clear it', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    reviewCountResponse = () => jsonResponse(listBody([], 2))
+    const w = await mountView()
+    await w.find('[data-testid="needs-review-filter"]').trigger('click')
+    await flushPromises()
+    const button = w.find('[data-testid="needs-review-filter"]')
+    expect(button.attributes('aria-pressed')).toBe('true')
+    expect(button.text()).toContain('Showing these · Clear')
   })
 
   it('singularises the review count for exactly one document', async () => {
@@ -694,10 +711,8 @@ describe('DocumentListView', () => {
     expect(button.exists()).toBe(true)
     expect(button.text()).toContain('3 emails held')
     expect(button.attributes('href')).toBe('/held-emails')
-    // Same responsive show/hide classes as the review affordances beside it.
-    expect(button.classes()).toContain('w-full')
-    expect(button.classes()).toContain('sm:w-auto')
-    // It shares the attention row with the review button.
+    expect(button.text()).toContain('Review them')
+    // It shares the to-do strip with the review button.
     expect(w.find('[data-testid="needs-review-filter"]').exists()).toBe(true)
   })
 

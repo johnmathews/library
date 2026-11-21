@@ -73,12 +73,12 @@ const justifyClass = computed(() =>
     >
       <div
         data-testid="action-dock"
-        class="pointer-events-auto flex items-center gap-2 rounded-full border border-gray-200 bg-white/95 p-1.5 shadow-lg backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/95"
+        class="pointer-events-auto flex items-center gap-2 rounded-full bg-panel/95 p-1.5 shadow-pop backdrop-blur"
       >
       <button
         type="button"
-        class="btn-sm rounded-full border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
-        :class="editMode ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-500/15 dark:text-violet-300' : ''"
+        class="btn-sm rounded-full gap-1.5"
+        :class="editMode ? 'bg-brand-tint text-brand-on-tint border-brand' : 'border-control-border bg-panel text-ink hover:bg-tile'"
         data-testid="action-dock-edit-toggle"
         :aria-pressed="editMode"
         @click="toggle"

@@ -188,7 +188,7 @@ async function confirmDelete(slug: string): Promise<void> {
       <!-- One lone checkbox does not deserve a full-width band of its own, so
            it rides in the header toolbar beside "+ New matter". -->
       <template #controls>
-        <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+        <label class="inline-flex items-center gap-2 text-sm text-ink-secondary">
           <input
             v-model="includeArchived"
             type="checkbox"
@@ -260,20 +260,20 @@ async function confirmDelete(slug: string): Promise<void> {
       </div>
     </form>
 
-    <p v-if="loading" data-testid="matters-loading" class="text-gray-500 dark:text-gray-400">
+    <p v-if="loading" data-testid="matters-loading" class="text-ink-secondary">
       Loading…
     </p>
     <p
       v-else-if="loadError"
       data-testid="matters-error"
-      class="text-red-600 dark:text-red-400"
+      class="text-error-ink"
     >
       Could not load matters. Try again later.
     </p>
     <p
       v-else-if="matters.length === 0"
       data-testid="matters-empty"
-      class="text-gray-500 dark:text-gray-400"
+      class="text-ink-secondary"
     >
       No matters yet. Assign one to a document, or create one here.
     </p>
@@ -333,27 +333,27 @@ async function confirmDelete(slug: string): Promise<void> {
               <RouterLink
                 :to="`/?matter=${matter.slug}`"
                 :data-testid="`matter-link-${matter.slug}`"
-                class="font-medium text-violet-600 dark:text-violet-300 hover:underline break-words"
+                class="font-medium text-brand hover:underline break-words"
               >
                 {{ matter.name }}
               </RouterLink>
               <span
                 v-if="matter.archived"
                 :data-testid="`matter-archived-badge-${matter.slug}`"
-                class="text-xs rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300 px-1.5 py-0.5"
+                class="text-xs rounded-full bg-tile text-ink px-2 py-0.5"
               >
                 Archived
               </span>
             </div>
             <p
               v-if="matter.hint"
-              class="text-sm text-gray-500 dark:text-gray-400 mt-0.5 break-words"
+              class="text-sm text-ink-secondary mt-0.5 break-words"
               :data-testid="`matter-hint-${matter.slug}`"
             >
               {{ matter.hint }}
             </p>
             <p
-              class="text-xs text-gray-400 dark:text-gray-500 mt-0.5"
+              class="text-xs text-ink-secondary mt-0.5"
               :data-testid="`matter-count-${matter.slug}`"
             >
               {{ matter.document_count }}
@@ -383,7 +383,7 @@ async function confirmDelete(slug: string): Promise<void> {
             </AppButton>
             <template v-if="confirmingSlug === matter.slug">
               <AppButton
-                variant="warning"
+                variant="primary"
                 size="sm"
                 type="button"
                 :data-testid="`matter-delete-confirm-${matter.slug}`"
@@ -402,26 +402,25 @@ async function confirmDelete(slug: string): Promise<void> {
                 Cancel
               </AppButton>
             </template>
-            <!-- Two-step delete arming affordance: an outline-red button that is
-                 deliberately quieter than the solid-red "Confirm delete" it
-                 reveals. AppButton has no outline-destructive variant, so this
-                 stays hand-rolled to preserve the escalation. -->
-            <button
+            <!-- Two-step delete: this arms it; "Confirm delete" (same
+                 destructive outline) does it. -->
+            <AppButton
               v-else
+              variant="warning"
+              size="sm"
               type="button"
               :data-testid="`matter-delete-${matter.slug}`"
-              class="btn-sm border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400"
               @click="askDelete(matter.slug)"
             >
               Delete
-            </button>
+            </AppButton>
           </div>
         </div>
 
         <p
           v-if="rowError && rowError.slug === matter.slug"
           :data-testid="`matter-error-${matter.slug}`"
-          class="text-sm text-red-600 dark:text-red-400 mt-2"
+          class="text-sm text-error-ink mt-2"
         >
           {{ rowError.message }}
         </p>

@@ -1,36 +1,16 @@
-/* Typography */
-.h1 {
-  @apply text-4xl font-extrabold tracking-tighter;
-}
-
-.h2 {
-  @apply text-3xl font-extrabold tracking-tighter;
-}
-
-.h3 {
-  @apply text-3xl font-extrabold;
-}
-
-.h4 {
-  @apply text-2xl font-extrabold tracking-tight;
-}
-
-@media (width >= theme(--breakpoint-md)) {
-  .h1 {
-    @apply text-5xl;
-  }
-
-  .h2 {
-    @apply text-4xl;
-  }
-}
+/*
+ * Shared component patterns, on the design system's roles (docs/brand.md,
+ * brand/design-system/project/README.md). Colours are role utilities
+ * (bg-panel, text-ink, border-control-border, ...) that flip under .dark by
+ * themselves, so no rule here needs a dark: variant.
+ */
 
 /* Buttons */
 .btn,
 .btn-lg,
 .btn-sm,
 .btn-xs {
-  @apply font-medium text-sm inline-flex items-center justify-center border border-transparent rounded-lg leading-5 shadow-xs transition;
+  @apply font-semibold text-[13px] inline-flex items-center justify-center border border-transparent rounded-sm leading-5 transition-colors;
 }
 
 .btn {
@@ -63,39 +43,41 @@ input[type='search']::-webkit-search-results-decoration {
 .form-select,
 .form-checkbox,
 .form-radio {
-  @apply bg-white dark:bg-gray-900/30 border focus:ring-0 focus:ring-offset-0 dark:disabled:bg-gray-700/30 dark:disabled:border-gray-700 dark:disabled:hover:border-gray-700;
+  @apply bg-panel border border-control-border focus:ring-0 focus:ring-offset-0 disabled:bg-tile;
 }
 
 .form-checkbox {
-  @apply rounded-sm;
+  @apply rounded-[4px];
 }
 
 .form-input,
 .form-textarea,
 .form-multiselect,
 .form-select {
-  @apply text-base sm:text-sm text-gray-800 dark:text-gray-100 leading-5 py-2 px-3 border-gray-200 hover:border-gray-300 focus:border-gray-300 dark:border-gray-700/60 dark:hover:border-gray-600 dark:focus:border-gray-600 shadow-xs rounded-lg;
+  /* 16px on a phone: iOS zooms the page into any field under 16px when it is focused. */
+  @apply text-base sm:text-sm text-ink leading-5 py-2 px-3 border-control-border focus:border-control-border rounded-sm;
 }
 
 .form-input,
 .form-textarea {
-  @apply placeholder-gray-400 dark:placeholder-gray-500;
+  @apply placeholder-ink-secondary;
 }
 
 .form-select {
   @apply pr-10;
 }
 
-/* Filter-bar label recipe (see docs/frontend-view-principles.md §5). Scoped to
-   filter/control bars — NOT stacked forms, whose labels come baked into the
-   App* input components. One definition so every bar shares the same recipe. */
+/* Filter-bar label recipe (see docs/frontend-view-principles.md §5): the design
+   system's type-label, in sentence case. Scoped to filter/control bars — NOT
+   stacked forms, whose labels come baked into the App* input components. One
+   definition so every bar shares the same recipe. */
 .filter-label {
-  @apply block text-xs uppercase text-gray-600 dark:text-gray-300 font-semibold mb-1;
+  @apply block text-[13px] leading-[18px] font-semibold text-ink mb-1;
 }
 
 .form-checkbox,
 .form-radio {
-  @apply text-violet-500 checked:bg-violet-500 checked:border-transparent border border-gray-300 dark:border-gray-700/60 dark:checked:border-transparent focus-visible:not-checked:ring-2 focus-visible:not-checked:ring-violet-500/50;
+  @apply text-brand-fill checked:bg-brand-fill checked:border-transparent border border-control-border;
 }
 
 /* Switch element */
@@ -119,11 +101,11 @@ input[type='search']::-webkit-search-results-decoration {
 }
 
 .form-switch input[type='checkbox'] + label {
-  @apply bg-gray-400 dark:bg-gray-700;
+  @apply bg-control-border;
 }
 
 .form-switch input[type='checkbox']:checked + label {
-  @apply bg-violet-500;
+  @apply bg-brand-fill;
 }
 
 .form-switch input[type='checkbox']:checked + label > span:first-child {
@@ -131,19 +113,20 @@ input[type='search']::-webkit-search-results-decoration {
 }
 
 .form-switch input[type='checkbox']:disabled + label {
-  @apply cursor-not-allowed bg-gray-100 dark:bg-gray-700/20 border border-gray-200 dark:border-gray-700/60;
+  @apply cursor-not-allowed bg-tile border border-line;
 }
 
 .form-switch input[type='checkbox']:disabled + label > span:first-child {
-  @apply bg-gray-400 dark:bg-gray-600;
+  @apply bg-control-border;
 }
 
 /* Cards */
-/* Chrome only — the shared white/dark panel surface (background, subtle shadow,
- * rounded corners, hairline border). Deliberately carries NO padding: callers keep
- * their own p-4/p-5/p-6 so spacing stays per-view. */
+/* Chrome only — the shared panel surface. A card stands off the canvas by its
+ * fill and shadow-card (light only), never by an outline (design system: Card).
+ * Deliberately carries NO padding: callers keep their own p-4/p-5/p-6 so
+ * spacing stays per-view. */
 .card {
-  @apply bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60;
+  @apply bg-panel shadow-card rounded-md;
 }
 
 /* Chrome, Safari and Opera */
@@ -265,99 +248,37 @@ input[type='search']::-webkit-search-results-decoration {
  */
 
 /*
- * Dashboard document tile. The tile sits on the gray-100 (light) / gray-900
- * (dark) page, so it needs to read as an elevated surface rather than a flat
- * panel that blends into the background. In light mode a layered drop shadow
- * does the lifting (white on gray-100 alone is too subtle); the shadow grows
- * and the tile lifts 3px on hover, with the border warming to violet to echo
- * the app accent. Dark mode can't lean on shadows against a near-black page,
- * so there the gray-800-on-gray-900 surface plus the hairline border carries
- * the separation, and hover just deepens the shadow and accents the border.
- * Markup hooks (.app-doc-card*) are an acceptance contract — see
- * views/__tests__/DocumentListView.spec.ts and docs/frontend.md §1.2.
+ * Dashboard document tile (design system: DocumentTile). A panel with
+ * shadow-card and no outline. Hover deepens the shadow; motion is colour and
+ * shadow only, never position. Markup hooks (.app-doc-card*) are an acceptance
+ * contract — see views/__tests__/DocumentListView.spec.ts and docs/frontend.md §1.2.
  */
 .app-doc-card {
-  /*
-   * The card owns its border here (not a Tailwind `border-gray-200` utility on
-   * the markup). Tailwind utilities live in the `utilities` cascade layer, which
-   * outranks this `components` layer regardless of selector specificity — so a
-   * utility border would always defeat the `--accented` colour below. Keeping the
-   * neutral border, hover, and accent rules all in this one layer lets normal
-   * specificity decide, and the accent finally shows.
-   */
-  border: 1px solid var(--color-gray-200);
-  border-radius: 1rem;
-  box-shadow:
-    0 1px 2px 0 rgb(16 24 40 / 0.06),
-    0 4px 16px -2px rgb(16 24 40 / 0.08);
-  transition:
-    transform 0.18s ease,
-    box-shadow 0.18s ease,
-    border-color 0.18s ease;
+  background-color: var(--panel);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.18s ease;
 }
 
 .app-doc-card:hover {
-  transform: translateY(-3px);
-  border-color: var(--color-violet-200);
-  box-shadow:
-    0 4px 8px -2px rgb(16 24 40 / 0.08),
-    0 18px 36px -6px rgb(16 24 40 / 0.16);
-}
-
-.dark .app-doc-card {
-  border-color: color-mix(in srgb, var(--color-gray-700) 60%, transparent);
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.4);
-}
-
-.dark .app-doc-card:hover {
-  border-color: var(--color-violet-500);
-  box-shadow: 0 12px 28px -8px rgb(0 0 0 / 0.6);
+  box-shadow: var(--shadow-pop);
 }
 
 /*
- * Per-kind border accent (Settings → Appearance → Document type colours). Only
- * tiles whose kind has a colour get .app-doc-card--accented + a --card-accent
- * hex; neutral tiles fall through to the gray/violet rules above unchanged. The
- * compound selector (two classes, 0-2-0) outranks the plain .app-doc-card
- * border (0-1-0) within this same `components` layer, so no !important is
- * needed — and, crucially, no Tailwind border utility sits on the markup to
- * defeat it from the higher `utilities` layer. A single stored hex is adapted
- * per surface with color-mix — darkened on light, lightened for the near-black
- * dark surface — so it stays legible in both modes, and the hover state shifts
- * it further to keep the "border reacts on hover" feel.
+ * Per-kind colour (Settings → Appearance → Document type colours): a 4px band
+ * across the tile's top edge (mockup 261121-documents, option A). Only tiles
+ * whose kind has a colour get .app-doc-card--accented + a --card-accent hex;
+ * neutral tiles have no band. The rule lives in this `components` layer and no
+ * Tailwind border utility sits on the markup, because the `utilities` layer
+ * would defeat it whatever the specificity (e2e/tile-border-colour.spec.ts).
  */
 .app-doc-card.app-doc-card--accented {
-  /*
-   * Coloured tiles get a thicker (2px) border so the kind colour reads clearly,
-   * especially on high-DPI phone screens where 1px looks hairline; neutral tiles
-   * keep the 1px hairline. box-sizing:border-box (Tailwind preflight) means the
-   * extra width is drawn inside the tile, so the grid stays aligned.
-   */
-  border-width: 2px;
-  border-color: var(--card-accent);
-}
-
-.app-doc-card.app-doc-card--accented:hover {
-  border-color: color-mix(in srgb, var(--card-accent), #000 16%);
-}
-
-.dark .app-doc-card.app-doc-card--accented {
-  border-color: color-mix(in srgb, var(--card-accent), #fff 12%);
-}
-
-.dark .app-doc-card.app-doc-card--accented:hover {
-  border-color: color-mix(in srgb, var(--card-accent), #fff 28%);
+  border-top: 4px solid var(--card-accent);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .app-doc-card {
-    transition:
-      box-shadow 0.18s ease,
-      border-color 0.18s ease;
-  }
-
-  .app-doc-card:hover {
-    transform: none;
+    transition: none;
   }
 }
 
@@ -382,7 +303,7 @@ input[type='search']::-webkit-search-results-decoration {
   margin: auto;
   width: 100%;
   max-width: 42rem; /* matches the former max-w-2xl */
-  border-radius: 0.75rem; /* rounded-xl */
+  border-radius: var(--radius-lg);
 }
 
 @media (width < 640px) {
@@ -405,7 +326,7 @@ input[type='search']::-webkit-search-results-decoration {
  */
 .app-confirm-dialog {
   margin: auto;
-  border-radius: 0.5rem; /* rounded-lg — a soft edge to match the app's cards */
+  border-radius: var(--radius-lg);
 }
 
 /*
@@ -439,6 +360,6 @@ input[type='search']::-webkit-search-results-decoration {
   inset: auto 0 0 0;
   width: 100vw;
   max-height: 70vh;
-  border-top-left-radius: 0.75rem;
-  border-top-right-radius: 0.75rem;
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
 }

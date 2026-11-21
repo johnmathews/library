@@ -163,7 +163,7 @@ function onSelect(facetKey: string, event: Event): void {
   >
     <h2
       v-if="!props.flat"
-      class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3"
+      class="text-base font-[650] text-ink mb-3"
     >
       Facets
     </h2>
@@ -184,14 +184,14 @@ function onSelect(facetKey: string, event: Event): void {
               {{ value.label }}
             </option>
           </select>
-          <p v-if="facet.values.length === 0" class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+          <p v-if="facet.values.length === 0" class="mt-1 text-xs text-ink-secondary">
             No values yet
           </p>
         </div>
       </div>
     </div>
 
-    <p v-if="error" role="alert" class="mt-2 text-sm text-red-600 dark:text-red-400" data-testid="facet-error">
+    <p v-if="error" role="alert" class="mt-2 text-sm text-error-ink" data-testid="facet-error">
       {{ error }}
     </p>
   </div>

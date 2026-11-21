@@ -21,7 +21,7 @@ describe('SplitColourPicker', () => {
     expect(wrapper.find('input[type="text"]').exists()).toBe(false)
   })
 
-  it('emits the slot light hex when a swatch is chosen', async () => {
+  it('emits the slot\'s stored identity hex when a swatch is chosen', async () => {
     const wrapper = factory()
     await wrapper.find('[data-testid="v-alpha-swatch-2"]').trigger('click')
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([SPLIT_PALETTE[2]!.light])
@@ -52,13 +52,21 @@ describe('SplitColourPicker', () => {
   })
 
   it('labels every swatch by name, never by colour alone', () => {
-    // The relief rule: three slots fall below 3:1 against the chart surface, so
-    // a swatch must never be the only carrier of identity.
+    // The relief rule: a swatch must never be the only carrier of identity.
     const wrapper = factory()
     for (const [index, slot] of SPLIT_PALETTE.entries()) {
       expect(
         wrapper.find(`[data-testid="v-alpha-swatch-${index}"]`).attributes('aria-label'),
       ).toContain(slot.name)
+    }
+  })
+
+  it('paints each swatch in its slot\'s role, so it follows the theme', () => {
+    const wrapper = factory()
+    for (const [index, slot] of SPLIT_PALETTE.entries()) {
+      expect(wrapper.find(`[data-testid="v-alpha-swatch-${index}"]`).attributes('style')).toContain(
+        `background-color: ${slot.colour}`,
+      )
     }
   })
 })

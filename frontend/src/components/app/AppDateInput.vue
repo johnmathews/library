@@ -73,7 +73,7 @@ const describedBy = computed(() => {
     <p
       v-if="props.hint"
       :id="`${props.id}-hint`"
-      class="text-sm text-gray-500 dark:text-gray-400 mb-2"
+      class="text-sm text-ink-secondary mb-2"
     >
       {{ props.hint }}
     </p>
@@ -86,7 +86,7 @@ const describedBy = computed(() => {
         <input
           v-model="day"
           class="form-input w-14"
-          :class="{ 'border-red-300': props.errorMessage }"
+          :class="{ 'border-error-ink': props.errorMessage }"
           :id="`${props.id}-day`"
           :name="`${props.id}-day`"
           type="text"
@@ -99,7 +99,7 @@ const describedBy = computed(() => {
         <input
           v-model="month"
           class="form-input w-14"
-          :class="{ 'border-red-300': props.errorMessage }"
+          :class="{ 'border-error-ink': props.errorMessage }"
           :id="`${props.id}-month`"
           :name="`${props.id}-month`"
           type="text"
@@ -112,7 +112,7 @@ const describedBy = computed(() => {
         <input
           v-model="year"
           class="form-input w-20"
-          :class="{ 'border-red-300': props.errorMessage }"
+          :class="{ 'border-error-ink': props.errorMessage }"
           :id="`${props.id}-year`"
           :name="`${props.id}-year`"
           type="text"

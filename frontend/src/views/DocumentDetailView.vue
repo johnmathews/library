@@ -945,7 +945,7 @@ watch(
         v-if="prevDocId"
         :to="{ name: 'document-detail', params: { id: prevDocId }, query: neighbourQuery }"
         data-testid="doc-prev"
-        class="text-violet-600 hover:underline dark:text-violet-300"
+        class="text-brand hover:underline"
       >
         ← Previous document
       </RouterLink>
@@ -953,7 +953,7 @@ watch(
       <span
         v-if="neighbourScopeLabel"
         data-testid="doc-neighbors-scope"
-        class="text-gray-500 dark:text-gray-400"
+        class="text-ink-secondary"
       >
         {{ neighbourScopeLabel }}
       </span>
@@ -961,7 +961,7 @@ watch(
         v-if="nextDocId"
         :to="{ name: 'document-detail', params: { id: nextDocId }, query: neighbourQuery }"
         data-testid="doc-next"
-        class="text-violet-600 hover:underline dark:text-violet-300"
+        class="text-brand hover:underline"
       >
         Next document →
       </RouterLink>
@@ -973,10 +973,10 @@ watch(
          (confirmed) deletion. -->
     <div
       v-if="isDeleted"
-      class="mb-6 flex flex-col gap-3 rounded-lg border border-red-300 bg-red-50 p-3 sm:flex-row sm:items-center dark:border-red-500/40 dark:bg-red-500/10"
+      class="mb-6 flex flex-col gap-3 rounded-md bg-tile px-3.5 py-2.5 sm:flex-row sm:items-center"
       data-testid="trash-banner"
     >
-      <p class="flex-1 text-sm font-medium text-red-800 dark:text-red-200">
+      <p class="flex-1 text-sm font-semibold text-ink">
         This document is in the trash. It will be permanently removed when its retention window ends.
       </p>
       <div class="flex flex-wrap items-center gap-2">
@@ -1009,10 +1009,11 @@ watch(
     <ActionDock v-if="!heroVisible && dockAtTop" :ask-href="askHref" />
     <div
       v-if="inQueue"
-      class="mb-6 flex flex-col gap-3 rounded-lg border border-violet-300 bg-violet-50 p-3 sm:flex-row sm:items-center dark:border-violet-500/40 dark:bg-violet-500/10"
+      class="mb-6 flex flex-col gap-3 rounded-md bg-attention-tint px-3.5 py-2.5 sm:flex-row sm:items-center"
       data-testid="review-queue-bar"
     >
-      <p class="text-sm font-medium text-violet-800 dark:text-violet-200" data-testid="review-queue-position">
+      <p class="text-sm text-ink" data-testid="review-queue-position">
+        <span class="mr-2 font-[650] text-attention">To do</span>
         Reviewing {{ reviewQueue.position }} of {{ reviewQueue.total }}
       </p>
       <div class="flex flex-1 flex-wrap items-center gap-2 sm:justify-end">
@@ -1038,7 +1039,7 @@ watch(
         <AppButton type="button" data-testid="queue-next" @click="queueNext"> Next → </AppButton>
         <button
           type="button"
-          class="text-sm text-violet-700 hover:underline dark:text-violet-300"
+          class="text-sm font-semibold text-brand hover:underline"
           data-testid="queue-exit"
           @click="exitQueue"
         >
@@ -1050,24 +1051,24 @@ watch(
       {{ notice.text }}
     </AppBanner>
     <AppErrorSummary v-if="errorItems.length" :errors="errorItems" data-testid="error-summary" />
-    <AppBanner
+    <div
       v-if="reviewReasons.length"
       data-testid="validation-findings"
-      class="mb-6"
+      class="mb-6 rounded-md bg-attention-tint px-3.5 py-2.5 text-sm text-ink"
     >
-      <p class="font-semibold">Why this needs review</p>
+      <p class="font-[650] text-attention">Why this needs review</p>
       <ul class="mt-1 list-disc list-inside space-y-1">
         <li v-for="reason in reviewReasons" :key="`${reason.rule}:${reason.field ?? 'doc'}`">
           <span
             v-if="reason.fieldLabel"
-            class="mr-1.5 inline-block rounded bg-violet-100 px-1.5 py-0.5 text-xs font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-200"
+            class="mr-1.5 inline-block rounded-full bg-panel px-2 py-0.5 text-xs font-semibold text-ink"
             data-testid="reason-field"
             >{{ reason.fieldLabel }}</span
           ><span class="font-medium">{{ reason.title }}</span
           ><template v-if="reason.detail"> — {{ reason.detail }}</template>
         </li>
       </ul>
-    </AppBanner>
+    </div>
 
     <div
       id="document-hero"
@@ -1086,7 +1087,7 @@ watch(
              the strict-mode e2e locator is safe. -->
         <h1
           id="document-title"
-          class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold break-words app-detail-title"
+          class="text-2xl text-ink font-[650] break-words app-detail-title"
         >
           {{ doc.title ?? 'Untitled document' }}
         </h1>
@@ -1099,8 +1100,8 @@ watch(
                `edit-layout-toggle` had none. -->
           <button
             type="button"
-            class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
-            :class="editMode ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-500/15 dark:text-violet-300' : ''"
+            class="btn-sm gap-1.5"
+            :class="editMode ? 'bg-brand-tint text-brand-on-tint border-brand' : 'border-control-border bg-panel text-ink hover:bg-tile'"
             data-testid="edit-toggle"
             :aria-pressed="editMode"
             @click="toggleEditMode"
@@ -1125,7 +1126,7 @@ watch(
           <button
             v-if="editMode"
             type="button"
-            class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
+            class="btn-sm border-control-border bg-panel text-ink hover:bg-tile"
             data-testid="reset-layout"
             @click="resetLayout"
           >
@@ -1156,21 +1157,21 @@ watch(
       <!-- Which fields the hero shows, and in what order. A CHOOSER, not a
            second rendering of the values: the editable copy is the grid above,
            so these rows carry only a checkbox, a drag handle and a label. -->
-      <div v-if="editMode" class="mt-6 border-t border-gray-100 dark:border-gray-700/60 pt-4" data-testid="hero-fields-editor">
-        <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+      <div v-if="editMode" class="mt-6 border-t border-line pt-4" data-testid="hero-fields-editor">
+        <p class="mb-2 text-xs text-ink-secondary">
           Choose which fields appear here, and drag to reorder them. Cards below can be dragged to reorder them or move them between columns.
         </p>
         <ul ref="heroEditListEl" role="list" class="flex flex-wrap gap-x-4 gap-y-1">
           <li
             v-for="field in heroFields"
             :key="field.key"
-            class="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-gray-50 dark:hover:bg-gray-700/40"
+            class="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-tile"
             :data-testid="`hero-field-${field.key}`"
           >
             <button
               type="button"
               data-hero-drag-handle
-              class="cursor-grab text-gray-400 hover:text-violet-500 active:cursor-grabbing"
+              class="cursor-grab text-ink-secondary hover:text-brand active:cursor-grabbing"
               :aria-label="`Drag to reorder ${heroLabel(field.key)}`"
               tabindex="-1"
             >
@@ -1178,13 +1179,13 @@ watch(
             </button>
             <input
               type="checkbox"
-              class="form-checkbox text-violet-600"
+              class="form-checkbox text-brand"
               :checked="field.visible"
               :aria-label="`Show ${heroLabel(field.key)} in the hero`"
               :data-testid="`hero-field-toggle-${field.key}`"
               @change="setHeroFieldVisible(field.key, ($event.target as HTMLInputElement).checked)"
             />
-            <span class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <span class="text-[13px] font-semibold text-ink-secondary">
               {{ heroLabel(field.key) }}
             </span>
           </li>
@@ -1203,7 +1204,7 @@ watch(
         <AppButton
           :href="askHref"
           target="_blank"
-          variant="primary"
+          :variant="inQueue ? 'secondary' : 'primary'"
           class="shrink-0 gap-1.5 self-start sm:self-end sm:ml-auto"
           data-testid="ask-about-document"
         >
@@ -1237,7 +1238,7 @@ watch(
           type="button"
           data-card-drag-handle
           :data-testid="`card-drag-handle-${cardId}`"
-          class="absolute right-2 top-2 z-10 cursor-grab rounded bg-white/90 px-2 py-1 text-gray-400 shadow-sm hover:text-violet-500 active:cursor-grabbing dark:bg-gray-800/90"
+          class="absolute right-2 top-2 z-10 cursor-grab rounded bg-panel/90 px-2 py-1 text-ink-secondary shadow-sm hover:text-brand active:cursor-grabbing"
           aria-label="Drag to reorder this section"
         >
           ⠿
@@ -1252,15 +1253,15 @@ watch(
                file full-size or download it. -->
           <div
             v-if="preview !== 'none'"
-            class="flex items-center justify-between gap-3 border-b border-gray-200 dark:border-gray-700/60 px-4 py-2.5"
+            class="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5"
           >
-            <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Document</span>
+            <span class="text-sm font-medium text-ink-secondary">Document</span>
             <div class="flex items-center gap-2">
               <a
                 :href="previewOpenUrl"
                 target="_blank"
                 rel="noopener"
-                class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
+                class="btn-sm border-control-border bg-panel text-ink hover:bg-tile gap-1.5"
                 data-testid="preview-open"
               >
                 <svg
@@ -1282,7 +1283,7 @@ watch(
               </a>
               <DownloadLink
                 :href="previewDownloadUrl"
-                class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
+                class="btn-sm border-control-border bg-panel text-ink hover:bg-tile gap-1.5"
                 data-testid="preview-download"
               >
                 <svg
@@ -1308,7 +1309,7 @@ watch(
                served as attachment, and other browsers would download them. -->
           <img
             v-if="preview === 'image'"
-            class="w-full object-contain bg-gray-100 dark:bg-gray-900/40"
+            class="w-full object-contain bg-tile"
             :src="originalUrl(doc.id, { inline: true, includeDeleted: isDeleted })"
             :alt="`Preview of ${doc.title ?? 'this document'}`"
             data-testid="preview-image"
@@ -1324,12 +1325,12 @@ watch(
           />
           <div
             v-else-if="!hasReadableText"
-            class="p-4 text-sm text-gray-500 dark:text-gray-400"
+            class="p-4 text-sm text-ink-secondary"
             data-testid="preview-fallback"
           >
             No preview is available for this file type.
             <DownloadLink
-              class="text-violet-600 hover:underline"
+              class="font-medium text-brand underline underline-offset-3"
               :href="originalUrl(doc.id, { includeDeleted: isDeleted })"
               >Download the original file</DownloadLink
             >
@@ -1343,10 +1344,10 @@ watch(
             class="flex items-center justify-between gap-3 p-4"
             data-testid="preview-download-original"
           >
-            <span class="text-sm text-gray-500 dark:text-gray-400">Original file preserved</span>
+            <span class="text-sm text-ink-secondary">Original file preserved</span>
             <DownloadLink
               :href="originalDownloadUrl"
-              class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
+              class="btn-sm border-control-border bg-panel text-ink hover:bg-tile gap-1.5"
               data-testid="download-original"
             >
               <svg
@@ -1380,12 +1381,12 @@ watch(
           class="card p-5"
         >
           <div class="flex items-center justify-between gap-3 mb-3">
-            <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Document text</h2>
+            <h2 class="text-base font-[650] text-ink">Document text</h2>
             <!-- Mobile-only collapse toggle: at lg+ the text sits beside the
                  metadata (no scroll problem) so the body is always shown. -->
             <button
               type="button"
-              class="lg:hidden btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
+              class="lg:hidden btn-sm border-control-border bg-panel text-ink hover:bg-tile"
               data-testid="markdown-toggle"
               :aria-expanded="textExpanded"
               aria-controls="document-markdown-body"
@@ -1398,13 +1399,13 @@ watch(
                but hides it on mobile when collapsed; `lg:!block` overrides the
                inline display:none at lg+ so it is always visible there. -->
           <div id="document-markdown-body" v-show="textExpanded" class="lg:!block">
-            <div v-if="markdownLoading" class="text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-loading">
+            <div v-if="markdownLoading" class="text-sm text-ink-secondary" data-testid="markdown-loading">
               Loading…
             </div>
-            <div v-else-if="markdownError" class="text-sm text-red-600 dark:text-red-400" data-testid="markdown-error">
+            <div v-else-if="markdownError" class="text-sm text-error-ink" data-testid="markdown-error">
               Could not load markdown — try again later.
             </div>
-            <div v-else-if="markdownData && markdownData.page_count === 0" class="text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-empty">
+            <div v-else-if="markdownData && markdownData.page_count === 0" class="text-sm text-ink-secondary" data-testid="markdown-empty">
               No markdown content is available for this document yet.
             </div>
             <template v-else-if="markdownData">
@@ -1416,13 +1417,13 @@ watch(
               >
                 <p
                   v-if="markdownData.page_count > 1"
-                  class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
+                  class="text-[13px] font-semibold text-ink-secondary mb-1"
                 >
                   Page {{ page.page_number }}
                 </p>
                 <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in markdownPageHtml -->
                 <div
-                  class="doc-markdown text-gray-800 dark:text-gray-100"
+                  class="doc-markdown text-ink"
                   data-testid="markdown-content"
                   v-html="markdownPageHtml(page.markdown)"
                 />
@@ -1467,10 +1468,10 @@ watch(
           id="document-actions-card"
           class="card p-5"
         >
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Actions</h2>
+          <h2 class="text-base font-[650] text-ink mb-3">Actions</h2>
           <p class="text-sm mb-2">
             <DownloadLink
-              class="text-violet-600 hover:underline"
+              class="text-brand hover:underline"
               :href="originalUrl(doc.id, { includeDeleted: isDeleted })"
               data-testid="download-original"
             >
@@ -1479,7 +1480,7 @@ watch(
           </p>
           <p v-if="doc.has_searchable_pdf" class="text-sm mb-2">
             <DownloadLink
-              class="text-violet-600 hover:underline"
+              class="text-brand hover:underline"
               :href="searchablePdfUrl(doc.id, { includeDeleted: isDeleted })"
               data-testid="download-searchable"
             >
@@ -1488,7 +1489,7 @@ watch(
           </p>
           <p class="text-sm mb-4">
             <RouterLink
-              class="text-violet-600 hover:underline"
+              class="text-brand hover:underline"
               :to="`/jobs?document_id=${doc.id}`"
               data-testid="view-job-history"
             >
@@ -1499,6 +1500,7 @@ watch(
             <AppButton
               v-if="doc.review_status === 'needs_review'"
               type="button"
+              variant="secondary"
               :disabled="verifying"
               data-testid="mark-verified"
               @click="markVerified"
@@ -1628,14 +1630,14 @@ watch(
   </template>
 
   <template v-else-if="notFound">
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">
+    <h1 class="text-2xl text-ink font-[650] mb-2">
       Document not found
     </h1>
-    <p class="text-gray-600 dark:text-gray-300">It may have been deleted, or the link is wrong.</p>
+    <p class="text-ink-secondary">It may have been deleted, or the link is wrong.</p>
   </template>
   <div
     v-else-if="loadError"
-    class="card p-4 text-gray-600 dark:text-gray-300"
+    class="card p-4 text-ink-secondary"
   >
     Sorry, the document could not be loaded. Try again later.
   </div>
@@ -1677,14 +1679,11 @@ watch(
   margin: 0.75rem 0 0.5rem;
 }
 .doc-markdown :deep(code) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.875em;
   padding: 0.1em 0.3em;
   border-radius: 0.25rem;
-  background: rgb(0 0 0 / 0.06);
-}
-.dark .doc-markdown :deep(code) {
-  background: rgb(255 255 255 / 0.08);
+  background: var(--tile);
 }
 /* Fenced code blocks scroll horizontally inside the block rather than
    overflowing the card and the viewport. */
@@ -1692,11 +1691,8 @@ watch(
   margin: 0.75rem 0;
   padding: 0.75rem 1rem;
   border-radius: 0.5rem;
-  background: rgb(0 0 0 / 0.06);
+  background: var(--tile);
   overflow-x: auto;
-}
-.dark .doc-markdown :deep(pre) {
-  background: rgb(255 255 255 / 0.08);
 }
 .doc-markdown :deep(pre code) {
   padding: 0;

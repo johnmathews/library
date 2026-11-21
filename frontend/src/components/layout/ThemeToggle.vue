@@ -15,10 +15,10 @@ const isDark = useDark({ selector: 'html' })
     />
     <label
       for="light-switch"
-      class="flex items-center justify-center cursor-pointer w-10 h-10 hover:bg-gray-100 lg:hover:bg-gray-200 dark:hover:bg-gray-700/50 dark:lg:hover:bg-gray-800 rounded-full"
+      class="flex items-center justify-center cursor-pointer w-10 h-10 hover:bg-tile lg:hover:bg-tile rounded-full"
     >
       <svg
-        class="dark:hidden fill-current text-gray-500/80 dark:text-gray-400/80"
+        class="dark:hidden fill-current text-ink-secondary/80"
         width="22"
         height="22"
         viewBox="0 0 16 16"
@@ -33,7 +33,7 @@ const isDark = useDark({ selector: 'html' })
         />
       </svg>
       <svg
-        class="hidden dark:block fill-current text-gray-500/80 dark:text-gray-400/80"
+        class="hidden dark:block fill-current text-ink-secondary/80"
         width="22"
         height="22"
         viewBox="0 0 16 16"

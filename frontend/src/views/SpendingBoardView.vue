@@ -258,16 +258,16 @@ async function onDelete(chart: Chart): Promise<void> {
       </template>
     </PageHeader>
 
-    <p v-if="loading" data-testid="board-loading" class="text-gray-500 dark:text-gray-400">Loading…</p>
+    <p v-if="loading" data-testid="board-loading" class="text-ink-secondary">Loading…</p>
 
-    <p v-else-if="loadError" data-testid="board-load-error" class="text-red-600 dark:text-red-400">
+    <p v-else-if="loadError" data-testid="board-load-error" class="text-error-ink">
       {{ loadError }}
     </p>
 
     <SpendingEmptyState v-else-if="charts.length === 0" :currency="currency" @created="onChartCreated" />
 
     <div v-else class="@container">
-      <p v-if="reorderError" data-testid="board-reorder-error" class="mb-3 text-sm text-red-600 dark:text-red-400">
+      <p v-if="reorderError" data-testid="board-reorder-error" class="mb-3 text-sm text-error-ink">
         {{ reorderError }}
       </p>
       <div
@@ -282,9 +282,9 @@ async function onDelete(chart: Chart): Promise<void> {
             data-testid="spending-card-placeholder"
             :aria-label="`Loading ${chart.name}`"
           >
-            <div class="h-4 w-2/3 rounded bg-gray-200 dark:bg-gray-700/60" />
-            <div class="h-8 w-1/2 rounded bg-gray-200 dark:bg-gray-700/60" />
-            <div class="mt-auto h-16 w-full rounded bg-gray-200 dark:bg-gray-700/60" />
+            <div class="h-4 w-2/3 rounded bg-tile" />
+            <div class="h-8 w-1/2 rounded bg-tile" />
+            <div class="mt-auto h-16 w-full rounded bg-tile" />
           </div>
           <SpendingCard
             v-else

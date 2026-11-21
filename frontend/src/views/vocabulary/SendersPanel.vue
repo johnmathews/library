@@ -103,7 +103,7 @@ async function onColourChange(id: number, colour: string | null): Promise<void> 
   <div class="space-y-4">
     <div class="card p-6 @container">
       <div class="mb-4 flex flex-wrap items-end gap-3">
-        <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Senders</h2>
+        <h2 class="text-base font-[650] text-ink">Senders</h2>
         <div class="ml-auto">
           <label for="sender-filter" class="filter-label">Filter by name</label>
           <input
@@ -117,33 +117,33 @@ async function onColourChange(id: number, colour: string | null): Promise<void> 
         </div>
       </div>
 
-      <p v-if="loading" class="text-sm text-gray-500 dark:text-gray-400" data-testid="senders-loading">
+      <p v-if="loading" class="text-sm text-ink-secondary" data-testid="senders-loading">
         Loading the senders…
       </p>
       <div
         v-else-if="loadError"
         role="alert"
-        class="border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-red-700 dark:text-red-300"
+        class="bg-deficit-tint rounded-md px-3 py-2 text-sm text-error-ink"
         data-testid="senders-error"
       >
         {{ loadError }}
       </div>
       <p
         v-else-if="senders.length === 0"
-        class="text-sm text-gray-500 dark:text-gray-400"
+        class="text-sm text-ink-secondary"
         data-testid="senders-empty"
       >
         No senders yet. Senders appear here once a document names one.
       </p>
       <p
         v-else-if="filteredSenders.length === 0"
-        class="text-sm text-gray-500 dark:text-gray-400"
+        class="text-sm text-ink-secondary"
         data-testid="senders-filter-empty"
       >
         No senders match that filter.
       </p>
 
-      <ul v-else class="divide-y divide-gray-100 dark:divide-gray-700/60">
+      <ul v-else class="divide-y divide-line">
         <li
           v-for="sender in filteredSenders"
           :key="sender.id"
@@ -153,10 +153,10 @@ async function onColourChange(id: number, colour: string | null): Promise<void> 
         >
           <div class="flex flex-col gap-2 @md:flex-row @md:items-center @md:justify-between">
             <div class="min-w-0">
-              <span class="font-medium text-gray-800 dark:text-gray-100">{{ sender.name }}</span>
+              <span class="font-medium text-ink">{{ sender.name }}</span>
             </div>
             <div
-              class="shrink-0 text-sm text-gray-600 dark:text-gray-300"
+              class="shrink-0 text-sm text-ink-secondary"
               :data-testid="`sender-${sender.id}-count`"
             >
               {{ sender.document_count }} documents
@@ -175,7 +175,7 @@ async function onColourChange(id: number, colour: string | null): Promise<void> 
           <p
             v-if="rowError[sender.id]"
             role="alert"
-            class="mt-1 text-xs text-red-600 dark:text-red-400"
+            class="mt-1 text-xs text-error-ink"
             :data-testid="`sender-${sender.id}-error`"
           >
             {{ rowError[sender.id] }}

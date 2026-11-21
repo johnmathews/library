@@ -60,7 +60,7 @@
  */
 import { computed } from 'vue'
 import type { ChartData, ExcludedGroup, FooterBucket, Unconvertible } from '@/api/spending'
-import { formatMoney } from '@/spending/money'
+import { formatMoney, toCents } from '@/spending/money'
 
 const props = defineProps<{ data: ChartData }>()
 
@@ -85,6 +85,11 @@ function bareAmount(amount: string): string {
 // with `props.data.currency` would print a number the accounting never
 // produced. Each row formats with its own `group.currency` (or, when that is
 // itself null, the bare digits via `bareAmount`) — never `money()`.
+
+// Netted refunds are money back, so they take the money-in colour (the
+// design system's one use of green on this view) — but only when there is
+// something netted: a green "−€0.00" would claim money that never arrived.
+const hasRefunds = computed(() => toCents(props.data.footer.netted_refunds) !== 0)
 
 const refundLabel = computed(() => {
   const n = props.data.footer.refund_count
@@ -144,14 +149,14 @@ function onAttentionClick(bucket: FooterBucket): void {
 
 <template>
   <div
-    class="flex flex-col divide-y divide-gray-200 text-sm dark:divide-gray-700"
+    class="flex flex-col divide-y divide-line text-sm"
     data-testid="spending-footer"
   >
     <div
       class="flex flex-col gap-1 py-3"
       data-testid="spending-footer-header"
     >
-      <p class="text-gray-800 dark:text-gray-100">
+      <p class="text-ink">
         <span class="font-semibold tabular-nums">{{ money(data.total) }}</span>
         across
         <span class="tabular-nums">{{ data.payments }}</span>
@@ -159,13 +164,14 @@ function onAttentionClick(bucket: FooterBucket): void {
         <span class="tabular-nums">{{ data.documents }}</span>
         documents
       </p>
-      <p class="flex items-baseline justify-between gap-3 text-gray-500 dark:text-gray-400">
+      <p class="flex items-baseline justify-between gap-3 text-ink-secondary">
         <span data-testid="spending-footer-refund-label">including {{ refundLabel }}</span>
         <span
           class="shrink-0 tabular-nums"
+          :class="{ 'text-income': hasRefunds }"
           data-testid="spending-footer-refund-figure"
         >
-          -{{ money(data.footer.netted_refunds) }}
+          −{{ money(data.footer.netted_refunds) }}
         </span>
       </p>
     </div>
@@ -185,18 +191,18 @@ function onAttentionClick(bucket: FooterBucket): void {
         >
           <button
             type="button"
-            class="flex w-full items-baseline justify-between gap-3 rounded-lg px-2 py-1 text-left transition hover:bg-gray-100 dark:hover:bg-gray-700/50"
+            class="flex w-full items-baseline justify-between gap-3 rounded-sm px-2 py-1 text-left transition hover:bg-tile"
             :data-testid="`spending-footer-bucket-${group.amount_kind}`"
             @click="onExcludedClick(group)"
           >
-            <span class="text-gray-800 dark:text-gray-100">{{ group.amount_kind }} &middot; {{ documentLabel(group.documents) }}</span>
-            <span class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100">{{ money(group.amount) }}</span>
+            <span class="text-ink">{{ group.amount_kind }} &middot; {{ documentLabel(group.documents) }}</span>
+            <span class="shrink-0 tabular-nums text-ink">{{ money(group.amount) }}</span>
           </button>
         </li>
       </ul>
       <p
         v-else
-        class="px-2 py-1 text-gray-500 dark:text-gray-400"
+        class="px-2 py-1 text-ink-secondary"
         data-testid="spending-footer-excluded-empty"
       >
         Nothing excluded
@@ -218,18 +224,18 @@ function onAttentionClick(bucket: FooterBucket): void {
         >
           <button
             type="button"
-            class="flex w-full items-baseline justify-between gap-3 rounded-lg px-2 py-1 text-left transition hover:bg-gray-100 dark:hover:bg-gray-700/50"
+            class="flex w-full items-baseline justify-between gap-3 rounded-sm px-2 py-1 text-left transition hover:bg-tile"
             :data-testid="`spending-footer-bucket-${row.bucket}`"
             @click="onAttentionClick(row.bucket)"
           >
-            <span class="text-gray-800 dark:text-gray-100">{{ attentionLabel(row.bucket) }} &middot; {{ documentLabel(row.group.documents) }}</span>
-            <span class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100">{{ money(row.group.amount) }}</span>
+            <span class="text-ink">{{ attentionLabel(row.bucket) }} &middot; {{ documentLabel(row.group.documents) }}</span>
+            <span class="shrink-0 tabular-nums text-ink">{{ money(row.group.amount) }}</span>
           </button>
         </li>
       </ul>
       <p
         v-else
-        class="px-2 py-1 text-gray-500 dark:text-gray-400"
+        class="px-2 py-1 text-ink-secondary"
         data-testid="spending-footer-attention-empty"
       >
         Nothing needs attention
@@ -251,13 +257,13 @@ function onAttentionClick(bucket: FooterBucket): void {
           class="flex items-baseline justify-between gap-3 px-2 py-1"
           data-testid="spending-footer-unconvertible-row"
         >
-          <span class="text-gray-800 dark:text-gray-100">
+          <span class="text-ink">
             {{ group.currency ?? 'No currency' }}
             &middot;
             <span data-testid="spending-footer-unconvertible-documents">{{ documentLabel(group.documents) }}</span>
           </span>
           <span
-            class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100"
+            class="shrink-0 tabular-nums text-ink"
             data-testid="spending-footer-unconvertible-amount"
           >
             {{ group.currency === null ? bareAmount(group.amount) : formatMoney(group.amount, group.currency) }}
@@ -266,7 +272,7 @@ function onAttentionClick(bucket: FooterBucket): void {
       </ul>
       <p
         v-else
-        class="px-2 py-1 text-gray-500 dark:text-gray-400"
+        class="px-2 py-1 text-ink-secondary"
         data-testid="spending-footer-unconvertible-empty"
       >
         Nothing unconverted

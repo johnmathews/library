@@ -117,6 +117,9 @@ override-dependencies = ["opencv-python ; sys_platform == 'never'"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+# Copies of the design-system skill's scripts, kept byte-identical so their
+# SCRIPT_VERSION check can say when the copy is behind. Fixes go to the skill.
+extend-exclude = ["scripts/check_design_system.py", "scripts/design_preview.py"]
 
 [tool.ruff.lint]
 select = [

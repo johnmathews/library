@@ -112,28 +112,28 @@ async function onDismiss(id: number): Promise<void> {
 
 <template>
   <div class="card p-6 @container">
-    <h2 class="mb-4 text-lg font-semibold text-gray-800 dark:text-gray-100">Suggestions</h2>
+    <h2 class="mb-4 text-base font-[650] text-ink">Suggestions</h2>
 
-    <p v-if="loading" class="text-sm text-gray-500 dark:text-gray-400" data-testid="suggestions-loading">
+    <p v-if="loading" class="text-sm text-ink-secondary" data-testid="suggestions-loading">
       Loading the suggestions…
     </p>
     <div
       v-else-if="loadError"
       role="alert"
-      class="border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-red-700 dark:text-red-300"
+      class="bg-deficit-tint rounded-md px-3 py-2 text-sm text-error-ink"
       data-testid="suggestions-error"
     >
       {{ loadError }}
     </div>
     <p
       v-else-if="suggestions.length === 0"
-      class="text-sm text-gray-500 dark:text-gray-400"
+      class="text-sm text-ink-secondary"
       data-testid="suggestions-empty"
     >
       No suggestions pending.
     </p>
 
-    <ul v-else class="divide-y divide-gray-100 dark:divide-gray-700/60">
+    <ul v-else class="divide-y divide-line">
       <li
         v-for="suggestion in suggestions"
         :key="suggestion.id"
@@ -144,23 +144,23 @@ async function onDismiss(id: number): Promise<void> {
         <div class="flex flex-col gap-2 @md:flex-row @md:items-start @md:justify-between">
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-1.5">
-              <code class="text-xs text-gray-400 dark:text-gray-500">{{ suggestion.facet }}</code>
-              <span class="font-medium text-gray-800 dark:text-gray-100">
+              <code class="text-xs text-ink-secondary">{{ suggestion.facet }}</code>
+              <span class="font-medium text-ink">
                 {{ suggestion.suggested_label }}
               </span>
               <code
-                class="text-xs text-violet-600 dark:text-violet-400"
+                class="text-xs text-ink-secondary"
                 :data-testid="`suggestion-${suggestion.id}-key`"
               >
                 {{ slugify(suggestion.suggested_label) }}
               </code>
             </div>
-            <p v-if="suggestion.reason" class="text-sm text-gray-600 dark:text-gray-300">
+            <p v-if="suggestion.reason" class="text-sm text-ink-secondary">
               {{ suggestion.reason }}
             </p>
             <RouterLink
               :to="{ name: 'document-detail', params: { id: suggestion.document_id } }"
-              class="text-xs text-violet-600 hover:underline dark:text-violet-400"
+              class="text-xs text-brand hover:underline"
               :data-testid="`suggestion-${suggestion.id}-document`"
             >
               View document
@@ -170,7 +170,7 @@ async function onDismiss(id: number): Promise<void> {
           <div class="flex shrink-0 items-center gap-2">
             <button
               type="button"
-              class="btn-xs bg-violet-500 text-white hover:bg-violet-600"
+              class="btn-xs bg-brand-fill text-on-brand hover:brightness-110"
               :disabled="isPending(suggestion.id)"
               :data-testid="`suggestion-${suggestion.id}-accept`"
               @click="onAccept(suggestion.id)"
@@ -179,7 +179,7 @@ async function onDismiss(id: number): Promise<void> {
             </button>
             <button
               type="button"
-              class="btn-xs border border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
+              class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
               :disabled="isPending(suggestion.id)"
               :data-testid="`suggestion-${suggestion.id}-dismiss`"
               @click="onDismiss(suggestion.id)"
@@ -192,7 +192,7 @@ async function onDismiss(id: number): Promise<void> {
         <p
           v-if="rowError[suggestion.id]"
           role="alert"
-          class="mt-1 text-xs text-red-600 dark:text-red-400"
+          class="mt-1 text-xs text-error-ink"
           :data-testid="`suggestion-${suggestion.id}-error`"
         >
           {{ rowError[suggestion.id] }}

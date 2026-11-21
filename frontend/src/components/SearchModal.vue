@@ -194,7 +194,7 @@ defineExpose({ open })
   <dialog
     ref="dialog"
     id="search-modal"
-    class="app-search-modal bg-white dark:bg-gray-800 shadow-lg p-0 backdrop:bg-gray-900/30"
+    class="app-search-modal bg-panel shadow-pop p-0 backdrop:bg-ink/30"
     aria-labelledby="search-modal-title"
     data-testid="search-modal"
     @close="onClose"
@@ -202,7 +202,7 @@ defineExpose({ open })
     <div class="p-5">
       <h2
         id="search-modal-title"
-        class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4"
+        class="text-base font-[650] text-ink mb-4"
       >
         Search your documents
       </h2>
@@ -210,7 +210,7 @@ defineExpose({ open })
       <form id="search-form" novalidate role="search" class="space-y-4" @submit.prevent="onSubmit">
         <div class="relative">
           <svg
-            class="absolute left-3 top-9 w-4 h-4 text-gray-400 pointer-events-none"
+            class="absolute left-3 top-9 w-4 h-4 text-ink-secondary pointer-events-none"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"
@@ -276,7 +276,7 @@ defineExpose({ open })
           </AppButton>
           <button
             type="button"
-            class="text-sm text-gray-500 dark:text-gray-400 underline ml-auto"
+            class="text-sm font-semibold text-brand hover:underline ml-auto"
             data-testid="modal-cancel"
             @click="close"
           >
@@ -284,7 +284,7 @@ defineExpose({ open })
           </button>
         </div>
 
-        <p class="text-sm text-gray-500 dark:text-gray-400">
+        <p class="text-sm text-ink-secondary">
           Tip: press / anywhere to open this search.
         </p>
       </form>

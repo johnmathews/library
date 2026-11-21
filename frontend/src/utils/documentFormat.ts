@@ -34,14 +34,3 @@ export function formatDateTime(iso: string): string {
   if (Number.isNaN(parsed.getTime())) return iso
   return new Intl.DateTimeFormat('en-GB', { dateStyle: 'long', timeStyle: 'short' }).format(parsed)
 }
-
-/** AppBadge colours that read as visually distinct in the Mosaic palette.
- * A tag's colour is derived from its name so it stays stable across renders
- * and pages without storing a colour on the tag itself. */
-export const TAG_COLOURS = ['purple', 'blue', 'green', 'yellow', 'red', 'turquoise', 'pink'] as const
-
-export function tagColour(name: string): (typeof TAG_COLOURS)[number] {
-  let hash = 0
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0
-  return TAG_COLOURS[hash % TAG_COLOURS.length]!
-}

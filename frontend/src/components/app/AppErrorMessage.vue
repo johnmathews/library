@@ -5,7 +5,7 @@ const props = defineProps<{ id?: string }>()
 </script>
 
 <template>
-  <p :id="props.id" class="text-sm text-red-500 mt-1">
+  <p :id="props.id" class="text-sm text-error-ink mt-1">
     <span class="sr-only">Error:</span> <slot />
   </p>
 </template>

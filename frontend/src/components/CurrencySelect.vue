@@ -101,7 +101,7 @@ function cancelAdd(): void {
         v-if="addError"
         data-testid="currency-add-error"
         role="alert"
-        class="text-xs text-red-600 dark:text-red-400"
+        class="text-xs text-error-ink"
       >
         {{ addError }}
       </p>

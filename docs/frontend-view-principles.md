@@ -1,10 +1,11 @@
 # Frontend view design principles
 
-**Status:** active. **Last updated:** 2026-10-22 (§4: the Ask layout key is now `library:ask-view-mode-v2`, and the catalogue records why changing a `useStorage` default needs a new key). Earlier: 2026-08-31 (the legacy series stack was deleted, taking `components/charts/ChartControls.vue` — this document's reference implementation — with it. The recipe is unchanged; §3, §5 and §5.1 now name `views/JobsView.vue`'s `jobs-filter-bar` as the reference, because it fills both `PageHeader` slots and is the route `e2e/header-toolbar.spec.ts` now drives, with `SpendingWorkspaceView.vue`'s `workspace-toolbar` as the native-date exemplar. §5.1's geometry table and its code example move to `/jobs` with it.) Earlier: 2026-08-30 (§4: registered `library:charts-board-currency` — `SpendingBoardView.vue`'s display-currency preference — alongside `library:currency-options`, so the two don't drift). Earlier (2026-08-22): §1.2 and new §5.1: a view's filter bar moves into `PageHeader`'s `#controls` slot, merging into one toolbar via a **container** query; `/jobs`' bar rebuilt to the §5 label recipe. Earlier (2026-08-22): §1.2 and §7: the page title moves to the app bar; the description stays as a lede at the top of `#app-page`. Earlier (2026-08-21): §4: relocate what a hidden container held, and test the capability rather than the mechanism. Earlier (2026-08-21): registered `library:ask-view-mode` and the wide-only mode pattern — store the preference, clamp the render, hide the control with `v-if`. Earlier (2026-08-12, documentation verification sweep): corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim.
-**Last verified:** 2026-10-22 — method: partial, scoped to §4's two Ask bullets; the key is read from `useAskViewMode.ts` and pinned by `useAskViewMode.spec.ts`, which asserts the pre-v2 key is ignored. Earlier: 2026-08-31 — method: partial, scoped to the four sites that named `ChartControls.vue` plus §5.1's geometry table. Read `views/JobsView.vue`'s template in full before naming it: its `#controls` slot holds `<div class="flex flex-wrap items-end gap-3" data-testid="jobs-filter-bar">` with `.filter-label` + raw `.form-select`/`.form-input` and no `App*` form component, and its `#actions` slot holds `jobs-show-system` and `jobs-columns-button` — so it exhibits both the §5 label recipe and the §5.1 two-group merge. Read `views/SpendingWorkspaceView.vue`'s `workspace-toolbar` likewise: same row class, same label recipe, two native `<input type="date">` fields, but `#controls` only, which is why it is the secondary exemplar and not the reference. The geometry numbers were not re-measured in this pass — they carry forward from the re-measurement recorded in `e2e/header-toolbar.spec.ts`'s own header, which was taken against the real stack on 2026-08-31 when that spec was repointed off the deleted `/charts/legacy`. Earlier the same day — method: re-stamp only. The #130 squash-merge landed on 2026-08-31, dating this file's last edit a day after its stamp, which `check_docs` reports as `stale-doc-edit` (the known date jump, issue #126 — the same re-stamp #122 made after #121). No prose changed; the verification below stands as performed. Previously verified 2026-08-30 — method: partial re-verification, scoped to the new §4 bullet: read `useCurrencyOptions.ts` for `CURRENCY_OPTIONS_STORAGE_KEY = 'library:currency-options'` and `SpendingBoardView.vue` for `useStorage<string>('library:charts-board-currency', ...)`, confirming both key literals against the prose. The rest of the document carries forward its 2026-08-22 verification, scoped to the new §5.1 and the §1.2 sentence pointing at it. These are **geometry** claims and were measured in the real stack (docker compose + the Vite dev server + Playwright) rather than read off class lists: the 1280px sidebar-expanded/collapsed table is the measured `#app-page` width and the observed merge outcome at each, and the container-vs-viewport claim was confirmed by swapping `@5xl:` for `lg:` and watching `e2e/header-toolbar.spec.ts` go red. Backed by 1102 frontend unit tests and the header-toolbar spec (5 tests). The rest of the document carries forward its 2026-08-22 verification, whose method was: the relocated title checked as a visual claim in the real stack via Playwright screenshots at 1440px and 375px.
+**Status:** active. **Last updated:** 2026-11-21 (the Quiet design system: §3 is the role vocabulary, §5's label is sentence case, and §1's dark-mode item relies on the roles). Earlier entries are in this file's history.
+**Last verified:** 2026-11-21 — method: partial, scoped to §1 items 7 and 9, §3, §5's label bullet and the closing paragraphs of §5.1. Read `utility-patterns.css`, `main.css`, `AppInput.vue`, `AppButton.vue`, `JobsView.vue`'s `jobs-filter-bar` and `no-raw-colour.spec.ts` in the working tree. §5.1's geometry table was not re-measured.
 
 How to build a Library view that looks **right the first time** — using the
-Mosaic design language already in the app. This is a checklist plus the reasoning
+design system already in the app ([brand.md](brand.md); read it before any
+visual change, which starts as a mockup). This is a checklist plus the reasoning
 behind it. If you follow §1 you will avoid every layout problem found in the
 2026-06-28 UX pass. Companion docs: [frontend.md](frontend.md) (architecture,
 shell, `App*` components), and the Mosaic reskin design record
@@ -49,13 +50,15 @@ Before a view is "done", every box is ticked:
 6. **Verify at four widths.** Phone (~375px), tablet (~768px), laptop (~1280px),
    wide desktop (~1920px). The same view must look intentional at all four — not
    just "not broken". This is the consistency the design language promises.
-7. **Use the Mosaic primitives, not raw markup.** Cards, buttons, forms, badges
+7. **Use the design system's primitives, not raw markup.** Cards, buttons, forms, badges
    all have canonical classes/components (§3). Reach for those before writing new
    Tailwind.
 8. **Per-machine view preferences go in `localStorage`.** Density/columns/column-
    visibility are about *this screen*, so persist them client-side (see §4), not
    in the server-side user profile.
-9. **Keep dark mode working.** Every colour gets a `dark:` variant. Test the
+9. **Keep dark mode working.** Paint with the role utilities (§3): they flip
+   under `.dark` by themselves, so a view needs no `dark:` colour class.
+   `no-raw-colour.spec.ts` fails a palette class or its `dark:` twin. Test the
    toggle.
 10. **Keep tests green and update contracts.** Some layout facts are acceptance
     contracts (e.g. the dashboard column counts in `e2e/responsive.spec.ts`). If
@@ -86,26 +89,46 @@ The rule is simple: **the shell owns max width; the view owns content density.**
 If a view feels too wide with one column, that is a signal to add a *second
 column* (grid), not to clamp the whole page narrower.
 
-## 3. The Mosaic vocabulary (use these, don't reinvent)
+## 3. The vocabulary (use these, don't reinvent)
 
-Defined in `assets/main.css` (`@theme` tokens) and
-`assets/utility-patterns.css` (component classes):
+Colours, radii and type come from the design system, generated into
+`assets/tokens.css` and mapped to Tailwind utilities in `assets/main.css`. The
+shared component classes are in `assets/utility-patterns.css`.
 
-- **Card / panel:** the `.card` class (surface + `shadow-xs` + `rounded-xl` +
-  hairline border, defined once in `utility-patterns.css`); it carries **no
-  padding**, so add your own `p-5` (`class="card p-5"`). Apply the class; don't
-  re-spec the surface recipe per view.
-- **Buttons:** `AppButton` — `variant` is `primary` (violet, the default) /
-  `secondary` (gray) / `warning` (red, the destructive one) / `inverse`, and
+- **Colour:** role utilities only. `bg-canvas` is the page, `bg-panel` a card,
+  `bg-tile` a chip, a quiet ground or a hover, `border-line` a hairline,
+  `border-control-border` a control's edge, and `text-ink` /
+  `text-ink-secondary` the text. A Tailwind palette class (`text-gray-500`,
+  `bg-violet-500`), `bg-white`/`text-black` or a raw hex fails
+  `no-raw-colour.spec.ts`.
+- **Violet is for what can be acted on, only:** `text-brand` for links and text
+  actions, `bg-brand-fill text-on-brand` for the primary button,
+  `bg-brand-tint text-brand-on-tint` for the active nav item or filter chip.
+  Never a state, never decoration.
+- **State colours** mean one thing each (brand.md §6.2): `text-attention` on
+  `bg-attention-tint` when the owner has something to do, `text-error-ink` on
+  `bg-deficit-tint` when something failed, `text-income` / `text-deficit` for
+  money on the spending and payments views. Everything else is neutral,
+  finished states included (`AppBadge colour="green"` draws a check icon).
+- **Card / panel:** the `.card` class (`bg-panel`, `shadow-card`, `rounded-md`,
+  no outline, defined once in `utility-patterns.css`); it carries **no
+  padding**, so add your own `p-5` (`class="card p-5"`). Don't put a box inside
+  a box: separate sections with a heading or a `border-line` hairline.
+- **Buttons:** `AppButton` — `variant` is `primary` (the default, one per
+  screen) / `secondary` (the outline button) / `warning` (also the outline
+  button: no button is red, and a destructive action confirms through
+  `ConfirmDialog`, whose confirming button is the primary) / `inverse`, and
   `size` is `sm` / `lg` or omitted, mapping to `.btn-sm` / `.btn-lg` / `.btn`.
-  (`.btn-xs` exists in the CSS but `AppButton` cannot emit it and nothing in
-  `frontend/src/` uses it.)
+  (`AppButton` cannot emit `.btn-xs`. The vocabulary panels' row actions and
+  colour picker use it on raw buttons.)
 - **Forms:** `AppInput` / `AppTextarea` / `AppSelect` / `AppCheckboxes` /
   `AppRadios` (`.form-input` etc.) — label + hint + error baked in, a11y
   preserved (the error summary takes focus on mount).
-- **Accent:** violet (`--color-violet-500` family). Status colours: green / red /
-  yellow / sky scales.
-- **Type:** Inter; headings `text-2xl md:text-3xl font-bold` for page titles.
+- **Type:** Inter Variable, headings at weight 650 (`font-[650]`), labels in
+  sentence case. `text-xs` is 12.5px, the smallest size. IBM Plex Mono
+  (`font-mono`) only for strings copied character by character: file names,
+  checksums, ids. Radii are `rounded-sm` (8px) for controls, `rounded-md` (10px)
+  for cards and `rounded-lg` (12px) for popovers and dialogs.
 - **Badges/pills:** `AppBadge`, `FilterPill`. **Dropdowns/menus/popovers:**
   `AppPopover` (controlled `v-model:open`, Escape/outside-click close, focus
   return, `--z-popover` token) — don't hand-roll open-state + outside-click; a
@@ -178,24 +201,21 @@ eye compares them directly. Use one pattern for all of them.
 - **The row:** `flex flex-wrap items-end gap-3` — controls bottom-aligned so
   labels and inputs line up; wraps cleanly on narrow screens.
 - **The label (identical on every control):** the `.filter-label` class
-  (`block text-xs uppercase text-gray-600 dark:text-gray-300 font-semibold mb-1`,
-  defined once in `utility-patterns.css`). Apply the class; don't re-spec the
-  recipe per bar. Mixing label styles within one bar (one control
+  (`block text-[13px] leading-[18px] font-semibold text-ink mb-1`, sentence
+  case, defined once in `utility-patterns.css`). Apply the class; don't re-spec
+  the recipe per bar. Mixing label styles within one bar (one control
   `text-sm font-medium`, the next a `<legend>`) is the single thing that made the
   pre-2026-07-01 `/charts` bar look "weird" even though each control worked in
   isolation.
-  - **Two scoped label recipes — don't cross them.** This uppercase-xs
-    `.filter-label` is the recipe for **filter/control bars only**. Stacked
-    **forms** use the *different* label baked into the `App*` input components
-    (`text-sm font-medium text-gray-700`, §3) — do not hand-roll or override it.
-    A filter bar is therefore built from raw `.form-input`/`.form-select` +
-    `.filter-label` (as `jobs-filter-bar` and `workspace-toolbar` both do),
-    **not** from `App*` form components, because those carry the stacked-form
-    label. The two recipes are
-    intentional: uppercase-xs reads as a compact control legend; sentence-case
-    reads better down a long form.
+  - **A bar is built from raw controls.** Stacked **forms** use the label baked
+    into the `App*` input components (`text-sm font-medium text-ink`, also
+    sentence case) — do not hand-roll or override it. A filter bar is built
+    from raw `.form-input`/`.form-select` + `.filter-label` (as
+    `jobs-filter-bar` and `workspace-toolbar` both do), **not** from `App*`
+    form components, so every label in the row is the same and no hint line
+    breaks the row's shared bottom edge.
 - **The controls:** `.form-input` / `.form-select` already carry border, bg,
-  `rounded-lg`, `text-base sm:text-sm`, and dark mode — add the class, don't
+  `rounded-sm`, `text-base sm:text-sm`, and dark mode — add the class, don't
   re-spec padding/border per control.
 - **Prefer native inputs where they suffice.** A native `<input type="date">`
   styled with `.form-input` gives a calendar popup, correct locale display, and
@@ -248,7 +268,7 @@ Three rules, each of which cost something to learn:
    join that edge. `PageHeader` switches between the two on the slot's presence.
 
 This is also why §5's one-recipe-per-bar rule got sharper: the bar now shares a
-row with the header's own controls, so a second label recipe is visible side by
+row with the header's own controls, so a second label style is visible side by
 side rather than a band apart. `/jobs` was rebuilt from `AppSelect`/`AppInput`
 to raw `.form-*` + `.filter-label` for exactly that reason, and its document
 field's hint became a placeholder — a hint line under one field breaks the row's
@@ -264,12 +284,12 @@ but it is the closest surviving descendant of the bar that established the
 recipe. The original reference, `components/charts/ChartControls.vue`
 (2026-07-01), was deleted with the legacy series stack on 2026-08-31 — the recipe
 is unchanged, only its exemplar moved. The sister project `journal/webapp` (same
-Mosaic stack) uses the identical pattern in its Search view; when a Library bar
-looks off, compare against it.
+Mosaic shell) uses the identical row pattern in its Search view; Family
+Finances, on the same design system, is the closer match for colour and type.
 
 **Why this holds.** The design language's quality is *systemic*, not per-view
-inspiration: tokens defined once (`@theme` in `main.css`), a small shared CSS
-component layer (`utility-patterns.css`), one naming vocabulary (`data-testid`),
+inspiration: tokens defined once (`tokens.json`, generated into `tokens.css` and mapped in
+`main.css`), a small shared CSS component layer (`utility-patterns.css`), one naming vocabulary (`data-testid`),
 all enforced by lint/format/coverage gates. You get "right the first time" by
 *applying* the system, not re-deciding padding, colour, and radius each view.
 Because the filter-bar specs assert on `data-testid` (not classes), a bar can be

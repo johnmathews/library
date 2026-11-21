@@ -1,0 +1,54 @@
+<!-- @dsCard height=288 -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cover</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--canvas); font-family: var(--font-sans); }
+  .cover { position: relative; width: 960px; height: 288px; overflow: hidden; }
+  .cover svg { position: absolute; inset: 0; }
+  .fill-brand { fill: var(--brand-fill); }
+  .fill-solid { fill: var(--brand-solid); }
+  .fill-ink { fill: var(--ink); }
+  .fill-edge { fill: var(--control-border); }
+  .fold { fill: var(--canvas); }
+  .sheet { rx: var(--radius-md); }
+  .text { position: absolute; left: 40px; bottom: 32px; max-width: 420px; }
+  .name { margin: 0; font-size: 88px; line-height: .95; font-weight: 650; letter-spacing: -0.03em; color: var(--ink); }
+  .tag { margin: 16px 0 0; font-size: 14px; line-height: 20px; color: var(--ink-secondary); }
+</style>
+</head>
+<body>
+<div class="cover">
+  <svg width="960" height="288" viewBox="0 0 960 288" aria-hidden="true">
+    <!-- blocks: brand-fill, brand-solid, ink and control-border sheets, about a third of the cover, the same four fills as Family Finances' cover
+         arrangement: a grid of portrait sheets from x = 520 in five columns of 80 with 8px gutters, staggered by column like a shelf of filed papers, bleeding off the top, bottom and right edges, with two empty cells
+         pattern: "documents on a grid -> sheets with a folded corner": Library's first impression is a grid of document tiles, and the app icon is a page with a folded corner, so the sheets are the pattern
+         scales: space-2 (8px) gutters, radius-md (10px) corners, 104px sheets on the 4px grid, 16px folds cut in canvas -->
+    <rect class="fill-brand sheet" x="520" y="40" width="80" height="104"/>
+    <rect class="fill-ink sheet" x="520" y="152" width="80" height="104"/>
+    <rect class="fill-solid sheet" x="608" y="-24" width="80" height="104"/>
+    <rect class="fill-edge sheet" x="608" y="88" width="80" height="104"/>
+    <rect class="fill-brand sheet" x="608" y="200" width="80" height="104"/>
+    <rect class="fill-ink sheet" x="696" y="16" width="80" height="104"/>
+    <rect class="fill-solid sheet" x="696" y="240" width="80" height="104"/>
+    <rect class="fill-brand sheet" x="784" y="-48" width="80" height="104"/>
+    <rect class="fill-solid sheet" x="784" y="64" width="80" height="104"/>
+    <rect class="fill-ink sheet" x="784" y="176" width="80" height="104"/>
+    <rect class="fill-edge sheet" x="872" y="24" width="80" height="104"/>
+    <rect class="fill-brand sheet" x="872" y="136" width="80" height="104"/>
+    <polygon class="fold" points="584,40 600,40 600,56"/>
+    <polygon class="fold" points="672,88 688,88 688,104"/>
+    <polygon class="fold" points="760,16 776,16 776,32"/>
+    <polygon class="fold" points="848,64 864,64 864,80"/>
+    <polygon class="fold" points="936,136 952,136 952,152"/>
+  </svg>
+  <div class="text">
+    <p class="name">Library</p>
+    <p class="tag">Every letter, invoice and contract the household keeps, searchable in Dutch and English.</p>
+  </div>
+</div>
+</body>
+</html>

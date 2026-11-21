@@ -573,8 +573,9 @@ async function onLLMBackendReset(surface: string): Promise<void> {
   }
 }
 
-// Badge tone for the credential line: green only when nothing needs doing.
-// AppBadge takes `colour` (the GOV.UK-derived palette), NOT `variant` — passing
+// Badge tone for the credential line (brand spec §3.2): healthy is the
+// finished chip (green = neutral + check), degraded needs the owner (yellow),
+// unhealthy is a failure (red: the refresh token was rejected). AppBadge takes `colour` (the GOV.UK-derived palette), NOT `variant` — passing
 // `variant` is silently ignored and every badge falls back to grey, which is
 // exactly what shipped and made "healthy" indistinguishable from a problem.
 const llmCredentialColour = computed<'green' | 'yellow' | 'red'>(() => {
@@ -603,11 +604,11 @@ const triageLabelState = computed<string>(() => {
   return 'Inactive — disabled by configuration'
 })
 
-/** Uppercase-xs label above a read-only triage value (mosaic convention). */
-const triageLabelClass = 'block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400'
-const triageValueClass = 'text-sm text-gray-800 dark:text-gray-100'
-const triageStepTitleClass = 'text-sm font-semibold text-gray-800 dark:text-gray-100'
-const triageStepTextClass = 'text-sm text-gray-500 dark:text-gray-400 mt-1'
+/** Sentence-case label above a read-only triage value. */
+const triageLabelClass = 'block text-[13px] font-medium text-ink-secondary'
+const triageValueClass = 'text-sm text-ink'
+const triageStepTitleClass = 'text-sm font-semibold text-ink'
+const triageStepTextClass = 'text-sm text-ink-secondary mt-1'
 
 const cardClass = 'card p-6'
 // Seven tabs are wider than a phone, so the tablist scrolls sideways
@@ -618,8 +619,8 @@ const tabClass = (active: boolean): string =>
   [
     'shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium border-b-2 transition cursor-pointer',
     active
-      ? 'border-violet-500 text-violet-600'
-      : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200',
+      ? 'border-brand text-brand'
+      : 'border-transparent text-ink-secondary hover:text-ink',
   ].join(' ')
 </script>
 
@@ -627,7 +628,7 @@ const tabClass = (active: boolean): string =>
   <div id="settings-page" class="w-full">
     <PageHeader title="Settings" />
 
-    <div id="settings-tablist" role="tablist" class="flex gap-1 overflow-x-auto border-b border-gray-200 dark:border-gray-700/60 mb-6">
+    <div id="settings-tablist" role="tablist" class="flex gap-1 overflow-x-auto border-b border-line mb-6">
       <button
         id="settings-tab-dashboard"
         role="tab"
@@ -730,8 +731,8 @@ const tabClass = (active: boolean): string =>
 
       <div id="settings-card-dashboard-fields" :class="cardClass">
         <form @submit.prevent="onSubmit">
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Dashboard tile fields</h2>
-          <p class="mb-4 mt-1 text-sm text-gray-500 dark:text-gray-400">
+          <h2 class="text-base font-[650] text-ink">Dashboard tile fields</h2>
+          <p class="mb-4 mt-1 text-sm text-ink-secondary">
             Choose which fields show on document cards and the order they appear
             in. Drag the handle or use the arrows to reorder. The document title
             and thumbnail are always shown.
@@ -754,10 +755,10 @@ const tabClass = (active: boolean): string =>
 
       <div id="settings-card-background" :class="cardClass">
         <fieldset>
-          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+          <legend class="text-base font-[650] text-ink">
             Page background
           </legend>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <p class="text-sm text-ink-secondary mt-1">
             The canvas colour behind your document tiles. Applies in light mode and saves to your
             account automatically.
           </p>
@@ -770,18 +771,18 @@ const tabClass = (active: boolean): string =>
               :aria-checked="selectedTone === tone.value"
               :data-testid="`tone-${tone.value}`"
               :class="[
-                'flex items-center gap-3 rounded-lg border p-3 text-left transition cursor-pointer',
+                'flex items-center gap-3 rounded-sm border bg-panel p-3 text-left transition-colors cursor-pointer',
                 selectedTone === tone.value
-                  ? 'border-violet-500 ring-2 ring-violet-500/30'
-                  : 'border-gray-200 dark:border-gray-700/60 hover:border-gray-300 dark:hover:border-gray-600',
+                  ? 'border-brand ring-1 ring-brand'
+                  : 'border-control-border hover:bg-tile',
               ]"
               @click="selectTone(tone.value)"
             >
               <span
-                class="w-8 h-8 shrink-0 rounded-md border border-gray-200 dark:border-gray-700/60"
+                class="w-8 h-8 shrink-0 rounded-sm border border-control-border"
                 :style="{ backgroundColor: tone.swatch }"
               ></span>
-              <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{
+              <span class="text-sm font-medium text-ink">{{
                 tone.text
               }}</span>
             </button>
@@ -791,10 +792,10 @@ const tabClass = (active: boolean): string =>
 
       <div id="settings-card-tile-preview" :class="cardClass" class="mt-6">
         <fieldset>
-          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+          <legend class="text-base font-[650] text-ink">
             Document previews
           </legend>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <p class="text-sm text-ink-secondary mt-1">
             How each dashboard tile shows the document's first page. Saves to your account
             automatically.
           </p>
@@ -807,15 +808,15 @@ const tabClass = (active: boolean): string =>
               :aria-checked="selectedTilePreview === mode.value"
               :data-testid="`tile-${mode.value}`"
               :class="[
-                'flex flex-col gap-1 rounded-lg border p-3 text-left transition cursor-pointer',
+                'flex flex-col gap-1 rounded-sm border bg-panel p-3 text-left transition-colors cursor-pointer',
                 selectedTilePreview === mode.value
-                  ? 'border-violet-500 ring-2 ring-violet-500/30'
-                  : 'border-gray-200 dark:border-gray-700/60 hover:border-gray-300 dark:hover:border-gray-600',
+                  ? 'border-brand ring-1 ring-brand'
+                  : 'border-control-border hover:bg-tile',
               ]"
               @click="selectTilePreview(mode.value)"
             >
-              <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ mode.text }}</span>
-              <span class="text-xs text-gray-500 dark:text-gray-400">{{ mode.hint }}</span>
+              <span class="text-sm font-medium text-ink">{{ mode.text }}</span>
+              <span class="text-xs text-ink-secondary">{{ mode.hint }}</span>
             </button>
           </div>
         </fieldset>
@@ -823,10 +824,10 @@ const tabClass = (active: boolean): string =>
 
       <div id="settings-card-dock-position" :class="cardClass" class="mt-6">
         <fieldset>
-          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+          <legend class="text-base font-[650] text-ink">
             Action dock position
           </legend>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <p class="text-sm text-ink-secondary mt-1">
             Where the floating action dock sits on screen. Saves to your account automatically.
           </p>
           <div
@@ -843,10 +844,10 @@ const tabClass = (active: boolean): string =>
               :aria-checked="auth.dockPosition === position"
               :data-testid="`dock-position-${position}`"
               :class="[
-                'flex items-center justify-center rounded-lg border p-3 text-sm font-medium transition cursor-pointer',
+                'flex items-center justify-center rounded-sm border bg-panel p-3 text-sm font-medium transition-colors cursor-pointer',
                 auth.dockPosition === position
-                  ? 'border-violet-500 ring-2 ring-violet-500/30 text-violet-600'
-                  : 'border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600',
+                  ? 'border-brand ring-1 ring-brand text-brand'
+                  : 'border-control-border text-ink hover:bg-tile',
               ]"
               @click="selectDockPosition(position)"
             >
@@ -858,10 +859,10 @@ const tabClass = (active: boolean): string =>
 
       <div id="settings-card-phone-columns" :class="cardClass" class="mt-6">
         <fieldset>
-          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+          <legend class="text-base font-[650] text-ink">
             Phone columns
           </legend>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <p class="text-sm text-ink-secondary mt-1">
             How many dashboard tile columns to show on a phone-sized screen. Saves
             to your account automatically.
           </p>
@@ -879,10 +880,10 @@ const tabClass = (active: boolean): string =>
               :aria-checked="auth.phoneColumns === count"
               :data-testid="`phone-columns-${count}`"
               :class="[
-                'flex items-center justify-center rounded-lg border p-3 text-sm font-medium transition cursor-pointer',
+                'flex items-center justify-center rounded-sm border bg-panel p-3 text-sm font-medium transition-colors cursor-pointer',
                 auth.phoneColumns === count
-                  ? 'border-violet-500 ring-2 ring-violet-500/30 text-violet-600'
-                  : 'border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600',
+                  ? 'border-brand ring-1 ring-brand text-brand'
+                  : 'border-control-border text-ink hover:bg-tile',
               ]"
               @click="selectPhoneColumns(count)"
             >
@@ -894,10 +895,10 @@ const tabClass = (active: boolean): string =>
 
       <div id="settings-card-hide-summary-mobile" :class="cardClass" class="mt-6">
         <fieldset>
-          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+          <legend class="text-base font-[650] text-ink">
             Tile description on mobile
           </legend>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <p class="text-sm text-ink-secondary mt-1">
             On a phone-sized screen, dashboard tiles can get long and skinny.
             Hide the description at the bottom of each tile to keep them compact.
             Only affects phones; larger screens always show it. Saves to your
@@ -912,7 +913,7 @@ const tabClass = (active: boolean): string =>
               data-testid="hide-summary-mobile"
               @change="toggleHideSummaryMobile(($event.target as HTMLInputElement).checked)"
             />
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300"
+            <span class="text-sm font-medium text-ink"
               >Hide tile descriptions on phones</span
             >
           </label>
@@ -921,10 +922,10 @@ const tabClass = (active: boolean): string =>
 
       <div id="settings-card-kind-colors" :class="cardClass" class="mt-6">
         <fieldset>
-          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+          <legend class="text-base font-[650] text-ink">
             Document type colours
           </legend>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <p class="text-sm text-ink-secondary mt-1">
             Give each document type a coloured border on the dashboard so you can
             spot it at a glance. Pick any colour or tap a suggestion; “Default”
             restores a type's built-in colour. Saves to your account automatically.
@@ -950,11 +951,11 @@ const tabClass = (active: boolean): string =>
                   :value="pickerValue(kind.slug)"
                   :aria-label="`Border colour for ${kind.name}`"
                   :data-testid="`kind-color-input-${kind.slug}`"
-                  class="h-8 w-8 shrink-0 cursor-pointer rounded-md border border-gray-200 dark:border-gray-700/60 bg-transparent"
+                  class="h-8 w-8 shrink-0 cursor-pointer rounded-sm border border-control-border bg-transparent"
                   @change="onPickKindColor(kind.slug, $event)"
                 />
-                <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ kind.name }}</span>
-                <span class="text-xs text-gray-400 dark:text-gray-500">{{ kind.document_count }}</span>
+                <span class="text-sm font-medium text-ink">{{ kind.name }}</span>
+                <span class="text-xs text-ink-secondary">{{ kind.document_count }}</span>
               </label>
 
               <div
@@ -968,7 +969,7 @@ const tabClass = (active: boolean): string =>
                   type="button"
                   :title="swatch.name"
                   :aria-label="`${swatch.name} for ${kind.name}`"
-                  class="h-5 w-5 rounded-full border border-black/10 dark:border-white/20 transition hover:scale-110 cursor-pointer"
+                  class="h-5 w-5 rounded-full border border-control-border transition hover:scale-110 cursor-pointer"
                   :style="{ backgroundColor: swatch.hex }"
                   @click="setKindColor(kind.slug, swatch.hex)"
                 ></button>
@@ -976,7 +977,7 @@ const tabClass = (active: boolean): string =>
 
               <button
                 type="button"
-                class="ml-auto text-xs font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 disabled:opacity-40 disabled:cursor-default cursor-pointer"
+                class="ml-auto text-xs font-medium text-brand hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-default cursor-pointer"
                 :disabled="!isCustomised(kind.slug)"
                 :data-testid="`kind-color-reset-${kind.slug}`"
                 @click="resetKindColor(kind.slug)"
@@ -989,7 +990,7 @@ const tabClass = (active: boolean): string =>
           <div class="mt-5">
             <button
               type="button"
-              class="text-sm font-medium text-violet-600 hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-default cursor-pointer"
+              class="text-sm font-medium text-brand hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-default cursor-pointer"
               :disabled="!hasCustomColors"
               data-testid="kind-colors-reset-all"
               @click="resetAllKindColors"
@@ -1017,8 +1018,8 @@ const tabClass = (active: boolean): string =>
 
       <div id="settings-card-ask-profile" :class="cardClass">
         <form data-testid="ask-profile-form" @submit.prevent="onAskProfileSubmit">
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">About you</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <h2 class="text-base font-[650] text-ink">About you</h2>
+          <p class="text-sm text-ink-secondary mt-1">
             Ask reads these notes with every question, as facts about you and your
             household that the documents themselves never state: who lives with
             you, your current address, which car is the family car, where you
@@ -1073,13 +1074,13 @@ const tabClass = (active: boolean): string =>
               class="form-checkbox"
               data-testid="notifications-enabled"
             />
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300"
+            <span class="text-sm font-medium text-ink"
               >Enable push notifications</span
             >
           </label>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mb-5">
+          <p class="text-sm text-ink-secondary mb-5">
             Send push notifications to your devices via
-            <a href="https://pushover.net" class="text-violet-500 underline">Pushover</a>. Enabling
+            <a href="https://pushover.net" class="text-brand underline">Pushover</a>. Enabling
             this requires a valid app token and user key.
           </p>
 
@@ -1176,15 +1177,15 @@ const tabClass = (active: boolean): string =>
       </div>
 
       <div id="settings-card-connected-apps" :class="cardClass">
-        <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Connected apps</h2>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        <h2 class="text-base font-[650] text-ink">Connected apps</h2>
+        <p class="mt-1 text-sm text-ink-secondary">
           Apps such as Claude and ChatGPT that you approved to use the Library as you. A
           disconnected app loses access at once; to use it again, connect it again from the app.
         </p>
 
         <p
           v-if="grantsState === 'loading'"
-          class="mt-4 text-sm text-gray-500 dark:text-gray-400"
+          class="mt-4 text-sm text-ink-secondary"
           data-testid="connected-apps-loading"
         >
           Loading your connected apps…
@@ -1192,7 +1193,7 @@ const tabClass = (active: boolean): string =>
 
         <p
           v-else-if="grantsState === 'off'"
-          class="mt-4 text-sm text-gray-600 dark:text-gray-300"
+          class="mt-4 text-sm text-ink-secondary"
           data-testid="connected-apps-off"
         >
           Connecting apps this way is turned off on this Library server. An administrator turns it
@@ -1201,7 +1202,7 @@ const tabClass = (active: boolean): string =>
 
         <p
           v-else-if="grantsState === 'loaded' && grants.length === 0"
-          class="mt-4 text-sm text-gray-600 dark:text-gray-300"
+          class="mt-4 text-sm text-ink-secondary"
           data-testid="connected-apps-empty"
         >
           No apps are connected. To connect one, add the Library as a connector in the app; it
@@ -1211,7 +1212,7 @@ const tabClass = (active: boolean): string =>
         <ul
           v-else-if="grantsState === 'loaded'"
           id="settings-connected-apps-list"
-          class="mt-4 divide-y divide-gray-200 dark:divide-gray-700"
+          class="mt-4 divide-y divide-line"
           data-testid="connected-apps-list"
         >
           <li
@@ -1223,7 +1224,7 @@ const tabClass = (active: boolean): string =>
           >
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div class="min-w-0">
-                <p class="text-sm font-semibold text-gray-800 dark:text-gray-100 break-words">
+                <p class="text-sm font-semibold text-ink break-words">
                   {{ grantName(grant) }}
                 </p>
                 <dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
@@ -1253,19 +1254,19 @@ const tabClass = (active: boolean): string =>
 
             <div
               v-if="confirmingGrant === grant.id"
-              class="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 dark:border-red-500/30 dark:bg-red-500/10"
+              class="mt-3 rounded-md bg-attention-tint px-4 py-3"
               role="group"
               :aria-label="`Disconnect ${grantName(grant)}`"
               :data-testid="`connected-app-confirm-${grant.id}`"
             >
-              <p class="text-sm text-gray-800 dark:text-gray-100">
+              <p class="text-sm text-ink">
                 Disconnect {{ grantName(grant) }}? It stops working at once and has to be approved
                 again to reconnect.
               </p>
               <div class="mt-3 flex flex-wrap gap-3">
                 <AppButton
                   type="button"
-                  variant="warning"
+                  variant="primary"
                   size="sm"
                   :disabled="revokingGrant === grant.id"
                   :data-testid="`connected-app-confirm-revoke-${grant.id}`"
@@ -1304,7 +1305,7 @@ const tabClass = (active: boolean): string =>
       />
 
       <div v-if="triageLoading" :class="cardClass" data-testid="email-triage-loading">
-        <p class="text-sm text-gray-500 dark:text-gray-400">Loading the email triage configuration…</p>
+        <p class="text-sm text-ink-secondary">Loading the email triage configuration…</p>
       </div>
 
       <template v-else-if="triage">
@@ -1314,30 +1315,30 @@ const tabClass = (active: boolean): string =>
           :class="cardClass"
           data-testid="email-triage-unconfigured"
         >
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Email triage</h2>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          <h2 class="text-base font-[650] text-ink">Email triage</h2>
+          <p class="mt-1 text-sm text-ink-secondary">
             Email-in is not configured on this server.
           </p>
         </div>
 
         <div v-else id="settings-card-email-triage" :class="cardClass" data-testid="email-triage-config">
           <div class="flex flex-wrap items-center gap-3">
-            <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+            <h2 class="text-base font-[650] text-ink">
               How inbound email is triaged
             </h2>
             <AppBadge
-              :colour="triage.hold.enabled ? 'purple' : 'grey'"
+              :colour="triage.hold.enabled ? 'green' : 'grey'"
               data-testid="email-triage-hold-master"
             >
-              Hold pipeline {{ triage.hold.enabled ? 'ON' : 'OFF' }}
+              Hold pipeline {{ triage.hold.enabled ? 'on' : 'off' }}
             </AppBadge>
           </div>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          <p class="mt-1 text-sm text-ink-secondary">
             Emails sent to the library are evaluated before being added. Anything judged
             not library-worthy is held for review — never silently lost.
             <RouterLink
               to="/held-emails"
-              class="text-violet-500 underline"
+              class="text-brand underline"
               data-testid="view-held-emails"
             >View held emails</RouterLink>.
           </p>
@@ -1368,7 +1369,7 @@ const tabClass = (active: boolean): string =>
           </dl>
 
           <h3 :class="triageLabelClass" class="mt-8">Decision flow, per email</h3>
-          <ol class="mt-3 space-y-5 list-decimal pl-5 marker:text-gray-400 marker:text-sm">
+          <ol class="mt-3 space-y-5 list-decimal pl-5 marker:text-ink-secondary marker:text-sm">
             <li data-testid="triage-step-allowlist">
               <div class="flex flex-wrap items-center gap-2">
                 <span :class="triageStepTitleClass">Sender allowlist</span>
@@ -1376,7 +1377,7 @@ const tabClass = (active: boolean): string =>
                   :colour="triage.hold.unknown_senders ? 'green' : 'grey'"
                   data-testid="triage-allowlist-hold-badge"
                 >
-                  Unknown-sender hold {{ triage.hold.unknown_senders ? 'ON' : 'OFF' }}
+                  Unknown-sender hold {{ triage.hold.unknown_senders ? 'on' : 'off' }}
                 </AppBadge>
               </div>
               <p :class="triageStepTextClass" data-testid="triage-allowlist-mode">
@@ -1396,7 +1397,7 @@ const tabClass = (active: boolean): string =>
                   :colour="triage.noise_filter.enabled ? 'green' : 'grey'"
                   data-testid="triage-noise-badge"
                 >
-                  {{ triage.noise_filter.enabled ? 'ON' : 'OFF' }}
+                  {{ triage.noise_filter.enabled ? 'On' : 'Off' }}
                 </AppBadge>
               </div>
               <p :class="triageStepTextClass" data-testid="triage-noise-thresholds">
@@ -1455,7 +1456,7 @@ const tabClass = (active: boolean): string =>
                   :colour="triage.hold.below_substance ? 'green' : 'grey'"
                   data-testid="triage-substance-badge"
                 >
-                  Below-substance hold {{ triage.hold.below_substance ? 'ON' : 'OFF' }}
+                  Below-substance hold {{ triage.hold.below_substance ? 'on' : 'off' }}
                 </AppBadge>
               </div>
               <p :class="triageStepTextClass" data-testid="triage-substance-thresholds">
@@ -1474,7 +1475,7 @@ const tabClass = (active: boolean): string =>
             </li>
           </ol>
 
-          <p class="mt-8 text-xs text-gray-500 dark:text-gray-400" data-testid="email-triage-footnote">
+          <p class="mt-8 text-xs text-ink-secondary" data-testid="email-triage-footnote">
             These settings are environment-only: change them in the server's
             <code>.env</code> and restart the worker — see
             <code>docs/runbooks/email-triage.md</code> for the how.
@@ -1488,10 +1489,10 @@ const tabClass = (active: boolean): string =>
           class="mt-6"
           data-testid="triage-recent-skips"
         >
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+          <h2 class="text-base font-[650] text-ink">
             Recently skipped items
           </h2>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          <p class="mt-1 text-sm text-ink-secondary">
             The last emails where the pipeline filtered or dropped an item — check here
             first when an attachment seems to have vanished.
           </p>
@@ -1511,7 +1512,7 @@ const tabClass = (active: boolean): string =>
           </p>
           <ul
             v-else
-            class="mt-4 divide-y divide-gray-200 dark:divide-gray-700"
+            class="mt-4 divide-y divide-line"
             data-testid="triage-recent-skips-list"
           >
             <li
@@ -1521,13 +1522,13 @@ const tabClass = (active: boolean): string =>
               :data-testid="`triage-skip-row-${row.id}`"
             >
               <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <span class="text-sm font-medium text-gray-800 dark:text-gray-100">
+                <span class="text-sm font-medium text-ink">
                   {{ row.subject || '(no subject)' }}
                 </span>
-                <span class="text-xs text-gray-500 dark:text-gray-400">
+                <span class="text-xs text-ink-secondary">
                   {{ row.from_address || 'unknown sender' }}
                 </span>
-                <span class="text-xs text-gray-500 dark:text-gray-400">
+                <span class="text-xs text-ink-secondary">
                   {{ formatDateTime(row.created_at) }}
                 </span>
               </div>
@@ -1535,11 +1536,11 @@ const tabClass = (active: boolean): string =>
                 <li
                   v-for="(decision, index) in row.decisions"
                   :key="index"
-                  class="text-sm text-gray-600 dark:text-gray-300"
+                  class="text-sm text-ink-secondary"
                 >
                   <span class="font-medium">{{ decision.filename || `(${decision.kind})` }}</span>
                   <span> — {{ decision.reason }}</span>
-                  <span v-if="decision.detail" class="text-gray-500 dark:text-gray-400">
+                  <span v-if="decision.detail" class="text-ink-secondary">
                     · {{ decision.detail }}</span>
                 </li>
               </ul>
@@ -1569,13 +1570,13 @@ const tabClass = (active: boolean): string =>
       </div>
 
       <div v-if="llmLoading" :class="cardClass" data-testid="llm-backend-loading">
-        <p class="text-sm text-gray-500 dark:text-gray-400">Loading the LLM backend settings…</p>
+        <p class="text-sm text-ink-secondary">Loading the LLM backend settings…</p>
       </div>
 
       <template v-else-if="llm">
         <div id="settings-card-llm-credentials" :class="cardClass" data-testid="llm-credentials">
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">How Claude is reached</h2>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          <h2 class="text-base font-[650] text-ink">How Claude is reached</h2>
+          <p class="mt-1 text-sm text-ink-secondary">
             These settings are instance-wide, not per-user. The metered API bills per token
             against an Anthropic API key; the Claude subscription bills nothing but spends
             subscription quota, and carries a large fixed overhead on every call.
@@ -1594,34 +1595,33 @@ const tabClass = (active: boolean): string =>
               {{ titleCase(llm.credentials_status) }}
             </AppBadge>
           </div>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400" data-testid="llm-credentials-detail">
+          <p class="mt-1 text-sm text-ink-secondary" data-testid="llm-credentials-detail">
             {{ llm.credentials_detail }}
           </p>
         </div>
 
         <div id="settings-card-llm-surfaces" :class="cardClass" data-testid="llm-surfaces">
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Per-feature backend</h2>
-          <p v-if="!llm.editable" class="mt-1 text-sm text-gray-500 dark:text-gray-400" data-testid="llm-readonly-note">
+          <h2 class="text-base font-[650] text-ink">Per-feature backend</h2>
+          <p v-if="!llm.editable" class="mt-1 text-sm text-ink-secondary" data-testid="llm-readonly-note">
             Read-only — only an admin can change these.
           </p>
 
           <div
             v-for="surface in llm.surfaces"
             :key="surface.surface"
-            class="mt-6 border-t border-gray-200 pt-6 first:mt-4 first:border-0 first:pt-0 dark:border-gray-700"
+            class="mt-6 border-t border-line pt-6 first:mt-4 first:border-0 first:pt-0"
             :data-testid="`llm-surface-${surface.surface}`"
           >
             <div class="flex flex-wrap items-center gap-3">
-              <h3 class="text-sm font-semibold text-gray-800 dark:text-gray-100">{{ surface.label }}</h3>
+              <h3 class="text-sm font-semibold text-ink">{{ surface.label }}</h3>
               <AppBadge
                 v-if="surface.overridden"
-                colour="blue"
                 :data-testid="`llm-overridden-${surface.surface}`"
               >
                 Changed here
               </AppBadge>
             </div>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ surface.description }}</p>
+            <p class="mt-1 text-sm text-ink-secondary">{{ surface.description }}</p>
 
             <div class="mt-3 flex flex-wrap items-end gap-3">
               <label class="flex flex-col gap-1">

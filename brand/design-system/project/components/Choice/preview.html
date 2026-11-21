@@ -1,0 +1,51 @@
+<!-- @dsCard group="Forms" height=280 subtitle="Checkbox, radio and switch" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Choice — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+.lb-choices { display: grid; gap: var(--space-4); }
+.lb-set { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; }
+.lb-set legend { padding: 0; margin-bottom: 4px; font-size: 13px; line-height: 18px; font-weight: 600; }
+.lb-opt { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.lb-box { width: 16px; height: 16px; box-sizing: border-box; flex: none; border: 1.5px solid var(--control-border); background: var(--panel); border-radius: 4px; display: grid; place-items: center; color: var(--on-brand); }
+.lb-box.radio { border-radius: 50%; }
+.lb-box.on { background: var(--brand-fill); border-color: var(--brand-fill); }
+.lb-box.radio.on::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--on-brand); }
+.lb-box .lb-i { width: 12px; height: 12px; stroke-width: 3; }
+.lb-switch { width: 36px; height: 20px; box-sizing: border-box; border-radius: var(--radius-full); background: var(--tile); border: 1.5px solid var(--control-border); position: relative; flex: none; }
+.lb-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--control-border); }
+.lb-switch.on { background: var(--brand-fill); border-color: var(--brand-fill); }
+.lb-switch.on::after { left: 18px; background: var(--on-brand); }
+.lb-word { font-size: 13px; color: var(--ink-secondary); }
+</style>
+</head>
+<body>
+<div class="lb-pad"><div class="lb-choices">
+  <fieldset class="lb-set"><legend>Notify me about</legend>
+    <label class="lb-opt"><span class="lb-box on"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>A document is processed</label>
+    <label class="lb-opt"><span class="lb-box on"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>Processing fails</label>
+    <label class="lb-opt"><span class="lb-box"></span>An email is held</label>
+  </fieldset>
+  <fieldset class="lb-set"><legend>Document previews</legend>
+    <label class="lb-opt"><span class="lb-box radio on"></span>Whole page</label>
+    <label class="lb-opt"><span class="lb-box radio"></span>Full width, cropped</label>
+  </fieldset>
+  <label class="lb-opt"><span class="lb-switch on" role="switch" aria-checked="true"></span>Hide tile descriptions on phones <span class="lb-word">On</span></label>
+</div></div>
+</body>
+</html>

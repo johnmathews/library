@@ -30,8 +30,8 @@ const tabClass = (active: boolean): string =>
   [
     'px-4 py-2 -mb-px text-sm font-medium border-b-2 transition cursor-pointer',
     active
-      ? 'border-violet-500 text-violet-600'
-      : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200',
+      ? 'border-brand text-brand'
+      : 'border-transparent text-ink-secondary hover:text-ink',
   ].join(' ')
 </script>
 
@@ -41,7 +41,7 @@ const tabClass = (active: boolean): string =>
 
     <div
       role="tablist"
-      class="flex gap-1 border-b border-gray-200 dark:border-gray-700/60 mb-6"
+      class="flex gap-1 border-b border-line mb-6"
     >
       <button
         v-for="t in TABS"

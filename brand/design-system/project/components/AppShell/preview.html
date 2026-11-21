@@ -1,0 +1,99 @@
+<!-- @dsCard group="Layout" height=570 subtitle="Sidebar with the logo, header and phone bar" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AppShell — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Buttons */
+.lb-btn { font: 600 13.5px/1 var(--font-sans); display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: var(--radius-sm); border: 1px solid var(--control-border); background: var(--panel); color: var(--ink); white-space: nowrap; cursor: pointer; text-decoration: none; box-sizing: border-box; }
+.lb-btn:hover, .lb-btn.is-hover { background: var(--tile); }
+.lb-btn.primary { background: var(--brand-fill); border-color: var(--brand-fill); color: var(--on-brand); }
+.lb-btn.primary:hover, .lb-btn.primary.is-hover { filter: brightness(1.1); }
+.lb-btn.ghost { border-color: transparent; background: transparent; color: var(--brand); }
+.lb-btn.icon { width: 34px; padding: 0; justify-content: center; }
+.lb-btn.round { border-radius: var(--radius-full); }
+.lb-btn[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+
+/* Card */
+.lb-card { background: var(--panel); border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: var(--space-5) 22px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.lb-card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.lb-card h2, .lb-h2 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 650; }
+.lb-sub { margin: -10px 0 0; color: var(--ink-secondary); font-size: 13px; line-height: 18px; }
+.lb-lead { margin: 0; color: var(--ink-secondary); font-size: 15px; line-height: 22px; }
+@media (max-width: 640px) { .lb-card { padding: var(--space-4); } }
+
+/* App icon: the brand-fill square with the mark in on-brand. */
+.lb-icon { display: block; flex: none; }
+.lb-icon .sq { fill: var(--brand-fill); }
+.lb-icon .mark { color: var(--on-brand); }
+.lb-icon .knock { fill: var(--brand-fill); stroke: var(--brand-fill); }
+.lb-icon .ring { fill: var(--brand-fill); stroke: currentColor; }
+
+/* Shell */
+.lb-shell { display: grid; grid-template-columns: 216px 1fr; min-height: 520px; }
+.lb-side { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 12px; display: grid; align-content: start; gap: 2px; }
+.lb-logo { display: flex; align-items: center; gap: 10px; padding: 0 8px 18px; color: var(--ink); text-decoration: none; }
+.lb-logo .name { font-size: 18px; line-height: 24px; font-weight: 650; letter-spacing: -0.015em; }
+.lb-nav { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-radius: var(--radius-sm); color: var(--ink); font-weight: 500; text-decoration: none; }
+.lb-nav .lb-i { color: var(--ink-secondary); }
+.lb-nav[aria-current] { background: var(--brand-tint); color: var(--brand-on-tint); font-weight: 650; }
+.lb-nav[aria-current] .lb-i { color: var(--brand-on-tint); }
+.lb-navgap { height: 12px; }
+.lb-main { display: grid; align-content: start; min-width: 0; }
+.lb-top { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 32px; border-bottom: 1px solid var(--line); }
+.lb-top h1 { margin: 0 auto 0 0; font-size: 24px; line-height: 30px; font-weight: 650; letter-spacing: -0.015em; }
+.lb-content { padding: 24px 32px; display: grid; gap: 16px; }
+.lb-phonebar { display: none; align-items: center; gap: 10px; height: 56px; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.lb-phonebar .t { font-weight: 650; font-size: 18px; margin-right: auto; }
+@media (max-width: 640px) {
+  .lb-shell { grid-template-columns: 1fr; min-height: 0; }
+  .lb-side, .lb-top { display: none; }
+  .lb-phonebar { display: flex; }
+  .lb-content { padding: 14px 16px 20px; }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="lb-mark" viewBox="0 0 32 32">
+    <g transform="translate(-1 -1)" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 5 H17 L22 10 V24 A2 2 0 0 1 20 26 H9 A2 2 0 0 1 7 24 V7 A2 2 0 0 1 9 5 Z"/>
+      <polyline points="17,5 17,10 22,10"/>
+      <line x1="11" y1="14" x2="17" y2="14"/>
+      <line x1="11" y1="18" x2="14.5" y2="18"/>
+      <circle class="knock" cx="22" cy="22" r="6.75"/>
+      <circle class="ring" cx="22" cy="22" r="4.5"/>
+      <line x1="25.5" y1="25.5" x2="28" y2="28" stroke-width="3"/>
+    </g>
+  </symbol>
+</svg>
+<div class="lb-shell">
+  <aside class="lb-side" aria-label="Sections">
+    <a class="lb-logo" href="#" aria-label="Library home"><svg class="lb-icon" width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect class="sq" width="32" height="32" rx="7"/><use class="mark" href="#lb-mark"/></svg><span class="name">Library</span></a>
+    <a class="lb-nav" href="#" aria-current="page"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></svg>Documents</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>Search</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V5"/><path d="M8 9l4-4 4 4"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg>Upload</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h8l4 4v12H6z"/><path d="M9 13h6M9 16.5h4"/></svg>New note</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V11M10 19V6M15 19v-5M20 19V9"/></svg>Charts</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h.5A2.5 2.5 0 0 1 5 13.5z"/></svg>Ask</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Jobs</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>Projects</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg>Matters</a><span class="lb-navgap"></span><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5A1.5 1.5 0 0 1 6.5 4H19v14H6.5A1.5 1.5 0 0 0 5 19.5z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19"/></svg>Vocabulary</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>Settings</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9v-5z"/></svg>Admin</a><a class="lb-nav" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 4h4M7 7l1 13h8l1-13"/></svg>Recently deleted</a>
+  </aside>
+  <div class="lb-main">
+    <div class="lb-phonebar"><svg class="lb-icon" width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><rect class="sq" width="32" height="32" rx="7"/><use class="mark" href="#lb-mark"/></svg><span class="t">Documents</span><button class="lb-btn icon round" aria-label="Open sidebar"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg></button></div>
+    <header class="lb-top"><h1>Documents</h1><button class="lb-btn icon round" aria-label="Dark mode"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5z"/></svg></button></header>
+    <div class="lb-content">
+      <p class="lb-lead">312 documents. 3 need review.</p>
+      <section class="lb-card"><h2>Recently added</h2><p class="lb-sub">The screen's tiles and cards sit here, on the page tone.</p></section>
+    </div>
+  </div>
+</div>
+</body>
+</html>

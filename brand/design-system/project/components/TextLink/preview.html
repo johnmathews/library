@@ -1,0 +1,41 @@
+<!-- @dsCard group="Actions" height=240 subtitle="Card, inline, quiet and back links" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TextLink — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Links */
+.lb-link { color: var(--brand); font-weight: 600; text-decoration: none; }
+.lb-link:hover, .lb-link.is-hover { text-decoration: underline; text-underline-offset: 3px; }
+.lb-link.inline { font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+.lb-link.quiet { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.lb-back { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+
+.lb-strip { background: var(--attention-tint); border-radius: var(--radius-md); padding: 10px 14px; }
+.lb-strip b { color: var(--attention); font-weight: 650; margin-right: 6px; }
+p { margin: 0; }
+</style>
+</head>
+<body>
+<div class="lb-pad">
+  <div class="lb-row"><span class="lb-state">Card link</span><a class="lb-link" href="#">All jobs</a><a class="lb-link is-hover" href="#">Hover</a><a class="lb-link is-focus" href="#">Focus</a></div>
+  <div class="lb-row"><span class="lb-state">Back</span><a class="lb-link lb-back" href="#"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg> Documents</a></div>
+  <p>No documents match this search. Try different words, or <a class="lb-link inline" href="#">clear the filters</a>.</p>
+  <p class="lb-strip"><b>To do</b>3 documents need review. <a class="lb-link quiet" href="#">Review them one by one</a></p>
+</div>
+</body>
+</html>

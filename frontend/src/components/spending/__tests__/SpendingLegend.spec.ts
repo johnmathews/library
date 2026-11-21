@@ -13,8 +13,7 @@ const BANDS: Band[] = [
   {
     value: 'hosting',
     label: 'Hosting',
-    light: SPLIT_PALETTE[0]!.light,
-    dark: SPLIT_PALETTE[0]!.dark,
+    colour: SPLIT_PALETTE[0]!.colour,
     totalCents: 3300,
     members: [{ value: 'hosting', label: 'Hosting', colour: null }],
     isOther: false,
@@ -22,8 +21,7 @@ const BANDS: Band[] = [
   {
     value: 'licences',
     label: 'Licences',
-    light: SPLIT_PALETTE[1]!.light,
-    dark: SPLIT_PALETTE[1]!.dark,
+    colour: SPLIT_PALETTE[1]!.colour,
     totalCents: 1800,
     members: [{ value: 'licences', label: 'Licences', colour: null }],
     isOther: false,
@@ -31,8 +29,7 @@ const BANDS: Band[] = [
   {
     value: OTHER_VALUE,
     label: 'Other (2)',
-    light: OTHER_COLOUR.light,
-    dark: OTHER_COLOUR.dark,
+    colour: OTHER_COLOUR,
     totalCents: 1350,
     members: [
       { value: 'tools', label: 'Tools', colour: null },
@@ -149,43 +146,42 @@ describe('SpendingLegend', () => {
 
   // Extra coverage beyond the brief's pinned assertions ----------------------
 
-  it('never derives a colour: the swatch is exactly band.light in light mode', () => {
+  it('never derives a colour: the swatch paints exactly band.colour', () => {
     const wrapper = mountLegend()
-    const swatch = rowOf(wrapper, 'Hosting').find('[data-testid="spending-legend-swatch"]')
-    expect(swatch.attributes('style')).toContain(cssColour(SPLIT_PALETTE[0]!.light))
+    const swatch = (label: string) =>
+      rowOf(wrapper, label).find('[data-testid="spending-legend-swatch"]').attributes('style')
+    expect(swatch('Hosting')).toContain(`background-color: ${SPLIT_PALETTE[0]!.colour}`)
+    expect(swatch('Licences')).toContain(`background-color: ${SPLIT_PALETTE[1]!.colour}`)
+    expect(swatch('Other (2)')).toContain(`background-color: ${OTHER_COLOUR}`)
   })
 
-  // useDark (`@vueuse/core`) resolves dark/light from the `vueuse-color-scheme`
-  // localStorage key (falling back to matchMedia), not from a class already
-  // sitting on <html> — so forcing the dark arm means seeding that key
-  // before mount, the same primitive ThemeToggle.spec.ts exercises via the
-  // checkbox. Mounted once per theme, per the coverage requirement that
-  // Task 3 shipped without.
-  it('renders the dark-theme swatch colour, distinct from the light one', () => {
-    const lightWrapper = mountLegend()
-    const lightHosting = rowOf(lightWrapper, 'Hosting')
-      .find('[data-testid="spending-legend-swatch"]')
-      .attributes('style')
-    const lightLicences = rowOf(lightWrapper, 'Licences')
-      .find('[data-testid="spending-legend-swatch"]')
-      .attributes('style')
+  // The swatch paints the role reference (`var(--category-1)`), which
+  // tokens.css flips under `.dark`, so the legend follows the theme with no
+  // theme state of its own. Proved by the cascade itself: the same rendered
+  // swatch resolves to each theme's value once a stylesheet declares them.
+  it('follows the theme through CSS: the same swatch resolves per theme', () => {
+    const style = document.createElement('style')
+    style.textContent = ':root { --category-1: #100001 } .dark { --category-1: #200001 }'
+    document.head.appendChild(style)
+    const wrapper = mount(SpendingLegend, {
+      props: { bands: BANDS, hidden: new Set<string | null | symbol>(), currency: 'USD' },
+      attachTo: document.body,
+    })
+    const el = rowOf(wrapper, 'Hosting').find('[data-testid="spending-legend-swatch"]').element
+    const resolved = () => getComputedStyle(el).getPropertyValue('--category-1').trim()
+    expect(resolved()).toBe('#100001')
+    document.documentElement.classList.add('dark')
+    expect(resolved()).toBe('#200001')
+    wrapper.unmount()
+    style.remove()
+  })
 
-    localStorage.setItem('vueuse-color-scheme', 'dark')
-    const darkWrapper = mountLegend()
-    const darkHosting = rowOf(darkWrapper, 'Hosting')
-      .find('[data-testid="spending-legend-swatch"]')
-      .attributes('style')
-    const darkLicences = rowOf(darkWrapper, 'Licences')
-      .find('[data-testid="spending-legend-swatch"]')
-      .attributes('style')
-
-    // Both rendered bands change between themes, and each lands on ITS OWN
-    // slot's dark hex — not just "different from light", which a bug that
-    // shifted every band to the same wrong slot could still satisfy.
-    expect(darkHosting).not.toBe(lightHosting)
-    expect(darkHosting).toContain(cssColour(SPLIT_PALETTE[0]!.dark))
-    expect(darkLicences).not.toBe(lightLicences)
-    expect(darkLicences).toContain(cssColour(SPLIT_PALETTE[1]!.dark))
+  it('paints an owner\'s stored hex from outside the palette exactly as stored', () => {
+    const owned: Band[] = [{ ...BANDS[0]!, colour: '#876708' }, ...BANDS.slice(1)]
+    const wrapper = mountLegend(owned)
+    expect(
+      rowOf(wrapper, 'Hosting').find('[data-testid="spending-legend-swatch"]').attributes('style'),
+    ).toContain(cssColour('#876708'))
   })
 
   it('shows a reset control once a band is hidden, and clicking it emits reset', async () => {
@@ -223,8 +219,7 @@ describe('SpendingLegend', () => {
       {
         value: null,
         label: 'Unclassified',
-        light: SPLIT_PALETTE[2]!.light,
-        dark: SPLIT_PALETTE[2]!.dark,
+        colour: SPLIT_PALETTE[2]!.colour,
         totalCents: 500,
         members: [{ value: null, label: 'Unclassified', colour: null }],
         isOther: false,

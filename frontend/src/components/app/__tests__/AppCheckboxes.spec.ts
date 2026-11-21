@@ -73,7 +73,7 @@ describe('AppCheckboxes', () => {
 
     expect(wrapper.text()).toContain('Select one')
     const err = wrapper.find('#contact-error')
-    expect(err.classes().join(' ')).toContain('text-red-500')
+    expect(err.classes().join(' ')).toContain('text-error-ink')
     expect(wrapper.find('fieldset').attributes('aria-describedby')).toBe('contact-error')
   })
 })

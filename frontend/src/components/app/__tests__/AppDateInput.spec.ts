@@ -69,6 +69,6 @@ describe('AppDateInput', () => {
       props: { id: 'received', legend: 'Date received', errorMessage: 'Enter a date' },
     })
     expect(wrapper.find('#received-error').text()).toContain('Enter a date')
-    expect(wrapper.find('#received-day').classes()).toContain('border-red-300')
+    expect(wrapper.find('#received-day').classes()).toContain('border-error-ink')
   })
 })

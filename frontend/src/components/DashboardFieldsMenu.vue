@@ -53,7 +53,7 @@ watch(open, (isOpen) => {
         :ref="triggerRef"
         type="button"
         data-testid="dashboard-fields-button"
-        class="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1 text-sm text-gray-700 transition-colors hover:bg-violet-50 hover:text-violet-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-violet-400/10"
+        class="inline-flex items-center gap-1.5 rounded-sm border border-control-border bg-panel px-3 py-1 text-sm font-semibold text-ink transition-colors hover:bg-tile"
         :aria-expanded="isOpen"
         aria-haspopup="dialog"
         @click="toggle"
@@ -65,13 +65,13 @@ watch(open, (isOpen) => {
       </button>
     </template>
 
-    <p class="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Card fields</p>
+    <p class="mb-2 text-[13px] font-semibold text-ink-secondary">Card fields</p>
     <DashboardFieldsEditor
       :key="editorKey"
       :model-value="auth.dashboardFields"
       @update:model-value="persist"
     />
-    <p v-if="errorMessage" class="mt-2 text-sm text-red-500" data-testid="dashboard-fields-error">
+    <p v-if="errorMessage" class="mt-2 text-sm text-error-ink" data-testid="dashboard-fields-error">
       {{ errorMessage }}
     </p>
   </AppPopover>

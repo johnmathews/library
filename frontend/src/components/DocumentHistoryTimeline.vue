@@ -241,17 +241,17 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
     data-testid="document-history"
     class="card p-5"
   >
-    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">History</h2>
+    <h2 class="text-base font-[650] text-ink mb-3">History</h2>
 
     <p
       v-if="milestones.length === 0"
-      class="text-sm text-gray-500 dark:text-gray-400"
+      class="text-sm text-ink-secondary"
       data-testid="history-empty"
     >
       No events recorded yet.
     </p>
 
-    <ol v-else class="relative border-l border-gray-200 dark:border-gray-700/60 ml-1.5">
+    <ol v-else class="relative border-l border-line ml-1.5">
       <li
         v-for="(event, index) in milestones"
         :key="index"
@@ -259,11 +259,11 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
         data-testid="history-item"
       >
         <span
-          class="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full bg-violet-400 dark:bg-violet-500 ring-4 ring-white dark:ring-gray-800"
+          class="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full bg-control-border ring-4 ring-panel"
           aria-hidden="true"
         />
-        <div class="text-sm font-medium text-gray-800 dark:text-gray-100">{{ label(event) }}</div>
-        <div class="text-xs text-gray-400 dark:text-gray-500">
+        <div class="text-sm font-medium text-ink">{{ label(event) }}</div>
+        <div class="text-xs text-ink-secondary">
           {{ formatDateTime(event.created_at) }}
         </div>
 
@@ -274,8 +274,8 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
             class="text-xs mt-0.5 break-words"
             :class="
               extractionBreakdown(event)!.isVisionFallback
-                ? 'text-violet-600 dark:text-violet-300 font-medium'
-                : 'text-gray-500 dark:text-gray-400'
+                ? 'text-ink font-medium'
+                : 'text-ink-secondary'
             "
           >
             {{ extractionBreakdown(event)!.method }}
@@ -288,7 +288,7 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
           <div
             v-if="extractionBreakdown(event)!.skipped.length"
             data-testid="history-extraction-skipped"
-            class="text-xs mt-0.5 break-words text-amber-700 dark:text-amber-300 font-medium"
+            class="text-xs mt-0.5 break-words text-attention font-medium"
           >
             Left unchanged: {{ extractionBreakdown(event)!.skipped.join(', ') }}
           </div>
@@ -300,9 +300,9 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
               v-for="chip in extractionBreakdown(event)!.chips"
               :key="chip.label"
               data-testid="history-extraction-chip"
-              class="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-gray-700/50 px-2 py-0.5 text-xs text-gray-600 dark:text-gray-300"
+              class="inline-flex items-center gap-1 rounded-full bg-tile px-2 py-0.5 text-xs text-ink-secondary"
             >
-              <span class="uppercase tracking-wide text-[10px] text-gray-400 dark:text-gray-500">
+              <span class="text-xs text-ink-secondary">
                 {{ chip.label }}
               </span>
               <span class="font-medium break-all">{{ chip.value }}</span>
@@ -324,8 +324,8 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
               class="text-xs break-words"
               :class="
                 item.isAmbiguous
-                  ? 'text-violet-600 dark:text-violet-300 font-medium'
-                  : 'text-gray-500 dark:text-gray-400'
+                  ? 'text-ink font-medium'
+                  : 'text-ink-secondary'
               "
             >
               <span class="font-medium">{{ item.name }}</span>
@@ -341,9 +341,9 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
               v-for="chip in emailSelectionBreakdown(event)!.chips"
               :key="chip.label"
               data-testid="history-email-chip"
-              class="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-gray-700/50 px-2 py-0.5 text-xs text-gray-600 dark:text-gray-300"
+              class="inline-flex items-center gap-1 rounded-full bg-tile px-2 py-0.5 text-xs text-ink-secondary"
             >
-              <span class="uppercase tracking-wide text-[10px] text-gray-400 dark:text-gray-500">
+              <span class="text-xs text-ink-secondary">
                 {{ chip.label }}
               </span>
               <span class="font-medium break-all">{{ chip.value }}</span>
@@ -355,7 +355,7 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
         <div
           v-else-if="secondary(event)"
           data-testid="history-secondary"
-          class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 break-words"
+          class="text-xs text-ink-secondary mt-0.5 break-words"
         >
           {{ secondary(event) }}
         </div>
@@ -364,10 +364,10 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
 
     <div
       v-if="ordered.length"
-      class="mt-4 border-t border-gray-200 dark:border-gray-700/60 pt-3"
+      class="mt-4 border-t border-line pt-3"
     >
       <AppDetails summary="Show all events" data-testid="history-show-all">
-        <ul class="divide-y divide-gray-200 dark:divide-gray-700/60" data-testid="history-raw-list">
+        <ul class="divide-y divide-line" data-testid="history-raw-list">
           <li
             v-for="(event, index) in ordered"
             :key="index"
@@ -375,16 +375,16 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
             data-testid="history-raw-item"
           >
             <div class="flex items-baseline justify-between gap-3">
-              <span class="font-mono text-xs text-gray-700 dark:text-gray-200 break-all">
+              <span class="font-mono text-xs text-ink break-all">
                 {{ event.event }}
               </span>
-              <span class="text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">
+              <span class="text-xs text-ink-secondary whitespace-nowrap">
                 {{ formatDateTime(event.created_at) }}
               </span>
             </div>
             <pre
               v-if="Object.keys(event.detail ?? {}).length"
-              class="mt-1 text-xs text-gray-500 dark:text-gray-400 whitespace-pre-wrap break-words"
+              class="mt-1 text-xs text-ink-secondary whitespace-pre-wrap break-words"
             >{{ JSON.stringify(event.detail) }}</pre>
           </li>
         </ul>

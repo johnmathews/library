@@ -30,7 +30,7 @@ describe('AppSummaryList', () => {
     })
     const link = wrapper.find('a')
     expect(link.attributes('href')).toBe('/edit')
-    expect(link.classes()).toContain('text-violet-500')
+    expect(link.classes()).toContain('text-brand')
     expect(link.text()).toContain('Change')
     expect(wrapper.find('.sr-only').text()).toBe('title')
   })
