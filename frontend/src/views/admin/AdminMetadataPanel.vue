@@ -279,8 +279,8 @@ watch(
 
     <!-- Currencies -->
     <div :class="cardClass">
-      <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-1">Currencies</h2>
-      <p class="mb-4 text-sm text-gray-500 dark:text-gray-400">
+      <h2 class="text-base font-[650] text-ink mb-1">Currencies</h2>
+      <p class="mb-4 text-sm text-ink-secondary">
         Currency codes aren't a reference table. Normalising rewrites a code
         across every document that carries it.
       </p>
@@ -288,14 +288,14 @@ watch(
       <p
         v-if="currenciesLoading"
         data-testid="currencies-loading"
-        class="text-sm text-gray-500 dark:text-gray-400"
+        class="text-sm text-ink-secondary"
       >
         Loading…
       </p>
       <p
         v-else-if="currenciesError"
         data-testid="currencies-error"
-        class="text-sm text-red-600 dark:text-red-400"
+        class="text-sm text-error-ink"
       >
         {{ currenciesError }}
       </p>
@@ -313,7 +313,7 @@ watch(
           <div>
             <label
               for="currency-normalize-to"
-              class="block text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
+              class="block text-sm font-medium mb-1 text-ink"
             >
               To
             </label>
@@ -342,7 +342,7 @@ watch(
         <div
           v-if="normalizeConfirming"
           data-testid="currency-normalize-confirm-box"
-          class="mb-4 border-l-4 border-amber-500 bg-amber-50 dark:bg-amber-500/10 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+          class="mb-4 rounded-md bg-attention-tint px-3 py-2 text-sm text-ink"
         >
           <p class="mb-2">
             Rename <strong>{{ normalizeFrom }}</strong> to
@@ -373,7 +373,7 @@ watch(
         <div
           v-if="normalizeResult"
           data-testid="currency-normalize-result"
-          class="mb-4 rounded-lg border border-green-200 bg-green-50 dark:border-green-500/30 dark:bg-green-500/10 px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+          class="mb-4 rounded-md bg-tile px-3 py-2 text-sm text-ink"
         >
           <p>
             Renamed <strong>{{ normalizeResult.from_code }}</strong> →
@@ -383,7 +383,7 @@ watch(
           <p
             v-if="normalizeResult.fx_rate_missing"
             data-testid="currency-fx-warning"
-            class="mt-1 text-amber-700 dark:text-amber-400"
+            class="mt-1 text-attention"
           >
             No FX rate exists for {{ normalizeResult.to_code }} — FX conversion for it is
             unavailable until a rate is seeded. Seed one in the FX rates section below.
@@ -393,33 +393,33 @@ watch(
         <p
           v-if="normalizeError"
           data-testid="currency-normalize-error"
-          class="mb-4 text-sm text-red-600 dark:text-red-400"
+          class="mb-4 text-sm text-error-ink"
         >
           {{ normalizeError }}
         </p>
 
         <!-- Codes in use -->
-        <ul v-if="currencies.length" class="divide-y divide-gray-100 dark:divide-gray-700/60">
+        <ul v-if="currencies.length" class="divide-y divide-line">
           <li
             v-for="c in currencies"
             :key="c.code"
             :data-testid="`currency-row-${c.code}`"
             class="flex items-center justify-between py-2 text-sm"
           >
-            <span class="font-medium text-gray-800 dark:text-gray-100">{{ c.code }}</span>
+            <span class="font-medium text-ink">{{ c.code }}</span>
             <AppBadge colour="grey">{{ c.document_count }}</AppBadge>
           </li>
         </ul>
-        <p v-else class="text-sm text-gray-500 dark:text-gray-400">
+        <p v-else class="text-sm text-ink-secondary">
           No currencies are set on any document yet.
         </p>
 
         <!-- FX rates subsection: seed a rate so conversion resolves -->
-        <div class="mt-6 border-t border-gray-100 dark:border-gray-700/60 pt-4">
-          <h3 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-1">
+        <div class="mt-6 border-t border-line pt-4">
+          <h3 class="text-base font-[650] text-ink mb-1">
             FX rates
           </h3>
-          <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">
+          <p class="mb-3 text-sm text-ink-secondary">
             Cross-currency amounts convert via a stored USD rate. Fetch a live rate per code, or
             enter one manually (the value of one unit in USD). USD is the base (1.0).
           </p>
@@ -427,21 +427,21 @@ watch(
           <p
             v-if="fxLoading"
             data-testid="fx-loading"
-            class="text-sm text-gray-500 dark:text-gray-400"
+            class="text-sm text-ink-secondary"
           >
             Loading…
           </p>
           <p
             v-else-if="fxError"
             data-testid="fx-error"
-            class="text-sm text-red-600 dark:text-red-400"
+            class="text-sm text-error-ink"
           >
             {{ fxError }}
           </p>
 
           <ul
             v-else-if="fxRates.length"
-            class="divide-y divide-gray-100 dark:divide-gray-700/60"
+            class="divide-y divide-line"
           >
             <li
               v-for="fx in fxRates"
@@ -450,9 +450,9 @@ watch(
               class="py-2 text-sm"
             >
               <div class="flex flex-wrap items-center justify-between gap-2">
-                <span class="font-medium text-gray-800 dark:text-gray-100">
+                <span class="font-medium text-ink">
                   {{ fx.code }}
-                  <span class="ml-1 text-xs font-normal text-gray-400">
+                  <span class="ml-1 text-xs font-normal text-ink-secondary">
                     · {{ fx.document_count }} doc(s)
                   </span>
                 </span>
@@ -461,7 +461,7 @@ watch(
                 <span
                   v-if="fx.is_base"
                   :data-testid="`fx-status-${fx.code}`"
-                  class="text-xs text-gray-500 dark:text-gray-400"
+                  class="text-xs text-ink-secondary"
                 >
                   Base currency (1.0)
                 </span>
@@ -471,11 +471,11 @@ watch(
                   class="flex flex-wrap items-center gap-2 text-xs"
                 >
                   <AppBadge colour="green">Rate {{ fx.rate_to_base }}</AppBadge>
-                  <span class="text-gray-400">as of {{ fx.as_of }}</span>
+                  <span class="text-ink-secondary">as of {{ fx.as_of }}</span>
                   <button
                     type="button"
                     :data-testid="`fx-fetch-${fx.code}`"
-                    class="text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 disabled:opacity-50"
+                    class="text-brand hover:underline disabled:opacity-50"
                     :disabled="fxBusyCode === fx.code"
                     @click="fetchFxLive(fx.code)"
                   >
@@ -491,7 +491,7 @@ watch(
                   <button
                     type="button"
                     :data-testid="`fx-fetch-${fx.code}`"
-                    class="font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 disabled:opacity-50"
+                    class="font-medium text-brand hover:underline disabled:opacity-50"
                     :disabled="fxBusyCode === fx.code"
                     @click="fetchFxLive(fx.code)"
                   >
@@ -500,7 +500,7 @@ watch(
                   <button
                     type="button"
                     :data-testid="`fx-manual-toggle-${fx.code}`"
-                    class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                    class="text-brand hover:underline"
                     @click="toggleFxManual(fx.code)"
                   >
                     Enter manually
@@ -540,13 +540,13 @@ watch(
               <p
                 v-if="fxRowError[fx.code]"
                 :data-testid="`fx-row-error-${fx.code}`"
-                class="mt-1 text-xs text-red-600 dark:text-red-400"
+                class="mt-1 text-xs text-error-ink"
               >
                 {{ fxRowError[fx.code] }}
               </p>
             </li>
           </ul>
-          <p v-else class="text-sm text-gray-500 dark:text-gray-400">
+          <p v-else class="text-sm text-ink-secondary">
             No currencies are set on any document yet.
           </p>
         </div>

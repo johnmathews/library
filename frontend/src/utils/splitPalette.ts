@@ -1,46 +1,108 @@
 /**
- * The categorical palette for chart split values (facet values and senders).
+ * The chart colours: the categorical palette for chart split values (facet
+ * values and senders), and the one helper that turns a colour role into a
+ * colour a canvas can paint.
+ *
+ * Every colour here is a design-system role (`brand/design-system/project`,
+ * generated into `assets/tokens.css`), named as a CSS reference such as
+ * `var(--category-1)`. A DOM element paints that reference directly and so
+ * follows the theme by itself. Chart.js paints a `<canvas>`, which cannot
+ * resolve `var()`, so it goes through `chartColour()`, which reads the role's
+ * value for a given theme at runtime. No colour value is written in this file:
+ * changing a hex is a change to tokens.json, not here.
  *
  * A value's colour is a nullable override over a slot derived from its key
  * (charts-view design §2.5): null is the normal state, so every legend is
  * stably coloured before anyone has chosen anything, and the migration invents
  * no data.
  *
- * The six slots were validated with the `dataviz` skill's validate_palette.js
- * on the ALL-PAIRS pairlist — the correct list here, because a slot is derived
- * by hashing the key, so any two hues can end up side by side in a legend and
- * there is no ordering to check adjacency against. Both modes report ALL CHECKS
- * PASS: light worst CVD ΔE 9.9 (protan) and normal-vision ΔE 19.8; dark worst
- * CVD ΔE 9.3 (deutan) and normal-vision ΔE 17.2.
- *
- * Two light slots and one dark slot fall below 3:1 against the chart surface,
- * so the relief rule applies: **a swatch is never shown alone**. In this panel
- * and in a chart legend it always carries the value's text label beside it.
- * Re-run the validator and update these numbers before changing any hex.
- *
- * Six rather than eight: the eight-hue reference set clears the adjacent
- * pairlist but fails all-pairs (worst normal-vision ΔE 7.1), and no ordering
- * fixes that, because with all pairs in play the pairlist does not depend on
- * order.
+ * Five slots, `category-1` to `category-5`, then `category-other` for the
+ * folded tail — the same chart palette as Family Finances (ChartStyle). The
+ * relief rule applies: **a swatch is never shown alone**. In the vocabulary
+ * panel and in a chart legend it always carries the value's text label beside
+ * it, so no hue has to carry a value's identity by itself.
  */
 
 export interface PaletteSlot {
   /** Display name in the picker. */
   name: string
-  /** The slot's stored identity: this is the hex written to the database. */
+  /** What the slot paints: a CSS reference to its design-system role. */
+  colour: string
+  /**
+   * The slot's stored identity: the hex the picker writes to the database
+   * (`facet_values.colour` / `senders.colour`, which only accept `#rrggbb`).
+   *
+   * It is an identifier, not a colour anything paints. Each is the hex an
+   * earlier six-slot palette stored for the nearest hue, so an override an
+   * owner picked before the design system keeps its slot (and its hue family)
+   * without a data migration. The old sixth slot (olive, `#876708`) has no
+   * successor and is painted as stored, like any colour from outside the
+   * palette. Named `light` for that history: the earlier palette stored its
+   * light-theme step.
+   */
   light: string
-  /** The same hue re-stepped for the dark chart surface — selected, not flipped. */
-  dark: string
 }
 
+const role = (name: string): string => `var(--${name})`
+
 export const SPLIT_PALETTE: readonly PaletteSlot[] = [
-  { name: 'Blue', light: '#1283dc', dark: '#5791ca' },
-  { name: 'Orange', light: '#ff6f42', dark: '#b93b09' },
-  { name: 'Green', light: '#51ae7f', dark: '#19825f' },
-  { name: 'Indigo', light: '#4423da', dark: '#584fcc' },
-  { name: 'Plum', light: '#993375', dark: '#ed3297' },
-  { name: 'Olive', light: '#876708', dark: '#b08923' },
+  { name: 'Purple', colour: role('category-1'), light: '#4423da' },
+  { name: 'Teal', colour: role('category-2'), light: '#51ae7f' },
+  { name: 'Blue', colour: role('category-3'), light: '#1283dc' },
+  { name: 'Amber', colour: role('category-4'), light: '#ff6f42' },
+  { name: 'Pink', colour: role('category-5'), light: '#993375' },
 ]
+
+/** The folded "Other (N)" band. It never claims a palette slot. */
+export const OTHER_COLOUR = role('category-other')
+
+/** A chart with no split: one series of spending (design system, Charts). */
+export const SPENDING_COLOUR = role('chart-spending')
+
+/** A net refund below the zero line of an unsplit chart. */
+export const INCOME_COLOUR = role('chart-income')
+
+// One hidden probe element per theme. Reading the role off the probe rather
+// than off <html> gives the value for the theme asked for, not whichever
+// class <html> carries at that instant: useDark flips the class after the
+// render that reacts to the flip, so a read off <html> would paint the
+// previous theme for one frame and then never repaint. tokens.css declares
+// the light roles on `[data-theme="light"]` and the dark ones on `.dark`, so
+// each probe carries its own theme whatever <html> says.
+const probes: Partial<Record<'light' | 'dark', HTMLElement>> = {}
+
+function probeFor(dark: boolean): HTMLElement | null {
+  if (typeof document === 'undefined' || !document.body) return null
+  const key = dark ? 'dark' : 'light'
+  let probe = probes[key]
+  if (!probe || !probe.isConnected) {
+    probe = document.createElement('span')
+    if (dark) probe.className = 'dark'
+    else probe.dataset.theme = 'light'
+    probe.setAttribute('aria-hidden', 'true')
+    probe.style.display = 'none'
+    document.body.appendChild(probe)
+    probes[key] = probe
+  }
+  return probe
+}
+
+/**
+ * The colour to paint on a canvas for `colour` in the given theme.
+ *
+ * A `var(--role)` reference resolves to that role's value in tokens.css for
+ * the theme; anything else (an owner's stored hex) is returned as it is. When
+ * the stylesheet is not loaded (jsdom in unit tests, where computed custom
+ * properties are empty) the reference comes back unchanged — still distinct
+ * per role, and still valid CSS for a DOM element.
+ */
+export function chartColour(colour: string, dark: boolean): string {
+  const match = /^var\(--([a-z0-9-]+)\)$/.exec(colour)
+  if (!match) return colour
+  const probe = probeFor(dark)
+  const value = probe ? getComputedStyle(probe).getPropertyValue(`--${match[1]}`).trim() : ''
+  return value || colour
+}
 
 /**
  * The palette slot a value falls in when it has no stored colour.
@@ -63,13 +125,11 @@ export function deriveSlot(key: string): PaletteSlot {
  * The palette slot a stored hex identifies, or null if it isn't one.
  *
  * The single definition of "is this stored hex this slot" — a stored colour
- * is a slot only when it matches that slot's `light` step (case-insensitively;
- * `light` is the stored identity per the header above). `SplitColourPicker.vue`
- * used to make this same decision a second way (`normalized === slot.light`
- * inline) and `resolveSplitColour` a third; two definitions that happen to
- * agree today are one definition away from silently disagreeing — see the
- * repository's standing rule on removing the second copy rather than testing
- * that copies agree. Both callers now go through this function.
+ * is a slot only when it matches that slot's stored identity
+ * (case-insensitively). `SplitColourPicker.vue`, `resolveSplitColour` and
+ * `spending/palette.ts`'s `bands()` all go through this function, rather than
+ * each deciding it — see the repository's standing rule on removing the
+ * second copy rather than testing that copies agree.
  */
 export function slotForStored(stored: string | null): PaletteSlot | null {
   if (!stored) return null
@@ -78,20 +138,16 @@ export function slotForStored(stored: string | null): PaletteSlot | null {
 }
 
 /**
- * The colour to paint a split value, for the current theme.
+ * The colour to paint a split value, for the given theme.
  *
  * Three cases, in order: no stored colour derives a slot from the key; a stored
- * colour that *is* a palette slot's light step resolves to that slot, so an
- * override picked from the palette is theme-aware even though the database
- * holds one hex; anything else is an arbitrary colour from outside the palette
- * (a script, a data migration) with no theme pair to look up, returned as-is.
+ * colour that *is* a palette slot's identity resolves to that slot's role, so
+ * an override picked from the palette follows the theme even though the
+ * database holds one hex; anything else is an arbitrary colour from outside the
+ * palette (a script, a data migration, the retired olive slot), returned as-is.
  */
 export function resolveSplitColour(stored: string | null, key: string, dark: boolean): string {
-  if (!stored) {
-    const slot = deriveSlot(key)
-    return dark ? slot.dark : slot.light
-  }
-  const slot = slotForStored(stored)
-  if (!slot) return stored
-  return dark ? slot.dark : slot.light
+  const slot = stored ? slotForStored(stored) : deriveSlot(key)
+  if (!slot) return stored!
+  return chartColour(slot.colour, dark)
 }

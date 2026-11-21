@@ -79,15 +79,15 @@ async function confirmDelete(): Promise<void> {
     <template v-if="doc">
       <div
         id="delete-confirm-card"
-        class="max-w-xl mx-auto bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-red-200 dark:border-red-500/30 p-6"
+        class="card max-w-xl mx-auto p-6"
       >
         <AppErrorSummary v-if="deleteError" :errors="[{ text: deleteError }]" />
 
-        <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-4">
+        <h1 class="text-2xl text-ink font-[650] mb-4">
           Are you sure you want to delete “{{ doc.title ?? 'Untitled document' }}”?
         </h1>
 
-        <p class="text-red-600 dark:text-red-400 mb-6" data-testid="delete-warning">
+        <p class="text-ink mb-6" data-testid="delete-warning">
           “{{ doc.title ?? 'Untitled document' }}” will disappear from your library, search and the
           API. This cannot be undone from the web app.
         </p>
@@ -95,7 +95,7 @@ async function confirmDelete(): Promise<void> {
         <div class="flex flex-wrap items-center gap-3">
           <AppButton
             type="button"
-            variant="warning"
+            variant="primary"
             :disabled="deleting"
             data-testid="confirm-delete"
             @click="confirmDelete"
@@ -118,17 +118,17 @@ async function confirmDelete(): Promise<void> {
       <div
         class="card p-6"
       >
-        <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">
+        <h1 class="text-2xl text-ink font-[650] mb-2">
           Document not found
         </h1>
-        <p class="text-gray-500 dark:text-gray-400">
+        <p class="text-ink-secondary">
           It may already have been deleted, or the link is wrong.
         </p>
       </div>
     </template>
     <div
       v-else-if="loadError"
-      class="card p-6 text-gray-500 dark:text-gray-400"
+      class="card p-6 text-ink-secondary"
     >
       Sorry, the document could not be loaded. Try again later.
     </div>

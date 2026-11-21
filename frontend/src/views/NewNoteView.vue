@@ -72,7 +72,7 @@ async function onSubmit(): Promise<void> {
     >
       <template #actions>
         <div
-          class="inline-flex rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 p-0.5"
+          class="inline-flex rounded-sm border border-control-border bg-panel p-0.5"
           role="group"
           aria-label="Editor view"
         >
@@ -85,8 +85,8 @@ async function onSubmit(): Promise<void> {
             class="px-3 py-1 text-sm font-medium rounded-md transition"
             :class="[
               editorMode === m.value
-                ? 'bg-violet-500 text-white'
-                : 'text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100',
+                ? 'bg-brand-fill text-on-brand'
+                : 'text-ink-secondary hover:text-ink',
               m.wideOnly ? 'hidden lg:inline-flex' : 'inline-flex',
             ]"
             @click="editorMode = m.value"
@@ -117,10 +117,10 @@ async function onSubmit(): Promise<void> {
             <AppTextarea id="note-body" v-model="body" label="Note" :rows="16" />
           </div>
           <div v-if="showPreview" data-testid="note-preview-pane">
-            <span class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Preview</span>
+            <span class="block text-sm font-medium mb-1 text-ink">Preview</span>
             <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in previewHtml -->
             <div
-              class="doc-markdown form-textarea w-full min-h-40 overflow-auto text-gray-800 dark:text-gray-100"
+              class="doc-markdown form-textarea w-full min-h-40 overflow-auto text-ink"
               data-testid="note-preview"
               v-html="previewHtml"
             />

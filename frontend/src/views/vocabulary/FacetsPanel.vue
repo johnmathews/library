@@ -446,7 +446,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
   <div class="space-y-6">
     <!-- Create a facet -->
     <div class="card p-6">
-      <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Create a facet</h2>
+      <h2 class="text-base font-[650] text-ink mb-4">Create a facet</h2>
       <div class="flex flex-wrap items-end gap-3">
         <div>
           <label for="create-facet-key" class="filter-label">Key</label>
@@ -483,14 +483,14 @@ async function saveCreateValue(facetKey: string): Promise<void> {
       <p
         v-if="createFacetError"
         role="alert"
-        class="mt-2 text-sm text-red-600 dark:text-red-400"
+        class="mt-2 text-sm text-error-ink"
         data-testid="create-facet-error"
       >
         {{ createFacetError }}
       </p>
       <p
         v-if="createFacetNote"
-        class="mt-2 text-sm text-gray-600 dark:text-gray-300"
+        class="mt-2 text-sm text-ink-secondary"
         data-testid="create-facet-note"
       >
         {{ createFacetNote }}
@@ -498,20 +498,20 @@ async function saveCreateValue(facetKey: string): Promise<void> {
     </div>
 
     <!-- Loading / error -->
-    <p v-if="loading" class="text-sm text-gray-500 dark:text-gray-400" data-testid="facets-loading">
+    <p v-if="loading" class="text-sm text-ink-secondary" data-testid="facets-loading">
       Loading the facet vocabulary…
     </p>
     <div
       v-else-if="loadError"
       role="alert"
-      class="border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-red-700 dark:text-red-300"
+      class="bg-deficit-tint rounded-md px-3 py-2 text-sm text-error-ink"
       data-testid="facets-error"
     >
       {{ loadError }}
     </div>
     <p
       v-else-if="loaded && sortedFacets.length === 0"
-      class="text-sm text-gray-500 dark:text-gray-400"
+      class="text-sm text-ink-secondary"
       data-testid="facets-empty"
     >
       No facets yet. Create one below.
@@ -520,19 +520,19 @@ async function saveCreateValue(facetKey: string): Promise<void> {
     <!-- Facets -->
     <div v-else v-for="facet in sortedFacets" :key="facet.key" class="card p-6 @container">
       <div class="mb-4 flex items-baseline gap-2">
-        <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">{{ facet.label }}</h2>
-        <code class="text-xs text-gray-400 dark:text-gray-500">{{ facet.key }}</code>
+        <h2 class="text-base font-[650] text-ink">{{ facet.label }}</h2>
+        <code class="text-xs text-ink-secondary">{{ facet.key }}</code>
       </div>
 
       <p
         v-if="facet.values.length === 0"
-        class="text-sm text-gray-500 dark:text-gray-400"
+        class="text-sm text-ink-secondary"
         :data-testid="`facet-${facet.key}-empty`"
       >
         No values yet.
       </p>
 
-      <ul v-else class="divide-y divide-gray-100 dark:divide-gray-700/60">
+      <ul v-else class="divide-y divide-line">
         <li
           v-for="value in facet.values"
           :key="value.key"
@@ -543,17 +543,17 @@ async function saveCreateValue(facetKey: string): Promise<void> {
             <!-- Swatch + label/key/aliases -->
             <div class="flex min-w-0 items-center gap-2">
               <span
-                class="h-4 w-4 shrink-0 rounded-full border border-gray-300 dark:border-gray-600"
+                class="h-4 w-4 shrink-0 rounded-full border border-control-border"
                 :style="{ backgroundColor: resolveSplitColour(value.colour, value.key, isDark) }"
                 :aria-label="`Colour for ${value.label}`"
               />
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-1.5">
-                  <span class="font-medium text-gray-800 dark:text-gray-100">{{ value.label }}</span>
-                  <code class="text-xs text-gray-400 dark:text-gray-500">{{ value.key }}</code>
+                  <span class="font-medium text-ink">{{ value.label }}</span>
+                  <code class="text-xs text-ink-secondary">{{ value.key }}</code>
                   <span
                     v-if="hasCollision(facet.key, value.key)"
-                    class="rounded bg-yellow-100 px-1.5 py-0.5 text-xs font-semibold text-yellow-800 dark:bg-yellow-500/20 dark:text-yellow-300"
+                    class="rounded-full bg-attention-tint px-2 py-0.5 text-xs font-semibold text-attention"
                     :data-testid="`value-${facet.key}-${value.key}-collision`"
                   >
                     Same colour as another value
@@ -561,7 +561,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
                 </div>
                 <p
                   v-if="value.aliases.length > 0"
-                  class="text-xs text-gray-500 dark:text-gray-400"
+                  class="text-xs text-ink-secondary"
                   :data-testid="`value-${facet.key}-${value.key}-aliases`"
                 >
                   aka {{ value.aliases.join(', ') }}
@@ -571,7 +571,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
 
             <!-- Counts -->
             <div
-              class="shrink-0 text-sm text-gray-600 dark:text-gray-300"
+              class="shrink-0 text-sm text-ink-secondary"
               :data-testid="`value-${facet.key}-${value.key}-counts`"
             >
               {{ labelCountFor(facet.key, value.key) }} labelled
@@ -582,7 +582,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
             <div class="flex shrink-0 flex-wrap items-center gap-2">
               <button
                 type="button"
-                class="btn-xs border border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
+                class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
                 :disabled="isPending(rowKey(facet.key, value.key))"
                 :data-testid="`value-${facet.key}-${value.key}-rename-btn`"
                 @click="startRename(facet.key, value)"
@@ -591,7 +591,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
               </button>
               <button
                 type="button"
-                class="btn-xs border border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
+                class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
                 :disabled="isPending(rowKey(facet.key, value.key))"
                 :data-testid="`value-${facet.key}-${value.key}-alias-btn`"
                 @click="startAlias(facet.key, value)"
@@ -600,14 +600,14 @@ async function saveCreateValue(facetKey: string): Promise<void> {
               </button>
               <RouterLink
                 :to="{ name: 'vocabulary-merge', params: { facetKey: facet.key, valueKey: value.key } }"
-                class="btn-xs border border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
+                class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
                 :data-testid="`value-${facet.key}-${value.key}-merge-btn`"
               >
                 Merge
               </RouterLink>
               <button
                 type="button"
-                class="btn-xs border border-red-200 dark:border-red-500/40 text-red-600 dark:text-red-400"
+                class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
                 :disabled="isPending(rowKey(facet.key, value.key))"
                 :data-testid="`value-${facet.key}-${value.key}-delete-btn`"
                 @click="startDelete(facet.key, value.key)"
@@ -648,7 +648,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
             </div>
             <button
               type="button"
-              class="btn-xs bg-violet-500 text-white hover:bg-violet-600"
+              class="btn-xs bg-brand-fill text-on-brand hover:brightness-110"
               :disabled="isPending(rowKey(facet.key, value.key))"
               :data-testid="`value-${facet.key}-${value.key}-rename-save`"
               @click="saveRename(facet.key, value.key)"
@@ -657,7 +657,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
             </button>
             <button
               type="button"
-              class="btn-xs border border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
+              class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
               :data-testid="`value-${facet.key}-${value.key}-rename-cancel`"
               @click="cancelRename()"
             >
@@ -686,7 +686,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
             </div>
             <button
               type="button"
-              class="btn-xs bg-violet-500 text-white hover:bg-violet-600"
+              class="btn-xs bg-brand-fill text-on-brand hover:brightness-110"
               :disabled="isPending(rowKey(facet.key, value.key))"
               :data-testid="`value-${facet.key}-${value.key}-alias-save`"
               @click="saveAlias(facet.key, value.key)"
@@ -695,7 +695,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
             </button>
             <button
               type="button"
-              class="btn-xs border border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
+              class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
               :data-testid="`value-${facet.key}-${value.key}-alias-cancel`"
               @click="cancelAlias()"
             >
@@ -706,13 +706,13 @@ async function saveCreateValue(facetKey: string): Promise<void> {
           <!-- Delete confirm -->
           <div
             v-if="deleteKey === rowKey(facet.key, value.key)"
-            class="mt-2 border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+            class="mt-2 bg-deficit-tint rounded-md px-3 py-2 text-sm text-ink"
           >
             <p class="mb-2">Delete '{{ value.label }}'? This cannot be undone.</p>
             <div class="flex gap-2">
               <button
                 type="button"
-                class="btn-xs bg-red-500 text-white hover:bg-red-600"
+                class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
                 :disabled="isPending(rowKey(facet.key, value.key))"
                 :data-testid="`value-${facet.key}-${value.key}-delete-confirm`"
                 @click="confirmDelete(facet.key, value.key)"
@@ -721,7 +721,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
               </button>
               <button
                 type="button"
-                class="btn-xs border border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
+                class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
                 :data-testid="`value-${facet.key}-${value.key}-delete-cancel`"
                 @click="cancelDelete()"
               >
@@ -733,7 +733,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
           <p
             v-if="rowError[rowKey(facet.key, value.key)]"
             role="alert"
-            class="mt-1 text-xs text-red-600 dark:text-red-400"
+            class="mt-1 text-xs text-error-ink"
             :data-testid="`value-${facet.key}-${value.key}-error`"
           >
             {{ rowError[rowKey(facet.key, value.key)] }}
@@ -742,11 +742,11 @@ async function saveCreateValue(facetKey: string): Promise<void> {
       </ul>
 
       <!-- Add a value -->
-      <div class="mt-4 border-t border-gray-100 pt-4 dark:border-gray-700/60">
+      <div class="mt-4 border-t border-line pt-4">
         <button
           v-if="!getCreateValueForm(facet.key).open"
           type="button"
-          class="btn-xs border border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
+          class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
           :data-testid="`create-value-${facet.key}-btn`"
           @click="openCreateValue(facet.key)"
         >
@@ -779,7 +779,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
           </div>
           <button
             type="button"
-            class="btn-xs bg-violet-500 text-white hover:bg-violet-600"
+            class="btn-xs bg-brand-fill text-on-brand hover:brightness-110"
             :disabled="getCreateValueForm(facet.key).creating"
             :data-testid="`create-value-${facet.key}-save`"
             @click="saveCreateValue(facet.key)"
@@ -788,7 +788,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
           </button>
           <button
             type="button"
-            class="btn-xs border border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
+            class="btn-xs border-control-border bg-panel text-ink hover:bg-tile"
             :data-testid="`create-value-${facet.key}-cancel`"
             @click="cancelCreateValue(facet.key)"
           >
@@ -798,7 +798,7 @@ async function saveCreateValue(facetKey: string): Promise<void> {
         <p
           v-if="getCreateValueForm(facet.key).error"
           role="alert"
-          class="mt-2 text-sm text-red-600 dark:text-red-400"
+          class="mt-2 text-sm text-error-ink"
           :data-testid="`create-value-${facet.key}-error`"
         >
           {{ getCreateValueForm(facet.key).error }}

@@ -416,9 +416,9 @@ const toolbarRowClass = computed<string>(() =>
   <div id="spending-workspace-view" ref="workspaceRoot" class="@container/workspace">
     <AppBackLink to="/charts" text="Back to charts" class="mb-4" />
 
-    <p v-if="chartLoading" data-testid="workspace-loading" class="text-gray-500 dark:text-gray-400">Loading…</p>
+    <p v-if="chartLoading" data-testid="workspace-loading" class="text-ink-secondary">Loading…</p>
 
-    <p v-else-if="chartError" data-testid="workspace-load-error" class="text-red-600 dark:text-red-400">
+    <p v-else-if="chartError" data-testid="workspace-load-error" class="text-error-ink">
       {{ chartError }}
     </p>
 
@@ -440,7 +440,7 @@ const toolbarRowClass = computed<string>(() =>
             <button
               type="button"
               data-testid="workspace-toolbar-chip-button"
-              class="filter-label rounded-lg border border-gray-200 px-3 py-2 text-left dark:border-gray-700/60"
+              class="filter-label rounded-sm border border-control-border px-3 py-2 text-left hover:bg-tile"
               :aria-expanded="mobileControlsOpen"
               @click="mobileControlsOpen = !mobileControlsOpen"
             >
@@ -511,7 +511,7 @@ const toolbarRowClass = computed<string>(() =>
         @cancel="editing = false"
       />
 
-      <p v-if="dataError" data-testid="workspace-data-error" class="text-red-600 dark:text-red-400">
+      <p v-if="dataError" data-testid="workspace-data-error" class="text-error-ink">
         {{ dataError }}
       </p>
 
@@ -525,14 +525,14 @@ const toolbarRowClass = computed<string>(() =>
         <div data-testid="workspace-headline">
           <p
             data-testid="workspace-headline-figure"
-            class="text-2xl font-semibold tabular-nums text-gray-900 dark:text-gray-50"
+            class="text-2xl font-[650] tabular-nums text-ink"
           >
             {{ headlineFigure }}
           </p>
           <p
             v-if="selectionLine"
             data-testid="workspace-selection"
-            class="text-sm text-gray-500 dark:text-gray-400"
+            class="text-sm text-ink-secondary"
           >
             {{ selectionLine }}
           </p>

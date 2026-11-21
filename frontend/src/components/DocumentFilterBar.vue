@@ -344,7 +344,7 @@ const statusOptions = DOCUMENT_STATUSES
     <!-- Search -->
     <div class="relative mb-3 max-w-xl">
       <svg
-        class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+        class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-secondary"
         viewBox="0 0 16 16"
         fill="currentColor"
         aria-hidden="true"
@@ -364,7 +364,7 @@ const statusOptions = DOCUMENT_STATUSES
         :spellcheck="false"
         placeholder="Search documents…"
         aria-label="Search documents"
-        class="form-input w-full rounded-lg pl-9 pr-9"
+        class="form-input w-full pl-9 pr-9"
         @input="onSearchInput"
         @keydown.enter.prevent="onSearchEnter"
       />
@@ -372,7 +372,7 @@ const statusOptions = DOCUMENT_STATUSES
         v-if="searchText"
         type="button"
         data-testid="filter-search-clear"
-        class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+        class="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-ink-secondary hover:text-ink"
         aria-label="Clear search"
         @click="clearSearch"
       >
@@ -399,7 +399,7 @@ const statusOptions = DOCUMENT_STATUSES
             <button
               type="button"
               data-testid="kind-option-any"
-              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+              class="block w-full rounded-sm px-2 py-1 text-left hover:bg-tile"
               @click="selectKind('')"
             >
               All kinds
@@ -409,8 +409,8 @@ const statusOptions = DOCUMENT_STATUSES
             <button
               type="button"
               :data-testid="`kind-option-${k.slug}`"
-              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
-              :class="{ 'font-semibold text-violet-600 dark:text-violet-300': applied.kind === k.slug }"
+              class="block w-full rounded-sm px-2 py-1 text-left hover:bg-tile"
+              :class="{ 'font-semibold text-brand': applied.kind === k.slug }"
               @click="selectKind(k.slug)"
             >
               {{ k.name }}
@@ -432,7 +432,7 @@ const statusOptions = DOCUMENT_STATUSES
             <button
               type="button"
               data-testid="sender-option-any"
-              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+              class="block w-full rounded-sm px-2 py-1 text-left hover:bg-tile"
               @click="selectSender('')"
             >
               All senders
@@ -442,8 +442,8 @@ const statusOptions = DOCUMENT_STATUSES
             <button
               type="button"
               :data-testid="`sender-option-${s.id}`"
-              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
-              :class="{ 'font-semibold text-violet-600 dark:text-violet-300': applied.senderId === String(s.id) }"
+              class="block w-full rounded-sm px-2 py-1 text-left hover:bg-tile"
+              :class="{ 'font-semibold text-brand': applied.senderId === String(s.id) }"
               @click="selectSender(String(s.id))"
             >
               {{ s.name }}
@@ -465,7 +465,7 @@ const statusOptions = DOCUMENT_STATUSES
             <button
               type="button"
               data-testid="recipient-option-any"
-              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+              class="block w-full rounded-sm px-2 py-1 text-left hover:bg-tile"
               @click="selectRecipient('')"
             >
               All recipients
@@ -475,8 +475,8 @@ const statusOptions = DOCUMENT_STATUSES
             <button
               type="button"
               :data-testid="`recipient-option-${r.id}`"
-              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
-              :class="{ 'font-semibold text-violet-600 dark:text-violet-300': applied.recipientId === String(r.id) }"
+              class="block w-full rounded-sm px-2 py-1 text-left hover:bg-tile"
+              :class="{ 'font-semibold text-brand': applied.recipientId === String(r.id) }"
               @click="selectRecipient(String(r.id))"
             >
               {{ r.name }}
@@ -564,7 +564,7 @@ const statusOptions = DOCUMENT_STATUSES
                 <button
                   type="button"
                   data-testid="language-option-"
-                  class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+                  class="block w-full rounded-sm px-2 py-1 text-left hover:bg-tile"
                   @click="selectLanguage('')"
                 >
                   Any language
@@ -574,8 +574,8 @@ const statusOptions = DOCUMENT_STATUSES
                 <button
                   type="button"
                   :data-testid="`language-option-${l.value}`"
-                  class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
-                  :class="{ 'font-semibold text-violet-600 dark:text-violet-300': applied.language === l.value }"
+                  class="block w-full rounded-sm px-2 py-1 text-left hover:bg-tile"
+                  :class="{ 'font-semibold text-brand': applied.language === l.value }"
                   @click="selectLanguage(l.value)"
                 >
                   {{ l.text }}
@@ -590,7 +590,7 @@ const statusOptions = DOCUMENT_STATUSES
                 <button
                   type="button"
                   data-testid="status-option-"
-                  class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+                  class="block w-full rounded-sm px-2 py-1 text-left hover:bg-tile"
                   @click="selectStatus('')"
                 >
                   Any status
@@ -600,8 +600,8 @@ const statusOptions = DOCUMENT_STATUSES
                 <button
                   type="button"
                   :data-testid="`status-option-${s.value}`"
-                  class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
-                  :class="{ 'font-semibold text-violet-600 dark:text-violet-300': applied.status === s.value }"
+                  class="block w-full rounded-sm px-2 py-1 text-left hover:bg-tile"
+                  :class="{ 'font-semibold text-brand': applied.status === s.value }"
                   @click="selectStatus(s.value)"
                 >
                   {{ s.text }}
@@ -628,16 +628,16 @@ const statusOptions = DOCUMENT_STATUSES
         type="button"
         :data-testid="`matter-filter-${m.slug}`"
         :aria-pressed="applied.matters.includes(m.slug)"
-        class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors"
+        class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-[13px] font-semibold transition-colors"
         :class="
           applied.matters.includes(m.slug)
-            ? 'border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-500/15 dark:text-violet-200'
-            : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700/60'
+            ? 'border-brand bg-brand-tint text-brand-on-tint'
+            : 'border-control-border bg-panel text-ink hover:bg-tile'
         "
         @click="toggleMatter(m.slug)"
       >
         {{ m.name }}
-        <span class="text-xs opacity-70">{{ m.document_count }}</span>
+        <span class="text-xs font-normal tabular-nums">{{ m.document_count }}</span>
       </button>
     </div>
 
@@ -655,13 +655,13 @@ const statusOptions = DOCUMENT_STATUSES
         v-for="chip in chips"
         :key="chip.key"
         :data-testid="`chip-${chip.key}`"
-        class="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-1 text-xs text-violet-700 dark:bg-violet-500/20 dark:text-violet-200"
+        class="inline-flex items-center gap-1.5 rounded-full border border-brand bg-brand-tint px-3 py-1 text-[13px] font-semibold text-brand-on-tint"
       >
         {{ chip.label }}
         <button
           type="button"
           :data-testid="`chip-remove-${chip.key}`"
-          class="text-violet-500 hover:text-violet-800 dark:hover:text-violet-100"
+          class="font-normal"
           :aria-label="`Remove filter ${chip.label}`"
           @click="chip.remove()"
         >
@@ -671,7 +671,7 @@ const statusOptions = DOCUMENT_STATUSES
       <button
         type="button"
         data-testid="filter-clear-all"
-        class="text-xs text-gray-500 underline hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+        class="text-[13px] font-semibold text-brand hover:underline"
         @click="emit('clear')"
       >
         Clear all

@@ -101,22 +101,22 @@ defineExpose({ reset })
       <li
         v-for="(row, index) in rows"
         :key="row.field"
-        class="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700/40"
+        class="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-tile"
         :data-testid="`dashboard-field-row-${row.field}`"
       >
         <button
           type="button"
           data-drag-handle
-          class="cursor-grab text-gray-400 hover:text-violet-500 active:cursor-grabbing"
+          class="cursor-grab text-ink-secondary hover:text-brand active:cursor-grabbing"
           :aria-label="`Drag to reorder ${LABELS[row.field]}`"
           tabindex="-1"
         >
           ⠿
         </button>
-        <label class="flex flex-1 items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+        <label class="flex flex-1 items-center gap-2 text-sm text-ink">
           <input
             type="checkbox"
-            class="form-checkbox text-violet-600"
+            class="form-checkbox text-brand"
             :value="row.field"
             :checked="row.enabled"
             :data-testid="`dashboard-field-${row.field}`"
@@ -126,7 +126,7 @@ defineExpose({ reset })
         </label>
         <button
           type="button"
-          class="rounded p-1 text-gray-400 hover:text-violet-600 disabled:opacity-30 disabled:hover:text-gray-400"
+          class="rounded p-1 text-ink-secondary hover:text-brand disabled:opacity-30 disabled:hover:text-ink-secondary"
           :disabled="index === 0"
           :aria-label="`Move ${LABELS[row.field]} up`"
           :data-testid="`dashboard-field-up-${row.field}`"
@@ -136,7 +136,7 @@ defineExpose({ reset })
         </button>
         <button
           type="button"
-          class="rounded p-1 text-gray-400 hover:text-violet-600 disabled:opacity-30 disabled:hover:text-gray-400"
+          class="rounded p-1 text-ink-secondary hover:text-brand disabled:opacity-30 disabled:hover:text-ink-secondary"
           :disabled="index === rows.length - 1"
           :aria-label="`Move ${LABELS[row.field]} down`"
           :data-testid="`dashboard-field-down-${row.field}`"
@@ -148,7 +148,7 @@ defineExpose({ reset })
     </ul>
     <button
       type="button"
-      class="mt-2 text-xs font-medium uppercase tracking-wide text-violet-600 hover:text-violet-700 dark:text-violet-400"
+      class="mt-2 text-[13px] font-semibold text-brand hover:underline"
       data-testid="dashboard-fields-reset"
       @click="reset"
     >

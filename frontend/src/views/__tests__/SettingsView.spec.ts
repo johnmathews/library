@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import SettingsView from '../SettingsView.vue'
 import { useAuthStore } from '@/stores/auth'
-import { NEUTRAL_KIND_COLOR } from '@/api/settings'
+import { DEFAULT_KIND_COLORS, NEUTRAL_KIND_COLOR } from '@/api/settings'
 import { usePageTitle } from '@/composables/usePageTitle'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -845,7 +845,7 @@ describe('SettingsView', () => {
     it('renders the pipeline values, badges, and the held-emails link', async () => {
       const wrapper = await mountAndOpenTab(baseTriage)
 
-      expect(wrapper.find('[data-testid="email-triage-hold-master"]').text()).toBe('Hold pipeline ON')
+      expect(wrapper.find('[data-testid="email-triage-hold-master"]').text()).toBe('Hold pipeline on')
       expect(wrapper.find('[data-testid="view-held-emails"]').attributes('to')).toBe('/held-emails')
       expect(wrapper.find('[data-testid="triage-poll-minutes"]').text()).toContain('10 min')
       expect(wrapper.find('[data-testid="triage-held-folder"]').text()).toBe('Library/Held')
@@ -854,9 +854,9 @@ describe('SettingsView', () => {
 
       // Step 1: accept-all variant (no allowlist configured), hold badge ON.
       expect(wrapper.find('[data-testid="triage-allowlist-mode"]').text()).toContain('Accept all senders')
-      expect(wrapper.find('[data-testid="triage-allowlist-hold-badge"]').text()).toBe('Unknown-sender hold ON')
+      expect(wrapper.find('[data-testid="triage-allowlist-hold-badge"]').text()).toBe('Unknown-sender hold on')
       // Step 2: noise gate ON with its tiny-image and decoration thresholds.
-      expect(wrapper.find('[data-testid="triage-noise-badge"]').text()).toBe('ON')
+      expect(wrapper.find('[data-testid="triage-noise-badge"]').text()).toBe('On')
       expect(wrapper.find('[data-testid="triage-noise-thresholds"]').text()).toContain('4096 bytes')
       expect(wrapper.find('[data-testid="triage-noise-thresholds"]').text()).toContain('64 px')
       expect(wrapper.find('[data-testid="triage-decoration-thresholds"]').text()).toContain(
@@ -878,7 +878,7 @@ describe('SettingsView', () => {
       // Step 4: substance thresholds + hold badge.
       expect(wrapper.find('[data-testid="triage-substance-thresholds"]').text()).toContain('40 words')
       expect(wrapper.find('[data-testid="triage-substance-thresholds"]').text()).toContain('240 characters')
-      expect(wrapper.find('[data-testid="triage-substance-badge"]').text()).toBe('Below-substance hold ON')
+      expect(wrapper.find('[data-testid="triage-substance-badge"]').text()).toBe('Below-substance hold on')
       // Step 5 + footnote.
       expect(wrapper.find('[data-testid="triage-step-nothing"]').text()).toContain('held for review')
       expect(wrapper.find('[data-testid="email-triage-footnote"]').text()).toContain('email-triage.md')
@@ -892,11 +892,11 @@ describe('SettingsView', () => {
         noise_filter: { ...baseTriage.noise_filter, enabled: false },
       })
 
-      expect(wrapper.find('[data-testid="email-triage-hold-master"]').text()).toBe('Hold pipeline OFF')
+      expect(wrapper.find('[data-testid="email-triage-hold-master"]').text()).toBe('Hold pipeline off')
       expect(wrapper.find('[data-testid="triage-allowlist-mode"]').text()).toContain('3 allowed senders')
-      expect(wrapper.find('[data-testid="triage-allowlist-hold-badge"]').text()).toBe('Unknown-sender hold OFF')
-      expect(wrapper.find('[data-testid="triage-noise-badge"]').text()).toBe('OFF')
-      expect(wrapper.find('[data-testid="triage-substance-badge"]').text()).toBe('Below-substance hold OFF')
+      expect(wrapper.find('[data-testid="triage-allowlist-hold-badge"]').text()).toBe('Unknown-sender hold off')
+      expect(wrapper.find('[data-testid="triage-noise-badge"]').text()).toBe('Off')
+      expect(wrapper.find('[data-testid="triage-substance-badge"]').text()).toBe('Below-substance hold off')
     })
 
     it('distinguishes label inactive-without-key from disabled-by-flag', async () => {
@@ -1047,7 +1047,7 @@ describe('SettingsView', () => {
         .element as HTMLInputElement
       const otherInput = wrapper.find('[data-testid="kind-color-input-other"]')
         .element as HTMLInputElement
-      expect(invoiceInput.value).toBe('#56b1f3')
+      expect(invoiceInput.value).toBe(DEFAULT_KIND_COLORS.invoice)
       expect(otherInput.value).toBe(NEUTRAL_KIND_COLOR)
       // Nothing customised yet: the per-kind Default + Reset all are disabled.
       expect(
@@ -1060,19 +1060,19 @@ describe('SettingsView', () => {
 
     it('saves a picked suggested colour and enables the reset controls', async () => {
       const auth = seedUser()
-      stubFetch({ dashboard_fields: ['kind'], kind_colors: { invoice: '#755ff8' } })
+      stubFetch({ dashboard_fields: ['kind'], kind_colors: { invoice: '#9333ea' } })
       const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
       await flushPromises()
 
       const invoiceRow = wrapper.find('[data-testid="kind-color-row-invoice"]')
-      await invoiceRow.find('button[title="Violet"]').trigger('click')
+      await invoiceRow.find('button[title="Purple"]').trigger('click')
       await flushPromises()
 
       const [url, init] = fetchMock.mock.calls.at(-1)!
       expect(String(url)).toBe('/api/settings/kind-colors')
       expect(init.method).toBe('PUT')
-      expect(JSON.parse(init.body)).toEqual({ kind_colors: { invoice: '#755ff8' } })
-      expect(auth.kindColors).toEqual({ invoice: '#755ff8' })
+      expect(JSON.parse(init.body)).toEqual({ kind_colors: { invoice: '#9333ea' } })
+      expect(auth.kindColors).toEqual({ invoice: '#9333ea' })
       expect(
         wrapper.find('[data-testid="kind-colors-reset-all"]').attributes('disabled'),
       ).toBeUndefined()

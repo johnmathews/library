@@ -117,8 +117,11 @@ describe('DocumentHistoryTimeline — extraction breakdown', () => {
     const method = w.find('[data-testid="history-extraction-method"]')
     expect(method.exists()).toBe(true)
     expect(method.text().toLowerCase()).toContain('vision fallback')
-    // It gets a violet accent so the important case is unmissable.
-    expect(method.classes().some((c) => c.includes('violet'))).toBe(true)
+    // It stands out from the ordinary secondary-ink lines by weight and full
+    // ink, not by colour: violet means "you can act on this" (brand spec §3.2).
+    expect(method.classes()).toContain('text-ink')
+    expect(method.classes()).toContain('font-medium')
+    expect(method.classes()).not.toContain('text-ink-secondary')
   })
 
   it('image input on the escalated retry is also the vision fallback', () => {
@@ -164,9 +167,9 @@ describe('DocumentHistoryTimeline — extraction breakdown', () => {
     expect(skipped.text()).toContain('Amount')
     expect(skipped.text()).toContain('Currency')
     expect(skipped.text()).not.toContain('amount_total')
-    // Amber, like the vision-fallback line is violet: a withheld write is a
-    // caveat the reader has to notice, not a statistic.
-    expect(skipped.classes().some((c) => c.includes('amber'))).toBe(true)
+    // Yellow (attention): a withheld write is a caveat the owner has to check,
+    // not a statistic.
+    expect(skipped.classes()).toContain('text-attention')
   })
 
   it('says nothing about skipped fields on an ordinary extraction', () => {

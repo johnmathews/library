@@ -81,7 +81,7 @@ function applyView(query: LocationQueryRaw): void {
         :ref="triggerRef"
         type="button"
         data-testid="save-view-menu"
-        class="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1 text-sm text-gray-700 transition-colors hover:bg-violet-50 hover:text-violet-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-violet-400/10"
+        class="inline-flex items-center gap-1.5 rounded-sm border border-control-border bg-panel px-3 py-1 text-sm font-semibold text-ink transition-colors hover:bg-tile"
         :aria-expanded="isOpen"
         aria-haspopup="dialog"
         @click="toggle"
@@ -93,12 +93,12 @@ function applyView(query: LocationQueryRaw): void {
       </button>
     </template>
 
-    <p class="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Save current filters</p>
+    <p class="mb-2 text-[13px] font-semibold text-ink-secondary">Save current filters</p>
     <form class="space-y-2" @submit.prevent="submit">
       <div>
         <label
           for="save-view-name"
-          class="block text-xs font-medium uppercase tracking-wide text-gray-400 mb-1"
+          class="block text-[13px] font-semibold text-ink-secondary mb-1"
         >
           View name
         </label>
@@ -112,7 +112,7 @@ function applyView(query: LocationQueryRaw): void {
           placeholder="e.g. Unpaid invoices"
         />
       </div>
-      <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+      <label class="flex items-center gap-2 text-sm text-ink-secondary">
         <input
           v-model="pinned"
           type="checkbox"
@@ -124,28 +124,28 @@ function applyView(query: LocationQueryRaw): void {
       <button
         type="submit"
         data-testid="save-view-submit"
-        class="btn-sm bg-violet-500 hover:bg-violet-600 text-white disabled:opacity-60"
+        class="btn-sm bg-brand-fill text-on-brand hover:brightness-110 disabled:opacity-60"
         :disabled="!name.trim() || saving"
       >
         {{ saving ? 'Saving…' : 'Save' }}
       </button>
-      <p v-if="errorMessage" class="text-sm text-red-500" data-testid="save-view-error">
+      <p v-if="errorMessage" class="text-sm text-error-ink" data-testid="save-view-error">
         {{ errorMessage }}
       </p>
     </form>
 
-    <div v-if="views.length" class="mt-3 border-t border-gray-200 dark:border-gray-700/60 pt-2">
-      <p class="mb-1 text-xs font-medium uppercase tracking-wide text-gray-400">Your views</p>
+    <div v-if="views.length" class="mt-3 border-t border-line pt-2">
+      <p class="mb-1 text-[13px] font-semibold text-ink-secondary">Your views</p>
       <ul class="space-y-0.5" data-testid="save-view-list">
         <li v-for="view in views" :key="view.id">
           <button
             type="button"
             :data-testid="`apply-view-${view.id}`"
-            class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm text-gray-700 hover:bg-violet-50 hover:text-violet-700 dark:text-gray-200 dark:hover:bg-violet-400/10"
+            class="flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm text-ink hover:bg-tile"
             @click="applyView(view.filter_state)"
           >
             <span class="truncate">{{ view.name }}</span>
-            <span v-if="view.pinned" class="ml-auto text-xs text-violet-500" aria-hidden="true">📌</span>
+            <span v-if="view.pinned" class="ml-auto text-xs text-ink-secondary" aria-hidden="true">📌</span>
           </button>
         </li>
       </ul>

@@ -79,7 +79,7 @@ function clearAll(): void {
       <button
         v-if="hasSelection"
         type="button"
-        class="btn-sm text-violet-600 hover:text-violet-700 dark:text-violet-400"
+        class="btn-sm text-brand hover:underline"
         data-testid="facet-clear"
         @click="clearAll"
       >

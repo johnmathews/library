@@ -1,9 +1,9 @@
 /**
- * Resolve the tile-border colour for a document kind.
+ * Resolve the colour of a document kind: the 4px band across the top of its
+ * tile (.app-doc-card--accented).
  *
  * Precedence: the user's per-kind override, else the built-in default palette,
- * else `null` — meaning "no accent", so the tile keeps its neutral default
- * border. Colour is keyed by kind *slug* so it never shifts as document counts
+ * else `null` — meaning "no accent", so the tile has no band. Colour is keyed by kind *slug* so it never shifts as document counts
  * change and a newly-created kind gets a stable (default or overridden) colour.
  */
 import { DEFAULT_KIND_COLORS } from '@/api/settings'

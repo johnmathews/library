@@ -104,7 +104,7 @@ function confirmDelete(): void {
 }
 
 const iconButton =
-  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 disabled:pointer-events-none disabled:opacity-40 dark:text-gray-400 dark:hover:bg-gray-700/60 dark:hover:text-gray-200'
+  'flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-ink-secondary transition hover:bg-tile hover:text-ink disabled:pointer-events-none disabled:opacity-40'
 
 defineExpose({ refresh: loadThreads })
 </script>
@@ -130,14 +130,14 @@ defineExpose({ refresh: loadThreads })
       <button
         type="button"
         data-testid="ask-title-rename-save"
-        class="px-2 text-sm font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400"
+        class="px-2 text-sm font-medium text-brand hover:underline"
         @click="saveRename"
       >
         Save
       </button>
       <button
         type="button"
-        class="px-2 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+        class="px-2 text-sm text-ink-secondary hover:text-ink"
         @click="cancelRename"
       >
         Cancel
@@ -161,13 +161,13 @@ defineExpose({ refresh: loadThreads })
             data-testid="ask-title"
             aria-haspopup="dialog"
             :aria-expanded="open"
-            class="flex min-w-0 items-center gap-1 rounded-lg px-2 py-1.5 text-left transition hover:bg-gray-100 dark:hover:bg-gray-700/60"
+            class="flex min-w-0 items-center gap-1 rounded-sm px-2 py-1.5 text-left transition hover:bg-tile"
             @click.stop="setSwitcher(!open)"
           >
-            <span class="truncate text-sm font-medium text-gray-800 dark:text-gray-100">{{
+            <span class="truncate text-sm font-medium text-ink">{{
               title || 'New conversation'
             }}</span>
-            <svg class="h-4 w-4 shrink-0 fill-none stroke-current text-gray-400" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+            <svg class="h-4 w-4 shrink-0 fill-none stroke-current text-ink-secondary" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
               <path d="m6 9 6 6 6-6" />
             </svg>
           </button>
@@ -187,17 +187,17 @@ defineExpose({ refresh: loadThreads })
             <button
               type="button"
               data-testid="thread-item"
-              class="flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition"
+              class="flex w-full items-center justify-between gap-3 rounded-sm px-2.5 py-2 text-left transition"
               :class="
                 thread.id === threadId
-                  ? 'bg-violet-50 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
-                  : 'text-gray-800 hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-700/60'
+                  ? 'bg-brand-tint text-brand-on-tint'
+                  : 'text-ink hover:bg-tile'
               "
               :aria-current="thread.id === threadId ? 'true' : undefined"
               @click="choose(thread.id)"
             >
               <span class="min-w-0 truncate text-sm">{{ thread.title }}</span>
-              <span class="shrink-0 text-xs text-gray-400 dark:text-gray-500">{{
+              <span class="shrink-0 text-xs text-ink-secondary">{{
                 formatDate(thread.updated_at)
               }}</span>
             </button>
@@ -206,14 +206,14 @@ defineExpose({ refresh: loadThreads })
         <p
           v-if="threads !== null && threads.length && !filtered.length"
           data-testid="thread-search-empty"
-          class="px-2.5 py-2 text-xs text-gray-500 dark:text-gray-400"
+          class="px-2.5 py-2 text-xs text-ink-secondary"
         >
           No conversations match “{{ query }}”.
         </p>
         <p
           v-else-if="threads !== null && !threads.length"
           data-testid="thread-list-empty"
-          class="px-2.5 py-2 text-xs text-gray-500 dark:text-gray-400"
+          class="px-2.5 py-2 text-xs text-ink-secondary"
         >
           No conversations yet.
         </p>
@@ -222,11 +222,11 @@ defineExpose({ refresh: loadThreads })
       <div class="ml-auto flex shrink-0 items-center gap-0.5">
         <template v-if="threadId !== null">
           <template v-if="confirmingDelete">
-            <span class="mr-1 text-xs text-gray-500 dark:text-gray-400">Delete this conversation?</span>
+            <span class="mr-1 text-xs text-ink-secondary">Delete this conversation?</span>
             <button
               type="button"
               data-testid="ask-title-delete-confirm"
-              class="px-2 text-sm font-medium text-red-500 hover:text-red-600 dark:hover:text-red-400"
+              class="px-2 text-sm font-medium text-error-ink hover:underline"
               @click="confirmDelete"
             >
               Delete
@@ -234,7 +234,7 @@ defineExpose({ refresh: loadThreads })
             <button
               type="button"
               data-testid="ask-title-delete-cancel"
-              class="px-2 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+              class="px-2 text-sm text-ink-secondary hover:text-ink"
               @click="confirmingDelete = false"
             >
               Cancel
@@ -256,7 +256,7 @@ defineExpose({ refresh: loadThreads })
           data-testid="ask-view-mode"
           role="group"
           aria-label="Transcript layout"
-          class="mx-1 inline-flex shrink-0 rounded-lg border border-gray-200 bg-gray-50 p-0.5 dark:border-gray-700/60 dark:bg-gray-900/40"
+          class="mx-1 inline-flex shrink-0 rounded-sm border border-control-border bg-tile p-0.5"
         >
           <button
             v-for="m in modes"
@@ -266,11 +266,11 @@ defineExpose({ refresh: loadThreads })
             :aria-pressed="viewMode === m.value"
             :aria-label="`${m.label} layout`"
             :title="`${m.label} layout`"
-            class="inline-flex h-7 w-7 items-center justify-center rounded-md transition"
+            class="inline-flex h-7 w-7 items-center justify-center rounded-[6px] transition"
             :class="
               viewMode === m.value
-                ? 'bg-white text-violet-600 shadow-xs dark:bg-gray-700 dark:text-violet-300'
-                : 'text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300'
+                ? 'bg-panel text-brand shadow-xs'
+                : 'text-ink-secondary hover:text-ink'
             "
             @click="viewMode = m.value"
           >

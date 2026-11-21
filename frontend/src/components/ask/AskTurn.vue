@@ -99,7 +99,7 @@ function onEditKeydown(event: KeyboardEvent): void {
 }
 
 const iconButton =
-  'flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 disabled:pointer-events-none disabled:opacity-40 dark:text-gray-500 dark:hover:bg-gray-700/60 dark:hover:text-gray-200'
+  'flex h-7 w-7 items-center justify-center rounded-sm text-ink-secondary transition hover:bg-tile hover:text-ink disabled:pointer-events-none disabled:opacity-40'
 </script>
 
 <template>
@@ -112,14 +112,14 @@ const iconButton =
         rows="3"
         data-testid="ask-edit-input"
         aria-label="Edit your question"
-        class="form-textarea w-full rounded-2xl text-sm"
+        class="form-textarea w-full text-sm"
         @keydown="onEditKeydown"
       ></textarea>
       <div class="flex items-center justify-end gap-3">
         <p
           v-if="laterCount > 0"
           data-testid="ask-edit-note"
-          class="mr-auto text-xs text-gray-500 dark:text-gray-400"
+          class="mr-auto text-xs text-ink-secondary"
         >
           Sending replaces this answer and the {{ laterCount === 1 ? 'one' : laterCount }} after
           it.
@@ -127,7 +127,7 @@ const iconButton =
         <button
           type="button"
           data-testid="ask-edit-cancel"
-          class="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          class="text-sm text-ink-secondary hover:text-ink"
           @click="cancelEdit"
         >
           Cancel
@@ -135,7 +135,7 @@ const iconButton =
         <button
           type="button"
           data-testid="ask-edit-submit"
-          class="btn-sm bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50"
+          class="btn-sm bg-brand-fill text-on-brand hover:brightness-110 disabled:opacity-50"
           :disabled="!draft.trim()"
           @click="submitEdit"
         >
@@ -147,12 +147,12 @@ const iconButton =
     <div v-else-if="isDocumentMode" data-testid="ask-doc-block" class="group flex w-full flex-col">
       <span
         data-testid="ask-doc-role"
-        class="mb-1 text-xs font-semibold tracking-wide text-violet-600 uppercase dark:text-violet-400"
+        class="mb-1 text-[13px] font-semibold text-ink"
         >You</span
       >
       <div class="flex items-start gap-2">
         <p
-          class="min-w-0 flex-1 rounded-xl bg-violet-50 px-4 py-3 text-sm break-words whitespace-pre-wrap text-gray-800 dark:bg-violet-500/10 dark:text-gray-100"
+          class="min-w-0 flex-1 rounded-lg bg-tile px-4 py-3 text-sm break-words whitespace-pre-wrap text-ink"
         >
           {{ turn.query }}
         </p>
@@ -189,7 +189,7 @@ const iconButton =
       </button>
       <p
         data-testid="ask-question-bubble"
-        class="max-w-[85%] rounded-2xl bg-gray-100 px-4 py-2.5 text-sm break-words whitespace-pre-wrap text-gray-800 dark:bg-gray-700/60 dark:text-gray-100"
+        class="max-w-[85%] rounded-lg bg-tile px-4 py-2.5 text-sm break-words whitespace-pre-wrap text-ink"
       >
         {{ turn.query }}
       </p>
@@ -199,14 +199,14 @@ const iconButton =
     <span
       v-if="isDocumentMode"
       data-testid="ask-doc-role"
-      class="block text-xs font-semibold tracking-wide text-gray-500 uppercase dark:text-gray-400"
+      class="block text-[13px] font-semibold text-ink"
       >Library</span
     >
     <div data-testid="ask-answer-surface" class="@container space-y-3">
       <div
         v-if="turn.pending"
         data-testid="ask-thinking"
-        class="flex items-center gap-1.5 py-1 text-gray-400 dark:text-gray-500"
+        class="flex items-center gap-1.5 py-1 text-ink-secondary"
         role="status"
       >
         <span class="sr-only">Generating answer…</span>
@@ -217,22 +217,22 @@ const iconButton =
 
       <template v-else>
         <div
-          class="ask-answer text-[0.9375rem] leading-7 text-gray-800 dark:text-gray-100"
+          class="ask-answer text-[15px] leading-[26px] text-ink"
           data-testid="ask-answer"
           v-html="answerHtml"
         />
 
         <details v-if="turn.usedTools.length" data-testid="ask-tools" class="group/tools">
           <summary
-            class="flex w-fit cursor-pointer list-none items-center gap-1 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 [&::-webkit-details-marker]:hidden"
+            class="flex w-fit cursor-pointer list-none items-center gap-1 text-sm text-ink-secondary hover:text-ink [&::-webkit-details-marker]:hidden"
           >
             <span>Used {{ turn.usedTools.length }} {{ turn.usedTools.length === 1 ? 'tool' : 'tools' }}</span>
             <svg class="h-3.5 w-3.5 fill-none stroke-current transition-transform group-open/tools:rotate-90" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
               <path d="m9 18 6-6-6-6" />
             </svg>
           </summary>
-          <ul class="mt-2 space-y-1 border-l-2 border-gray-200 pl-3 text-sm text-gray-600 dark:border-gray-700 dark:text-gray-300">
-            <li v-for="(tool, i) in turn.usedTools" :key="i" class="font-mono text-xs">{{ tool }}</li>
+          <ul class="mt-2 space-y-1 border-l-2 border-line pl-3 text-sm text-ink-secondary">
+            <li v-for="(tool, i) in turn.usedTools" :key="i" class="font-mono text-[13px]">{{ tool }}</li>
           </ul>
         </details>
 
@@ -242,7 +242,7 @@ const iconButton =
           class="group/cites"
         >
           <summary
-            class="flex w-fit cursor-pointer list-none items-center gap-1 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 [&::-webkit-details-marker]:hidden"
+            class="flex w-fit cursor-pointer list-none items-center gap-1 text-sm text-ink-secondary hover:text-ink [&::-webkit-details-marker]:hidden"
           >
             <!-- Its own span, no surrounding whitespace: e2e finds this label by
                  an anchored /^Citations \(\d+\)$/ text match. -->
@@ -254,7 +254,7 @@ const iconButton =
           <ul class="mt-2 grid grid-cols-1 gap-2 @lg:grid-cols-2" data-testid="ask-citations">
             <li v-for="citation in turn.citations" :key="citation.document_id">
               <RouterLink
-                class="flex items-center justify-between gap-3 rounded-lg border border-gray-200 px-4 py-3 transition hover:bg-gray-50 dark:border-gray-700/60 dark:hover:bg-gray-700/40"
+                class="group/cite flex items-center justify-between gap-3 rounded-md bg-tile px-4 py-3"
                 :to="{
                   name: 'document-detail',
                   params: { id: citation.document_id },
@@ -262,11 +262,11 @@ const iconButton =
                 }"
                 data-testid="ask-citation"
               >
-                <span class="min-w-0 truncate text-sm text-violet-600 underline dark:text-violet-400">
+                <span class="min-w-0 truncate text-sm text-brand underline decoration-1 underline-offset-2 group-hover/cite:decoration-2">
                   {{ citation.title ?? 'Untitled'
                   }}<span v-if="citation.page_number">, p. {{ citation.page_number }}</span>
                 </span>
-                <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400"
+                <span class="shrink-0 text-xs text-ink-secondary"
                   >#{{ citation.document_id }}</span
                 >
               </RouterLink>
@@ -308,7 +308,7 @@ const iconButton =
           <span
             v-if="turn.costUsd"
             data-testid="ask-meta"
-            class="ml-1 text-xs text-gray-400 dark:text-gray-500"
+            class="ml-1 text-xs text-ink-secondary"
             >{{ costLabel }}: ${{ turn.costUsd.toFixed(4) }}</span
           >
         </div>
@@ -386,26 +386,20 @@ const iconButton =
   margin-bottom: 0.25rem;
 }
 .ask-answer :deep(a) {
-  color: var(--color-violet-600, #7c3aed);
+  color: var(--brand);
   text-decoration: underline;
 }
-.dark .ask-answer :deep(a) {
-  color: var(--color-violet-400, #a78bfa);
-}
 .ask-answer :deep(code) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.875em;
   padding: 0.1em 0.3em;
   border-radius: 0.25rem;
-  background: rgb(0 0 0 / 0.06);
-}
-.dark .ask-answer :deep(code) {
-  background: rgb(255 255 255 / 0.08);
+  background: var(--tile);
 }
 .ask-answer :deep(h1),
 .ask-answer :deep(h2),
 .ask-answer :deep(h3) {
-  font-weight: 600;
+  font-weight: 650;
   margin: 1rem 0 0.5rem;
 }
 /* Fenced code blocks scroll horizontally inside the answer rather than
@@ -413,12 +407,9 @@ const iconButton =
 .ask-answer :deep(pre) {
   margin: 0.75rem 0;
   padding: 0.75rem;
-  border-radius: 0.375rem;
+  border-radius: var(--radius-sm);
   overflow-x: auto;
-  background: rgb(0 0 0 / 0.06);
-}
-.dark .ask-answer :deep(pre) {
-  background: rgb(255 255 255 / 0.08);
+  background: var(--tile);
 }
 .ask-answer :deep(pre code) {
   padding: 0;
@@ -433,15 +424,8 @@ const iconButton =
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   margin: 0.75rem 0;
-  border-radius: 0.5rem;
-  border: 1px solid rgb(0 0 0 / 0.1);
-}
-.dark .ask-answer :deep(.ask-table-wrap) {
-  border-color: rgb(255 255 255 / 0.12);
-}
-.ask-answer :deep(.ask-table-wrap:focus-visible) {
-  outline: 2px solid var(--color-violet-500);
-  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
 }
 
 /* `max-content` lets each column take its natural width and lets the wrapper
@@ -458,7 +442,7 @@ const iconButton =
 }
 .ask-answer :deep(th),
 .ask-answer :deep(td) {
-  border-bottom: 1px solid rgb(0 0 0 / 0.08);
+  border-bottom: 1px solid var(--line);
   padding: 0.5rem 0.75rem;
   text-align: left;
   vertical-align: top;
@@ -466,15 +450,8 @@ const iconButton =
 .ask-answer :deep(tr:last-child td) {
   border-bottom: 0;
 }
-.dark .ask-answer :deep(th),
-.dark .ask-answer :deep(td) {
-  border-color: rgb(255 255 255 / 0.1);
-}
 .ask-answer :deep(th) {
   font-weight: 600;
-  background: rgb(0 0 0 / 0.04);
-}
-.dark .ask-answer :deep(th) {
-  background: rgb(255 255 255 / 0.05);
+  background: var(--tile);
 }
 </style>

@@ -119,9 +119,9 @@ async function confirmPermanentDelete(): Promise<void> {
     {{ flashMessage }}
   </AppBanner>
 
-  <PageHeader title="Recently Deleted" title-id="deleted-title" />
+  <PageHeader title="Recently deleted" title-id="deleted-title" />
 
-  <p class="text-sm text-gray-500 dark:text-gray-400 mb-6" data-testid="deleted-intro">
+  <p class="text-sm text-ink-secondary mb-6" data-testid="deleted-intro">
     Deleted documents are held here for {{ retentionDays }}
     {{ retentionDays === 1 ? 'day' : 'days' }} before they are permanently removed. Restore one to
     send it back to your library.
@@ -129,7 +129,7 @@ async function confirmPermanentDelete(): Promise<void> {
 
   <div
     v-if="loadError"
-    class="card p-4 text-gray-600 dark:text-gray-300"
+    class="card p-4 text-ink-secondary"
     data-testid="load-error"
   >
     {{ loadError }}
@@ -138,7 +138,7 @@ async function confirmPermanentDelete(): Promise<void> {
   <template v-else-if="!loading">
     <div
       v-if="!items.length"
-      class="card p-8 text-center text-gray-500 dark:text-gray-400"
+      class="card p-8 text-center text-ink-secondary"
       data-testid="deleted-empty"
     >
       Nothing has been deleted recently. Documents you delete are kept here for
@@ -149,28 +149,28 @@ async function confirmPermanentDelete(): Promise<void> {
       <li
         v-for="item in items"
         :key="item.id"
-        class="relative bg-white dark:bg-gray-800 overflow-hidden app-doc-card"
+        class="relative overflow-hidden app-doc-card"
         data-testid="doc-card"
       >
         <div class="p-5 app-doc-card__body">
           <h2 class="app-doc-card__title mb-2">
             <RouterLink
-              class="text-violet-600 font-semibold hover:underline"
+              class="text-ink font-semibold hover:underline"
               :to="{ name: 'document-detail', params: { id: item.id } }"
             >
               {{ item.title ?? 'Untitled document' }}
             </RouterLink>
           </h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400 app-doc-card__meta">
+          <p class="text-sm text-ink-secondary app-doc-card__meta">
             <span v-if="item.kind">{{ item.kind.name }}</span>
             <span v-if="item.kind && item.sender"> · </span>
             <span v-if="item.sender">{{ item.sender.name }}</span>
           </p>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mt-2" data-testid="deleted-at">
+          <p class="text-sm text-ink-secondary mt-2" data-testid="deleted-at">
             Deleted {{ formatDeletedAt(item.deleted_at) }}
           </p>
           <p
-            class="text-sm font-medium text-violet-600 dark:text-violet-400 mt-1"
+            class="text-sm font-medium text-ink mt-1"
             data-testid="purge-countdown"
           >
             {{ purgeLabel(item.days_remaining) }}

@@ -130,7 +130,7 @@ defineExpose({ focus })
       id="ask-form"
       novalidate
       data-testid="ask-form"
-      class="rounded-2xl border border-gray-200 bg-white px-3 pt-3 pb-2 shadow-xs transition-colors focus-within:border-violet-400 dark:border-gray-700/60 dark:bg-gray-800 dark:focus-within:border-violet-500"
+      class="rounded-lg border border-control-border bg-panel px-3 pt-3 pb-2 transition-colors has-[textarea:focus-visible]:outline-2 has-[textarea:focus-visible]:outline-offset-2 has-[textarea:focus-visible]:outline-focus"
       @submit.prevent="emit('submit')"
     >
       <ul v-if="images.length" data-testid="ask-image-previews" class="mb-2 flex flex-wrap gap-2 px-1">
@@ -139,13 +139,13 @@ defineExpose({ focus })
             :src="image.url"
             :alt="image.name"
             data-testid="ask-image-preview"
-            class="h-16 w-16 rounded-lg border border-gray-200 object-cover dark:border-gray-700"
+            class="h-16 w-16 rounded-sm border border-line object-cover"
           />
           <button
             type="button"
             data-testid="ask-image-remove"
             :aria-label="`Remove ${image.name}`"
-            class="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-gray-700 text-xs text-white hover:bg-red-600"
+            class="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-ink text-xs text-on-ink hover:bg-error-ink"
             @click="removeImage(i)"
           >
             ×
@@ -161,7 +161,7 @@ defineExpose({ focus })
         data-testid="ask-question"
         :aria-label="fieldLabel"
         :placeholder="placeholder"
-        class="block w-full resize-none border-0 bg-transparent px-1 py-1 text-base leading-6 text-gray-800 placeholder-gray-400 focus:ring-0 focus:outline-none sm:text-sm dark:text-gray-100 dark:placeholder-gray-500"
+        class="block w-full resize-none border-0 bg-transparent px-1 py-1 text-base leading-6 text-ink placeholder:text-ink-secondary focus:outline-none sm:text-sm"
         @keydown="onKeydown"
       ></textarea>
 
@@ -181,7 +181,7 @@ defineExpose({ focus })
           data-testid="ask-image-attach"
           aria-label="Attach image"
           title="Attach image"
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 disabled:opacity-40 dark:text-gray-400 dark:hover:bg-gray-700/60 dark:hover:text-gray-200"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-secondary transition hover:bg-tile hover:text-ink disabled:opacity-40"
           :disabled="images.length >= MAX_IMAGES"
           @click="imageInput?.click()"
         >
@@ -199,7 +199,7 @@ defineExpose({ focus })
           data-testid="ask-submit"
           aria-label="Stop answering"
           title="Stop"
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-800 text-white transition hover:bg-gray-700 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink text-on-ink transition hover:opacity-90"
           @click="emit('stop')"
         >
           <svg class="h-3 w-3 fill-current" viewBox="0 0 12 12" aria-hidden="true">
@@ -213,7 +213,7 @@ defineExpose({ focus })
           data-testid="ask-submit"
           aria-label="Send"
           title="Send"
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-500 text-white transition hover:bg-violet-600 disabled:bg-gray-200 disabled:text-gray-400 dark:disabled:bg-gray-700 dark:disabled:text-gray-500"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-fill text-on-brand transition hover:brightness-110 disabled:bg-tile disabled:text-ink-secondary"
           :disabled="!question.trim()"
         >
           <svg class="h-4 w-4 fill-none stroke-current" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
@@ -226,7 +226,7 @@ defineExpose({ focus })
     <p
       v-if="modelChip"
       data-testid="ask-model-chip"
-      class="mt-1.5 px-3 text-right text-xs text-gray-400 dark:text-gray-500"
+      class="mt-1.5 px-3 text-right text-xs text-ink-secondary"
     >
       {{ modelChip }}
     </p>

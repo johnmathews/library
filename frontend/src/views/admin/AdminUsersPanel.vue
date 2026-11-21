@@ -158,18 +158,16 @@ onMounted(() => {
 </script>
 
 <template>
-  <p v-if="usersLoading" data-testid="users-loading" class="text-gray-600 dark:text-gray-300">
+  <p v-if="usersLoading" data-testid="users-loading" class="text-ink-secondary">
     Loading users…
   </p>
   <AppBanner v-else-if="usersError" variant="error" data-testid="users-error">
     {{ usersError }}
   </AppBanner>
   <div v-else class="space-y-6">
-    <div class="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
+    <div class="card overflow-x-auto">
       <table class="w-full text-sm">
-        <thead
-          class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
-        >
+        <thead class="text-[13px] text-ink-secondary border-b border-line">
           <tr>
             <th class="text-left font-semibold px-4 py-3">Username</th>
             <th class="text-left font-semibold px-4 py-3">Display name</th>
@@ -179,31 +177,32 @@ onMounted(() => {
             <th class="text-left font-semibold px-4 py-3">Actions</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
+        <tbody class="divide-y divide-line">
           <tr
             v-for="user in users"
             :key="user.id"
             :data-testid="`user-row-${user.id}`"
+            class="hover:bg-tile"
           >
-            <td class="px-4 py-3 text-gray-800 dark:text-gray-100 font-medium">
+            <td class="px-4 py-3 text-ink font-medium">
               {{ user.username }}
             </td>
-            <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ user.display_name }}</td>
+            <td class="px-4 py-3 text-ink-secondary">{{ user.display_name }}</td>
             <td class="px-4 py-3">
-              <AppBadge :colour="user.is_admin ? 'purple' : 'grey'">
+              <AppBadge>
                 {{ user.is_admin ? 'Admin' : 'User' }}
               </AppBadge>
             </td>
             <td class="px-4 py-3">
-              <AppBadge :colour="user.is_active ? 'green' : 'red'">
+              <AppBadge :colour="user.is_active ? 'green' : 'grey'">
                 {{ user.is_active ? 'Active' : 'Inactive' }}
               </AppBadge>
             </td>
-            <td class="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
+            <td class="px-4 py-3 text-ink-secondary whitespace-nowrap">
               {{ formatDate(user.created_at) }}
             </td>
             <td class="px-4 py-3">
-              <div v-if="isCurrentUser(user)" class="text-xs text-gray-400 dark:text-gray-500">
+              <div v-if="isCurrentUser(user)" class="text-xs text-ink-secondary">
                 You
               </div>
               <div v-else class="flex flex-wrap gap-2">
@@ -211,7 +210,7 @@ onMounted(() => {
                   type="button"
                   :data-testid="`user-toggle-admin-${user.id}`"
                   :disabled="pendingIds.has(user.id)"
-                  class="rounded-md border border-gray-200 dark:border-gray-700/60 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+                  class="rounded-sm border border-control-border bg-panel px-2.5 py-1 text-xs font-medium text-ink hover:bg-tile disabled:opacity-50 cursor-pointer"
                   @click="toggleAdmin(user)"
                 >
                   {{ user.is_admin ? 'Demote' : 'Promote' }}
@@ -220,7 +219,7 @@ onMounted(() => {
                   type="button"
                   :data-testid="`user-toggle-active-${user.id}`"
                   :disabled="pendingIds.has(user.id)"
-                  class="rounded-md border border-gray-200 dark:border-gray-700/60 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+                  class="rounded-sm border border-control-border bg-panel px-2.5 py-1 text-xs font-medium text-ink hover:bg-tile disabled:opacity-50 cursor-pointer"
                   @click="toggleActive(user)"
                 >
                   {{ user.is_active ? 'Deactivate' : 'Activate' }}
@@ -230,7 +229,7 @@ onMounted(() => {
                     type="button"
                     :data-testid="`user-delete-confirm-${user.id}`"
                     :disabled="pendingIds.has(user.id)"
-                    class="rounded-md border border-red-500 bg-red-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50 cursor-pointer"
+                    class="rounded-sm border border-control-border bg-panel px-2.5 py-1 text-xs font-medium text-ink hover:bg-tile disabled:opacity-50 cursor-pointer"
                     @click="confirmDeleteUser(user)"
                   >
                     Confirm delete
@@ -239,7 +238,7 @@ onMounted(() => {
                     type="button"
                     :data-testid="`user-delete-cancel-${user.id}`"
                     :disabled="pendingIds.has(user.id)"
-                    class="rounded-md border border-gray-200 dark:border-gray-700/60 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+                    class="rounded-sm border border-control-border bg-panel px-2.5 py-1 text-xs font-medium text-ink hover:bg-tile disabled:opacity-50 cursor-pointer"
                     @click="cancelDeleteUser"
                   >
                     Cancel
@@ -250,7 +249,7 @@ onMounted(() => {
                   type="button"
                   :data-testid="`user-delete-${user.id}`"
                   :disabled="pendingIds.has(user.id)"
-                  class="rounded-md border border-red-200 dark:border-red-500/40 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50 cursor-pointer"
+                  class="rounded-sm border border-control-border bg-panel px-2.5 py-1 text-xs font-medium text-ink hover:bg-tile disabled:opacity-50 cursor-pointer"
                   @click="requestDeleteUser(user)"
                 >
                   Delete
@@ -259,7 +258,7 @@ onMounted(() => {
               <p
                 v-if="rowError[user.id]"
                 :data-testid="`user-error-${user.id}`"
-                class="mt-1 text-xs text-red-600 dark:text-red-400"
+                class="mt-1 text-xs text-error-ink"
               >
                 {{ rowError[user.id] }}
               </p>
@@ -271,12 +270,12 @@ onMounted(() => {
 
     <!-- Create user -->
     <div :class="cardClass">
-      <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Create user</h2>
+      <h2 class="text-base font-[650] text-ink mb-4">Create user</h2>
       <div
         v-if="createError"
         data-testid="create-user-error"
         role="alert"
-        class="mb-4 border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-4 py-3 text-sm text-red-700 dark:text-red-300"
+        class="mb-4 bg-deficit-tint rounded-md px-4 py-3 text-sm text-error-ink"
       >
         {{ createError }}
       </div>
@@ -300,9 +299,9 @@ onMounted(() => {
             v-model="newIsAdmin"
             type="checkbox"
             data-testid="new-is-admin"
-            class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
+            class="form-checkbox text-brand-fill"
           />
-          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Administrator</span>
+          <span class="text-sm font-medium text-ink">Administrator</span>
         </label>
         <AppButton type="submit" data-testid="create-user-submit" :disabled="!canCreate">
           {{ creating ? 'Creating…' : 'Create user' }}

@@ -48,7 +48,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <p v-if="archLoading" data-testid="arch-loading" class="text-gray-600 dark:text-gray-300">
+  <p v-if="archLoading" data-testid="arch-loading" class="text-ink-secondary">
     Loading architecture docs…
   </p>
   <AppBanner v-else-if="archError" variant="error" data-testid="arch-error">
@@ -57,7 +57,7 @@ onMounted(() => {
   <p
     v-else-if="archDocs.length === 0"
     data-testid="arch-empty"
-    class="text-sm text-gray-500 dark:text-gray-400"
+    class="text-sm text-ink-secondary"
   >
     No architecture documents are available.
   </p>
@@ -69,10 +69,10 @@ onMounted(() => {
         type="button"
         :data-testid="`arch-doc-${doc.name}`"
         :class="[
-          'rounded-lg border px-3 py-1.5 text-sm font-medium transition cursor-pointer',
+          'rounded-full border px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer',
           selectedDocName === doc.name
-            ? 'border-violet-500 ring-2 ring-violet-500/30 text-violet-600 dark:text-violet-300'
-            : 'border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600',
+            ? 'border-brand bg-brand-tint text-brand'
+            : 'border-control-border bg-panel text-ink hover:bg-tile',
         ]"
         @click="selectedDocName = doc.name"
       >
@@ -81,12 +81,12 @@ onMounted(() => {
     </div>
 
     <div v-if="selectedDoc" :class="cardClass">
-      <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
+      <h2 class="text-base font-[650] text-ink mb-4">
         {{ selectedDoc.title }}
       </h2>
       <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in archHtml -->
       <div
-        class="doc-markdown text-gray-800 dark:text-gray-100"
+        class="doc-markdown text-ink"
         data-testid="arch-content"
         v-html="archHtml"
       />

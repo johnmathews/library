@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { bands, OTHER_VALUE } from '../palette'
-import { deriveSlot } from '@/utils/splitPalette'
+import { deriveSlot, OTHER_COLOUR, SPLIT_PALETTE } from '@/utils/splitPalette'
 
 const S = (value: string | null, label: string, colour: string | null = null) => ({ value, label, colour })
 const C = (split_value: string | null, total: string) =>
@@ -15,33 +15,36 @@ describe('palette', () => {
   // wherever it appears, including in 4c's vocabulary panel.
   it('gives a value the slot its key derives, when nothing collides', () => {
     const b = bands([S('hosting', 'Hosting')], [C('hosting', '10.00')])
-    expect(b[0]!.light).toBe(deriveSlot('hosting').light)
+    expect(b[0]!.colour).toBe(deriveSlot('hosting').colour)
   })
 
   // De-collision: two bands must never render the same colour.
   it('never gives two bands the same colour', () => {
-    const keys = ['hosting', 'licences', 'tools', 'training', 'postage', 'freight']
+    const keys = ['hosting', 'licences', 'tools', 'training', 'postage']
     const b = bands(keys.map((k) => S(k, k)), keys.map((k) => C(k, '10.00')))
-    const lights = b.map((x) => x.light)
-    expect(new Set(lights).size).toBe(lights.length)
+    const colours = b.map((x) => x.colour)
+    expect(new Set(colours).size).toBe(colours.length)
+    // Five bands, five slots: every category role is used exactly once.
+    expect(new Set(colours)).toEqual(new Set(SPLIT_PALETTE.map((slot) => slot.colour)))
   })
 
   it('is deterministic under input reordering', () => {
     const keys = ['hosting', 'licences', 'tools', 'training']
     const cells = keys.map((k) => C(k, '10.00'))
-    const one = bands(keys.map((k) => S(k, k)), cells).map((x) => [x.value, x.light])
-    const two = bands([...keys].reverse().map((k) => S(k, k)), cells).map((x) => [x.value, x.light])
+    const one = bands(keys.map((k) => S(k, k)), cells).map((x) => [x.value, x.colour])
+    const two = bands([...keys].reverse().map((k) => S(k, k)), cells).map((x) => [x.value, x.colour])
     expect(one).toEqual(two)
   })
 
-  it('folds the tail past six into one Other bucket', () => {
+  it('folds the tail past five into one Other bucket, in the Other colour', () => {
     const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
     const cells = keys.map((k, i) => C(k, `${100 - i * 10}.00`))
     const b = bands(keys.map((k) => S(k, k.toUpperCase())), cells)
     expect(b.map((x) => (x.value === OTHER_VALUE ? 'OTHER' : x.value)))
-      .toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'OTHER'])
-    expect(b.at(-1)!.label).toBe('Other (2)')
-    expect(b.at(-1)!.members.map((m) => m.value)).toEqual(['g', 'h'])
+      .toEqual(['a', 'b', 'c', 'd', 'e', 'OTHER'])
+    expect(b.at(-1)!.label).toBe('Other (3)')
+    expect(b.at(-1)!.members.map((m) => m.value)).toEqual(['f', 'g', 'h'])
+    expect(b.at(-1)!.colour).toBe(OTHER_COLOUR)
   })
 
   // §9.2's promise: the stack height is the total, whatever the split does.
@@ -60,7 +63,7 @@ describe('palette', () => {
     const names = (ks: string[]) =>
       bands(ks.map((k) => S(k, k)), cells).map((x) => (x.value === OTHER_VALUE ? 'OTHER' : x.value))
     expect(names(keys)).toEqual(names([...keys].reverse()))
-    expect(names(keys)).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'OTHER'])
+    expect(names(keys)).toEqual(['a', 'b', 'c', 'd', 'e', 'OTHER'])
   })
 
   it('keeps the unlabelled bucket, sorted last, with the API label', () => {
@@ -84,8 +87,8 @@ describe('palette', () => {
   it('honours a stored colour and does not hand its slot out twice', () => {
     const claimed = deriveSlot('b')
     const b = bands([S('a', 'A', claimed.light), S('b', 'B')], [C('a', '1.00'), C('b', '2.00')])
-    expect(b[0]!.light).toBe(claimed.light)
-    expect(b[1]!.light).not.toBe(claimed.light)
+    expect(b[0]!.colour).toBe(claimed.colour)
+    expect(b[1]!.colour).not.toBe(claimed.colour)
   })
 
   // De-collision must also apply BETWEEN two stored colours: a picker that
@@ -98,8 +101,15 @@ describe('palette', () => {
       [S('a', 'A', claimed.light), S('b', 'B', claimed.light)],
       [C('a', '1.00'), C('b', '2.00')],
     )
-    expect(b[0]!.light).toBe(claimed.light)
-    expect(b[1]!.light).not.toBe(claimed.light)
+    expect(b[0]!.colour).toBe(claimed.colour)
+    expect(b[1]!.colour).not.toBe(claimed.colour)
+  })
+
+  // A stored hex that names no slot (a script, or the retired olive slot) is
+  // the owner's colour and is painted as stored.
+  it('paints a stored colour from outside the palette verbatim', () => {
+    const b = bands([S('a', 'A', '#876708')], [C('a', '1.00')])
+    expect(b[0]!.colour).toBe('#876708')
   })
 
   it('keeps a split value that has no cells, as a real zero', () => {

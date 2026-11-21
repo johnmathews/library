@@ -115,22 +115,22 @@ function money(amount: string, currency: string | null): string {
 
 <template>
   <div data-testid="drill-bucket-body">
-    <p v-if="loadError" role="alert" class="text-sm text-red-600 dark:text-red-400" data-testid="drill-error">
+    <p v-if="loadError" role="alert" class="text-sm text-error-ink" data-testid="drill-error">
       {{ loadError }}
     </p>
 
-    <p v-else-if="loading" class="text-sm text-gray-500 dark:text-gray-400" data-testid="drill-loading">
+    <p v-else-if="loading" class="text-sm text-ink-secondary" data-testid="drill-loading">
       Loading…
     </p>
 
     <template v-else>
-      <p v-if="moreError" role="alert" class="mb-3 text-sm text-red-600 dark:text-red-400" data-testid="drill-more-error">
+      <p v-if="moreError" role="alert" class="mb-3 text-sm text-error-ink" data-testid="drill-more-error">
         {{ moreError }}
       </p>
 
       <p
         v-if="total !== null"
-        class="mb-4 text-sm text-gray-500 dark:text-gray-400"
+        class="mb-4 text-sm text-ink-secondary"
         data-testid="drill-bucket-count"
       >
         {{ documents.length }} of {{ total }}
@@ -140,7 +140,7 @@ function money(amount: string, currency: string | null): string {
         <li
           v-for="doc in documents"
           :key="doc.id"
-          class="flex flex-col gap-1 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40"
+          class="flex flex-col gap-1 rounded-md bg-tile p-3"
           data-testid="drill-document"
         >
           <div class="flex items-baseline justify-between gap-3">
@@ -148,27 +148,27 @@ function money(amount: string, currency: string | null): string {
               {{ doc.title ?? `Document #${doc.id}` }}
             </RouterLink>
             <span
-              class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100"
+              class="shrink-0 tabular-nums text-ink"
               :data-amount="doc.amount"
               data-testid="drill-document-amount"
             >
               {{ money(doc.amount, doc.currency) }}
             </span>
           </div>
-          <p class="text-xs text-gray-500 dark:text-gray-400">
+          <p class="text-xs text-ink-secondary">
             <span v-if="doc.amount_kind">{{ doc.amount_kind }}</span>
             <span v-if="formatDate(doc.date)"> &middot; {{ formatDate(doc.date) }}</span>
           </p>
         </li>
       </ul>
-      <p v-else class="text-sm text-gray-500 dark:text-gray-400" data-testid="drill-empty">
+      <p v-else class="text-sm text-ink-secondary" data-testid="drill-empty">
         Nothing in this bucket.
       </p>
 
       <button
         v-if="hasMore"
         type="button"
-        class="btn-sm mt-4 border-gray-200 text-gray-800 hover:border-gray-300 dark:border-gray-700/60 dark:text-gray-300"
+        class="btn-sm mt-4 border-control-border text-ink hover:bg-tile"
         :disabled="loadingMore"
         data-testid="drill-load-more"
         @click="loadMore"

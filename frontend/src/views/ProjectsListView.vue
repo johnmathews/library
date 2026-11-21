@@ -236,7 +236,7 @@ async function confirmDelete(slug: string): Promise<void> {
       </div>
     </form>
 
-    <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 mb-4">
+    <label class="inline-flex items-center gap-2 text-sm text-ink-secondary mb-4">
       <input
         v-model="includeArchived"
         type="checkbox"
@@ -247,20 +247,20 @@ async function confirmDelete(slug: string): Promise<void> {
       Show archived
     </label>
 
-    <p v-if="loading" data-testid="projects-loading" class="text-gray-500 dark:text-gray-400">
+    <p v-if="loading" data-testid="projects-loading" class="text-ink-secondary">
       Loading…
     </p>
     <p
       v-else-if="loadError"
       data-testid="projects-error"
-      class="text-red-600 dark:text-red-400"
+      class="text-error-ink"
     >
       Could not load projects. Try again later.
     </p>
     <p
       v-else-if="projects.length === 0"
       data-testid="projects-empty"
-      class="text-gray-500 dark:text-gray-400"
+      class="text-ink-secondary"
     >
       No projects yet. Assign one to a document, or create one here.
     </p>
@@ -319,26 +319,26 @@ async function confirmDelete(slug: string): Promise<void> {
               <RouterLink
                 :to="`/?project=${project.slug}`"
                 :data-testid="`project-link-${project.slug}`"
-                class="font-medium text-violet-600 dark:text-violet-300 hover:underline break-words"
+                class="font-medium text-brand hover:underline break-words"
               >
                 {{ project.name }}
               </RouterLink>
               <span
                 v-if="project.archived"
                 :data-testid="`project-archived-badge-${project.slug}`"
-                class="text-xs rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300 px-1.5 py-0.5"
+                class="text-xs rounded-full bg-tile text-ink px-2 py-0.5"
               >
                 Archived
               </span>
             </div>
             <p
               v-if="project.description"
-              class="text-sm text-gray-500 dark:text-gray-400 mt-0.5 break-words"
+              class="text-sm text-ink-secondary mt-0.5 break-words"
             >
               {{ project.description }}
             </p>
             <p
-              class="text-xs text-gray-400 dark:text-gray-500 mt-0.5"
+              class="text-xs text-ink-secondary mt-0.5"
               :data-testid="`project-count-${project.slug}`"
             >
               {{ project.document_count }}
@@ -368,7 +368,7 @@ async function confirmDelete(slug: string): Promise<void> {
             </AppButton>
             <template v-if="confirmingSlug === project.slug">
               <AppButton
-                variant="warning"
+                variant="primary"
                 size="sm"
                 type="button"
                 :data-testid="`project-delete-confirm-${project.slug}`"
@@ -387,26 +387,25 @@ async function confirmDelete(slug: string): Promise<void> {
                 Cancel
               </AppButton>
             </template>
-            <!-- Two-step delete arming affordance: an outline-red button that is
-                 deliberately quieter than the solid-red "Confirm delete" it
-                 reveals. AppButton has no outline-destructive variant, so this
-                 stays hand-rolled to preserve the escalation. -->
-            <button
+            <!-- Two-step delete: this arms it; "Confirm delete" (same
+                 destructive outline) does it. -->
+            <AppButton
               v-else
+              variant="warning"
+              size="sm"
               type="button"
               :data-testid="`project-delete-${project.slug}`"
-              class="btn-sm border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400"
               @click="askDelete(project.slug)"
             >
               Delete
-            </button>
+            </AppButton>
           </div>
         </div>
 
         <p
           v-if="rowError && rowError.slug === project.slug"
           :data-testid="`project-error-${project.slug}`"
-          class="text-sm text-red-600 dark:text-red-400 mt-2"
+          class="text-sm text-error-ink mt-2"
         >
           {{ rowError.message }}
         </p>

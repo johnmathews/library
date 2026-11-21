@@ -106,15 +106,16 @@ describe('SettingsView — LLM backend tab', () => {
 
     const badge = wrapper.find('[data-testid="llm-credentials-status"]')
     expect(badge.text()).toBe('Healthy')
-    // The colour is the whole point of a status badge — a grey "Healthy" reads
-    // as "no information". AppBadge takes `colour`, not `variant`, and passing
-    // the wrong prop is silently ignored: that shipped, and a text-only
-    // assertion did not catch it.
-    expect(badge.classes().join(' ')).toMatch(/green/)
+    // The finished state is the whole point of a status badge — a bare grey
+    // "Healthy" reads as "no information". A finished state is the neutral chip
+    // with a check icon (brand spec §8 call 4). AppBadge takes `colour`, not
+    // `variant`, and passing the wrong prop is silently ignored: that shipped,
+    // and a text-only assertion did not catch it.
+    expect(badge.find('svg').exists()).toBe(true)
     expect(wrapper.find('[data-testid="llm-credentials-detail"]').text()).toContain('refresh token present')
     const keyBadge = wrapper.find('[data-testid="llm-api-key-status"]')
     expect(keyBadge.text()).toContain('Configured')
-    expect(keyBadge.classes().join(' ')).toMatch(/green/)
+    expect(keyBadge.find('svg').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('sk-ant')
   })
 
@@ -238,7 +239,7 @@ describe('SettingsView — LLM backend tab', () => {
 
     const badge = wrapper.find('[data-testid="llm-credentials-status"]')
     expect(badge.text()).toBe('Unhealthy')
-    expect(badge.classes().join(' ')).toMatch(/red/)
-    expect(badge.classes().join(' ')).not.toMatch(/green/)
+    expect(badge.classes().join(' ')).toMatch(/error-ink/)
+    expect(badge.find('svg').exists()).toBe(false)
   })
 })

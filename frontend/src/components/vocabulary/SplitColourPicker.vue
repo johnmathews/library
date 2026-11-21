@@ -2,16 +2,19 @@
 /**
  * Colour override picker for a chart split value (facet value or sender).
  *
- * Deliberately closed to the six-slot `SPLIT_PALETTE`: no `<input type="color">`
+ * Deliberately closed to the five-slot `SPLIT_PALETTE`: no `<input type="color">`
  * and no hex text field. A free field would let an owner pick something
  * invisible in dark mode or indistinguishable from its neighbour, and nothing
  * in the system could then prevent it — see splitPalette.ts's header for the
  * validated palette and its relief rule.
  *
  * The relief rule itself is why every swatch carries `aria-label="${slot.name}"`
- * and the default button names the slot the key derives to: three of the
- * twelve palette steps fall below 3:1 against the chart surface, so a swatch
- * must never be the sole carrier of identity, accessibility included.
+ * and the default button names the slot the key derives to: a swatch must
+ * never be the sole carrier of identity, accessibility included.
+ *
+ * A swatch paints the slot's role (`slot.colour`, a `var(--category-N)`
+ * reference), so it follows the theme; what it emits is the slot's stored
+ * identity hex (`slot.light`), never the painted colour.
  *
  * `modelValue` is the stored hex (nullable — null means "use the derived
  * slot", matching splitPalette.ts's `resolveSplitColour`). Selection is
@@ -60,9 +63,9 @@ function chooseDefault(): void {
       v-for="(slot, index) in SPLIT_PALETTE"
       :key="slot.name"
       type="button"
-      class="w-6 h-6 rounded border border-gray-300 dark:border-gray-600"
-      :class="{ 'ring-2 ring-violet-500 ring-offset-1': isSelected(slot) }"
-      :style="{ backgroundColor: slot.light }"
+      class="w-6 h-6 rounded border border-control-border"
+      :class="{ 'ring-2 ring-brand ring-offset-1 ring-offset-panel': isSelected(slot) }"
+      :style="{ backgroundColor: slot.colour }"
       :aria-pressed="isSelected(slot)"
       :aria-label="slot.name"
       :data-testid="`${props.testid}-swatch-${index}`"
@@ -70,8 +73,8 @@ function chooseDefault(): void {
     />
     <button
       type="button"
-      class="btn-xs border border-gray-300 dark:border-gray-600 text-gray-800 dark:text-gray-300"
-      :class="{ 'ring-2 ring-violet-500 ring-offset-1': normalized === null }"
+      class="btn-xs border border-control-border text-ink hover:bg-tile"
+      :class="{ 'ring-2 ring-brand ring-offset-1 ring-offset-panel': normalized === null }"
       :aria-pressed="normalized === null"
       :data-testid="`${props.testid}-default`"
       @click="chooseDefault"

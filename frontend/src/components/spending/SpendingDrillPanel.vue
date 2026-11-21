@@ -79,7 +79,7 @@ function onDialogClick(event: MouseEvent): void {
 <template>
   <dialog
     ref="dialog"
-    class="app-drill-panel bg-white text-left shadow-lg backdrop:bg-gray-900/40 dark:bg-gray-800"
+    class="app-drill-panel bg-panel text-left shadow-lg backdrop:bg-ink/40"
     :data-presentation="sheet ? 'sheet' : 'panel'"
     aria-labelledby="drill-panel-title"
     data-testid="drill-panel"
@@ -88,18 +88,18 @@ function onDialogClick(event: MouseEvent): void {
   >
     <div class="flex h-full min-h-0 flex-col">
       <div
-        class="flex shrink-0 items-center justify-between gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-700/60"
+        class="flex shrink-0 items-center justify-between gap-3 border-b border-line px-5 py-4"
       >
         <h2
           id="drill-panel-title"
-          class="min-w-0 truncate text-lg font-semibold text-gray-800 dark:text-gray-100"
+          class="min-w-0 truncate text-lg font-[650] text-ink"
           data-testid="drill-title"
         >
           {{ title }}
         </h2>
         <button
           type="button"
-          class="shrink-0 text-sm text-gray-500 underline dark:text-gray-400"
+          class="shrink-0 text-sm text-ink-secondary underline"
           data-testid="drill-close"
           @click="requestClose"
         >

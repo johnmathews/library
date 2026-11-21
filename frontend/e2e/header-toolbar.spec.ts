@@ -196,7 +196,7 @@ test('the jobs filter bar rides in the header toolbar with one label recipe', as
   })
   expect(styles.task).not.toBeNull()
   expect(styles.document).toEqual(styles.task)
-  expect(styles.task?.transform).toBe('uppercase')
+  expect(styles.task?.transform).toBe('none')
 
   await expectNoHorizontalOverflow(page, 'jobs header toolbar at 1440px')
 })

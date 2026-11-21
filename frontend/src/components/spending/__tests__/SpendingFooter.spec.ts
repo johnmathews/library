@@ -145,6 +145,15 @@ describe('SpendingFooter', () => {
     expect(rows.at(-1)!.text()).toContain('No currency')
   })
 
+  // Netted refunds are money back: the money-in colour, and a true minus sign
+  // because they come off the total. Nothing netted is not money in.
+  it('shows netted refunds in the money-in colour, and a zero figure in plain ink', () => {
+    const refunded = refundFigure(mountFooter(WITH_REFUND))
+    expect(refunded.classes()).toContain('text-income')
+    expect(refunded.text()).toMatch(/^−/)
+    expect(refundFigure(mountFooter(EMPTY_FOOTER)).classes()).not.toContain('text-income')
+  })
+
   // §2.4: these two have no bucket route. Wiring them up is a 422.
   it('renders refund_count and unconvertible documents as plain figures', () => {
     const wrapper = mountFooter(FULL)

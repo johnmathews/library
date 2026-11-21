@@ -216,7 +216,7 @@ watch(
 
 <template>
   <div :class="cardClass">
-    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
+    <h2 class="text-base font-[650] text-ink mb-4">
       {{ descriptor.heading }}
     </h2>
 
@@ -224,7 +224,7 @@ watch(
     <div class="mb-4">
       <label
         :for="`${descriptor.testid}-create-input`"
-        class="block text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
+        class="block text-sm font-medium mb-1 text-ink"
       >
         {{ descriptor.addLabel }}
       </label>
@@ -250,7 +250,7 @@ watch(
       <p
         v-if="createError"
         :data-testid="`${descriptor.testid}-create-error`"
-        class="mt-1 text-xs text-red-600 dark:text-red-400"
+        class="mt-1 text-xs text-error-ink"
       >
         {{ createError }}
       </p>
@@ -259,7 +259,7 @@ watch(
     <p
       v-if="loading"
       :data-testid="`${descriptor.testid}s-loading`"
-      class="text-sm text-gray-500 dark:text-gray-400"
+      class="text-sm text-ink-secondary"
     >
       Loading {{ descriptor.testid }}s…
     </p>
@@ -267,20 +267,20 @@ watch(
       v-else-if="error"
       :data-testid="`${descriptor.testid}s-error`"
       role="alert"
-      class="border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-red-700 dark:text-red-300"
+      class="bg-deficit-tint rounded-md px-3 py-2 text-sm text-error-ink"
     >
       {{ error }}
     </div>
     <p
       v-else-if="items.length === 0"
       :data-testid="`${descriptor.testid}s-empty`"
-      class="text-sm text-gray-500 dark:text-gray-400"
+      class="text-sm text-ink-secondary"
     >
       No {{ descriptor.testid }}s yet.
     </p>
     <ul
       v-else
-      class="divide-y divide-gray-100 dark:divide-gray-700/60"
+      class="divide-y divide-line"
       :data-testid="`${descriptor.testid}-list`"
     >
       <li
@@ -291,7 +291,7 @@ watch(
       >
         <!-- Display row -->
         <div v-if="renameKey !== keyOf(row)" class="flex items-center justify-between gap-3">
-          <span class="min-w-0 truncate font-medium text-gray-800 dark:text-gray-100">
+          <span class="min-w-0 truncate font-medium text-ink">
             {{ row.name }}
           </span>
           <div class="flex shrink-0 items-center gap-2">
@@ -300,7 +300,7 @@ watch(
               type="button"
               :data-testid="`${descriptor.testid}-rename`"
               :disabled="pendingKeys.has(keyOf(row))"
-              class="rounded-md border border-gray-200 dark:border-gray-700/60 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+              class="rounded-sm border border-control-border bg-panel px-2.5 py-1 text-xs font-medium text-ink hover:bg-tile disabled:opacity-50 cursor-pointer"
               @click="startRename(row)"
             >
               Rename
@@ -309,7 +309,7 @@ watch(
               type="button"
               :data-testid="`${descriptor.testid}-delete`"
               :disabled="pendingKeys.has(keyOf(row))"
-              class="rounded-md border border-red-200 dark:border-red-500/40 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50 cursor-pointer"
+              class="rounded-sm border border-control-border bg-panel px-2.5 py-1 text-xs font-medium text-ink hover:bg-tile disabled:opacity-50 cursor-pointer"
               @click="startDelete(row)"
             >
               Delete
@@ -353,7 +353,7 @@ watch(
             v-if="descriptor.hasMerge && mergeTarget"
             :data-testid="`${descriptor.testid}-merge-warning`"
             role="alert"
-            class="border-l-4 border-yellow-500 bg-yellow-50 dark:bg-yellow-500/10 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+            class="bg-attention-tint rounded-md px-3 py-2 text-sm text-ink"
           >
             <p>
               '{{ row.name }}' will be merged into '{{ mergeTarget.target_name }}'
@@ -375,7 +375,7 @@ watch(
         <div
           v-if="deleteKey === keyOf(row)"
           :data-testid="`${descriptor.testid}-delete-confirm-box`"
-          class="mt-2 border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+          class="mt-2 bg-deficit-tint rounded-md px-3 py-2 text-sm text-ink"
         >
           <template v-if="row.document_count > 0">
             <p class="mb-2">
@@ -414,7 +414,7 @@ watch(
         <p
           v-if="rowError[keyOf(row)]"
           :data-testid="`${descriptor.testid}-error-${keyOf(row)}`"
-          class="mt-1 text-xs text-red-600 dark:text-red-400"
+          class="mt-1 text-xs text-error-ink"
         >
           {{ rowError[keyOf(row)] }}
         </p>

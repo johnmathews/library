@@ -48,7 +48,7 @@ import { useDocumentLayout } from '@/composables/useDocumentLayout'
 import { ApiError } from '@/api/client'
 import type { FacetRef } from '@/api/facets'
 import FacetEditor from '@/components/facets/FacetEditor.vue'
-import { formatDate, tagColour, formatDateTime } from '@/utils/documentFormat'
+import { formatDate, formatDateTime } from '@/utils/documentFormat'
 
 /** A field group's key. What used to be a single "Details" card, then four
  * independent tiles (2026-07-09 to 2026-09-06), is one panel again: this
@@ -303,17 +303,14 @@ const rowByField = Object.fromEntries(rowConfigs.map((row) => [row.field, row]))
 >
 
 /**
- * Metadata is split into themed groups so different kinds of metadata read as
- * visually distinct rather than one undifferentiated list. Each group carries an
- * accent colour (used on its heading, left rail and a faint tint) and lays its
- * fields out in a two-column grid to use the width and cut the vertical sprawl.
+ * Metadata is split into titled groups so different kinds of metadata read as
+ * distinct sections rather than one undifferentiated list. Headings are
+ * neutral (brand spec §3.2: colour is never decoration); hairlines separate
+ * the sections and, in read mode, the label/value rows.
  */
-type Accent = 'violet' | 'sky' | 'green' | 'yellow' | 'gray'
-
 interface FieldGroup {
   key: MetadataGroupKey
   label: string
-  accent: Accent
   fields: EditableField[]
 }
 
@@ -328,7 +325,6 @@ const fieldGroups: FieldGroup[] = [
   {
     key: 'classification',
     label: 'Classification',
-    accent: 'violet',
     fields: ['title', 'summary', 'kind', 'language', 'tags', 'projects', 'matters'],
   },
   // Who the document is between, and when it applies. One group until
@@ -337,13 +333,11 @@ const fieldGroups: FieldGroup[] = [
   {
     key: 'parties',
     label: 'Sender & recipient',
-    accent: 'sky',
     fields: ['sender', 'recipient'],
   },
   {
     key: 'dates',
     label: 'Dates',
-    accent: 'sky',
     fields: ['document_date', 'due_date', 'expiry_date'],
   },
 ]
@@ -358,7 +352,7 @@ const activeGroups = computed<FieldGroup[]>(() => {
     // Its own key, NOT 'content': the Topics block below is gated on the
     // content group, and reusing that key would render topics in the hero as
     // well as the panel — the duplication this whole change removes.
-    return [{ key: 'hero', label: '', accent: 'violet', fields: props.fields ?? [] }]
+    return [{ key: 'hero', label: '', fields: props.fields ?? [] }]
   }
   // The panel draws everything the hero is NOT showing. A group emptied by
   // that subtraction is dropped rather than left as a heading over nothing.
@@ -396,34 +390,6 @@ const WIDE_FIELDS = new Set<EditableField>([
   'matters',
   'amount',
 ])
-
-/** Static Tailwind class strings per accent, kept literal so Tailwind's content
- * scan keeps them. Just the two an accent actually renders: the heading's pill
- * (`bar`) and its text. A `border` and a `bg` were declared here for every
- * accent and NEVER read — the doc comment described "a faint tint" the page has
- * never drawn. */
-const ACCENT: Record<Accent, { bar: string; text: string }> = {
-  violet: {
-    bar: 'bg-violet-400 dark:bg-violet-500',
-    text: 'text-violet-700 dark:text-violet-300',
-  },
-  sky: {
-    bar: 'bg-sky-400 dark:bg-sky-500',
-    text: 'text-sky-700 dark:text-sky-300',
-  },
-  green: {
-    bar: 'bg-green-500 dark:bg-green-500',
-    text: 'text-green-700 dark:text-green-300',
-  },
-  yellow: {
-    bar: 'bg-yellow-400 dark:bg-yellow-500',
-    text: 'text-yellow-700 dark:text-yellow-400',
-  },
-  gray: {
-    bar: 'bg-gray-300 dark:bg-gray-600',
-    text: 'text-gray-500 dark:text-gray-400',
-  },
-}
 
 function languageName(language: DocumentLanguage): string {
   return DOCUMENT_LANGUAGES.find((item) => item.value === language)?.text ?? language
@@ -469,7 +435,15 @@ const { isSectionCollapsed, toggleSection } = useDocumentLayout()
  * structure was invisible.
  */
 const SECTION_WRAPPER =
-  'min-w-0 border-t border-gray-100 pt-5 mt-5 first:border-t-0 first:pt-0 first:mt-0 dark:border-gray-700/60'
+  'min-w-0 border-t border-line pt-5 mt-5 first:border-t-0 first:pt-0 first:mt-0'
+
+/**
+ * A read-mode panel row: label beside value once the panel is wide enough,
+ * hairlines between rows (design system: SummaryList). Edit mode keeps the
+ * two-column form grid, where each control needs the full cell width.
+ */
+const DETAIL_ROW =
+  'border-t border-line py-2.5 first:border-t-0 first:pt-0 @md:grid @md:grid-cols-[10rem_minmax(0,1fr)] @md:gap-x-4 @md:[&>dd]:mt-0'
 
 /** Collapsed state for one subsection (panel only — the hero never folds). */
 function collapsed(key: string): boolean {
@@ -895,7 +869,7 @@ const latestExtractionEvent = computed(() => {
        independent tiles plus a separate Facets card, which put the same fields
        on screen twice (once here, once in the hero) and gave a single-field
        Financial group a card of its own. Now every group is a titled SECTION of
-       one card: the accent bar and heading still separate them visually, but
+       one card: a heading and a hairline still separate them visually, but
        there is one card, one drag handle, one place a field lives.
 
        There is no per-section Edit toggle — the page-wide toggle in the hero
@@ -914,7 +888,7 @@ const latestExtractionEvent = computed(() => {
          everything below it. -->
     <h2
       v-if="variant === 'panel'"
-      class="mb-5 text-lg font-semibold text-gray-800 dark:text-gray-100"
+      class="mb-5 text-base font-[650] text-ink"
     >
       Metadata
     </h2>
@@ -937,16 +911,12 @@ const latestExtractionEvent = computed(() => {
           ]"
           @click="variant === 'panel' ? toggleSection(group.key) : undefined"
         >
-          <span class="h-4 w-1.5 rounded-full" :class="ACCENT[group.accent].bar"></span>
-          <h3
-            class="text-sm font-semibold uppercase tracking-wider"
-            :class="ACCENT[group.accent].text"
-          >
+          <h3 class="text-sm font-[650] text-ink">
             {{ group.label }}
           </h3>
           <svg
             v-if="variant === 'panel'"
-            class="ml-auto h-4 w-4 shrink-0 text-gray-400 transition-transform"
+            class="ml-auto h-4 w-4 shrink-0 text-ink-secondary transition-transform"
             :class="collapsed(group.key) ? '-rotate-90' : ''"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
@@ -962,20 +932,25 @@ const latestExtractionEvent = computed(() => {
         <!-- The hero packs more columns in: its rows are short stats, where the
              panel's are labelled form fields. Both are CONTAINER queries. -->
         <dl
-          class="grid gap-x-6 gap-y-4"
+          class="grid"
           :class="
             variant === 'hero'
-              ? 'grid-cols-2 @2xl:grid-cols-4'
-              : 'grid-cols-1 @xl:grid-cols-2'
+              ? 'gap-x-6 gap-y-4 grid-cols-2 @2xl:grid-cols-4'
+              : editMode
+                ? 'gap-x-6 gap-y-4 grid-cols-1 @xl:grid-cols-2'
+                : 'grid-cols-1'
           "
         >
           <template v-for="field in group.fields" :key="field">
           <div
             v-if="showRow(field)"
             :data-testid="`row-${field}`"
-            :class="WIDE_FIELDS.has(field) ? '@xl:col-span-2' : ''"
+            :class="[
+              WIDE_FIELDS.has(field) ? '@xl:col-span-2' : '',
+              variant === 'panel' && !editMode ? DETAIL_ROW : '',
+            ]"
           >
-            <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <dt class="flex items-center gap-1.5 text-[13px] font-semibold text-ink-secondary">
               {{ rowByField[field].label }}
               <template v-if="findingsByField[field]?.length">
                 <AppBadge
@@ -1003,7 +978,7 @@ const latestExtractionEvent = computed(() => {
                 data-testid="project-badge"
                 class="rounded-full"
               >
-                <AppBadge :colour="tagColour(project.name)">{{ project.name }}</AppBadge>
+                <AppBadge colour="grey">{{ project.name }}</AppBadge>
               </RouterLink>
             </dd>
             <!-- Matters render as badges linking to the matter-filtered
@@ -1020,7 +995,7 @@ const latestExtractionEvent = computed(() => {
                 data-testid="matter-badge"
                 class="rounded-full"
               >
-                <AppBadge :colour="tagColour(matter.name)">{{ matter.name }}</AppBadge>
+                <AppBadge colour="grey">{{ matter.name }}</AppBadge>
               </RouterLink>
             </dd>
             <!-- Tags render as badges linking to the tag-filtered dashboard,
@@ -1037,12 +1012,12 @@ const latestExtractionEvent = computed(() => {
                 data-testid="tag-badge"
                 class="rounded-full"
               >
-                <AppBadge :colour="tagColour(tag.name)">{{ tag.name }}</AppBadge>
+                <AppBadge colour="grey">{{ tag.name }}</AppBadge>
               </RouterLink>
             </dd>
             <dd
               v-else-if="!editMode || rowByField[field].readOnly"
-              class="mt-2 min-w-0 break-words leading-snug text-base text-gray-800 dark:text-gray-100"
+              class="mt-2 min-w-0 break-words leading-snug text-base text-ink"
               data-testid="row-value"
               >{{ rowByField[field].display(doc) ?? EMPTY }}</dd
             >
@@ -1101,7 +1076,7 @@ const latestExtractionEvent = computed(() => {
                   <div class="mt-2 flex gap-2">
                     <button
                       type="button"
-                      class="btn-sm border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 dark:border-violet-500/40 dark:bg-violet-500/15 dark:text-violet-300"
+                      btn-sm border-control-border bg-panel text-ink hover:bg-tile
                       data-testid="kind-add-confirm"
                       @click="confirmAddKind"
                     >
@@ -1109,7 +1084,7 @@ const latestExtractionEvent = computed(() => {
                     </button>
                     <button
                       type="button"
-                      class="btn-sm border-gray-200 text-gray-700 hover:border-gray-300 dark:border-gray-700/60 dark:text-gray-300"
+                      btn-sm border-control-border bg-panel text-ink hover:bg-tile
                       data-testid="kind-add-cancel"
                       @click="cancelAddKind"
                     >
@@ -1161,7 +1136,7 @@ const latestExtractionEvent = computed(() => {
                   <div class="mt-2 flex gap-2">
                     <button
                       type="button"
-                      class="btn-sm border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 dark:border-violet-500/40 dark:bg-violet-500/15 dark:text-violet-300"
+                      btn-sm border-control-border bg-panel text-ink hover:bg-tile
                       data-testid="recipient-add-confirm"
                       @click="confirmAddRecipient"
                     >
@@ -1169,7 +1144,7 @@ const latestExtractionEvent = computed(() => {
                     </button>
                     <button
                       type="button"
-                      class="btn-sm border-gray-200 text-gray-700 hover:border-gray-300 dark:border-gray-700/60 dark:text-gray-300"
+                      btn-sm border-control-border bg-panel text-ink hover:bg-tile
                       data-testid="recipient-add-cancel"
                       @click="cancelAddRecipient"
                     >
@@ -1218,7 +1193,7 @@ const latestExtractionEvent = computed(() => {
                   :error-message="fieldError.matters ?? undefined"
                   @change="saveField('matters')"
                 />
-                <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                <p class="mt-1 text-xs text-ink-secondary">
                   Editing here pins the matters for this document — auto-classification
                   no longer touches it.
                 </p>
@@ -1277,7 +1252,7 @@ const latestExtractionEvent = computed(() => {
               />
               <p
                 v-if="savedField[field]"
-                class="mt-1 flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400"
+                class="mt-1 flex items-center gap-1 text-xs font-medium text-ink-secondary"
                 :data-testid="`saved-${field}`"
               >
                 <svg
@@ -1304,17 +1279,17 @@ const latestExtractionEvent = computed(() => {
              tile; hidden entirely when the document has none. -->
         <dl
           v-if="variant === 'panel' && group.key === 'classification' && doc.topics.length"
-          class="mt-5 grid grid-cols-1 border-t border-gray-100 pt-4 dark:border-gray-700/60"
+          class="mt-5 grid grid-cols-1 border-t border-line pt-4"
         >
           <div data-testid="row-topics">
-            <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <dt class="text-[13px] font-semibold text-ink-secondary">
               Topics
             </dt>
             <dd class="mt-2 flex flex-wrap gap-2" data-testid="row-value">
               <AppBadge
                 v-for="topic in doc.topics"
                 :key="topic"
-                :colour="tagColour(topic)"
+                colour="grey"
                 data-testid="topic-badge"
                 >{{ topic }}</AppBadge
               >
@@ -1341,15 +1316,11 @@ const latestExtractionEvent = computed(() => {
           :class="['flex w-full items-center gap-2 text-left', collapsed('facets') ? '' : 'mb-4']"
           @click="toggleSection('facets')"
         >
-          <span class="h-4 w-1.5 rounded-full" :class="ACCENT.yellow.bar"></span>
-          <h3
-            class="text-sm font-semibold uppercase tracking-wider"
-            :class="ACCENT.yellow.text"
-          >
+          <h3 class="text-sm font-[650] text-ink">
             Facets
           </h3>
           <svg
-            class="ml-auto h-4 w-4 shrink-0 text-gray-400 transition-transform"
+            class="ml-auto h-4 w-4 shrink-0 text-ink-secondary transition-transform"
             :class="collapsed('facets') ? '-rotate-90' : ''"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
@@ -1374,7 +1345,7 @@ const latestExtractionEvent = computed(() => {
     </div>
 
     <!-- System: read-only provenance (status, OCR, source, extraction) with a
-         neutral accent. Always present — it is the one group that can never be
+         neutral heading. Always present — it is the one group that can never be
          empty, so it anchors the bottom of the panel. -->
     <div
       v-if="variant === 'panel'"
@@ -1388,15 +1359,11 @@ const latestExtractionEvent = computed(() => {
           :class="['flex w-full items-center gap-2 text-left', collapsed('system') ? '' : 'mb-4']"
           @click="toggleSection('system')"
         >
-          <span class="h-4 w-1.5 rounded-full" :class="ACCENT.gray.bar"></span>
-          <h3
-            class="text-sm font-semibold uppercase tracking-wider"
-            :class="ACCENT.gray.text"
-          >
+          <h3 class="text-sm font-[650] text-ink">
             System
           </h3>
           <svg
-            class="ml-auto h-4 w-4 shrink-0 text-gray-400 transition-transform"
+            class="ml-auto h-4 w-4 shrink-0 text-ink-secondary transition-transform"
             :class="collapsed('system') ? '-rotate-90' : ''"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
@@ -1409,18 +1376,18 @@ const latestExtractionEvent = computed(() => {
           </svg>
         </button>
         <div v-if="!collapsed('system')">
-        <dl class="grid grid-cols-1 gap-x-6 gap-y-4 @xl:grid-cols-2">
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+        <dl class="grid grid-cols-1">
+          <div :class="DETAIL_ROW">
+            <dt class="text-[13px] font-semibold text-ink-secondary">
               Status
             </dt>
             <dd
-              class="mt-1 text-base capitalize text-gray-800 dark:text-gray-100"
+              class="mt-1 text-base capitalize text-ink"
               data-testid="status-value"
             >{{ doc.status }}</dd>
           </div>
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+          <div :class="DETAIL_ROW">
+            <dt class="text-[13px] font-semibold text-ink-secondary">
               OCR confidence
             </dt>
             <!-- Null confidence has two provenances: a born-digital upload
@@ -1429,37 +1396,37 @@ const latestExtractionEvent = computed(() => {
                  letter is "imported", not "born-digital"). -->
             <dd
               v-if="doc.ocr_confidence === null && doc.source === 'import'"
-              class="mt-1 text-base text-gray-500 dark:text-gray-400"
+              class="mt-1 text-base text-ink-secondary"
               data-testid="ocr-confidence"
             >
               Imported (Paperless)
-              <span class="block text-xs text-gray-400 dark:text-gray-500">
+              <span class="block text-xs text-ink-secondary">
                 text layer reused from Paperless — no OCR re-run
               </span>
             </dd>
             <dd
               v-else-if="doc.ocr_confidence === null"
-              class="mt-1 text-base text-gray-500 dark:text-gray-400"
+              class="mt-1 text-base text-ink-secondary"
               data-testid="ocr-confidence"
             >
               Not applicable
-              <span class="block text-xs text-gray-400 dark:text-gray-500">
+              <span class="block text-xs text-ink-secondary">
                 born-digital text — no OCR run
               </span>
             </dd>
             <dd
               v-else
-              class="mt-1 text-base text-gray-800 dark:text-gray-100"
+              class="mt-1 text-base text-ink"
               data-testid="ocr-confidence"
             >
               {{ Math.round(doc.ocr_confidence) }}%
             </dd>
           </div>
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+          <div :class="DETAIL_ROW">
+            <dt class="text-[13px] font-semibold text-ink-secondary">
               Source
             </dt>
-            <dd class="mt-1 text-base text-gray-800 dark:text-gray-100">
+            <dd class="mt-1 text-base text-ink">
               {{ sourceLabel(doc.source) }}
             </dd>
           </div>
@@ -1474,20 +1441,20 @@ const latestExtractionEvent = computed(() => {
         >
           <dl class="space-y-2">
             <div class="flex justify-between gap-4">
-              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Model</dt>
-              <dd class="text-sm text-gray-800 dark:text-gray-100">
+              <dt class="text-[13px] font-semibold text-ink-secondary">Model</dt>
+              <dd class="text-sm text-ink">
                 {{ doc.extraction.model ?? EMPTY }}
               </dd>
             </div>
             <div class="flex justify-between gap-4">
-              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Confidence</dt>
-              <dd class="text-sm text-gray-800 dark:text-gray-100">
+              <dt class="text-[13px] font-semibold text-ink-secondary">Confidence</dt>
+              <dd class="text-sm text-ink">
                 {{ doc.extraction.confidence ?? EMPTY }}
               </dd>
             </div>
             <div v-if="latestExtractionEvent" class="flex justify-between gap-4">
-              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">When</dt>
-              <dd class="text-sm text-gray-800 dark:text-gray-100">
+              <dt class="text-[13px] font-semibold text-ink-secondary">When</dt>
+              <dd class="text-sm text-ink">
                 {{ formatDateTime(latestExtractionEvent.created_at) }}
               </dd>
             </div>

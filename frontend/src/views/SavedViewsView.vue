@@ -141,20 +141,20 @@ async function move(index: number, delta: number): Promise<void> {
   <div id="saved-views-view">
     <PageHeader title="Saved views" />
 
-    <p v-if="loading" data-testid="saved-views-loading" class="text-gray-500 dark:text-gray-400">
+    <p v-if="loading" data-testid="saved-views-loading" class="text-ink-secondary">
       Loading…
     </p>
     <p
       v-else-if="loadError"
       data-testid="saved-views-error"
-      class="text-red-600 dark:text-red-400"
+      class="text-error-ink"
     >
       Could not load saved views. Try again later.
     </p>
     <p
       v-else-if="views.length === 0"
       data-testid="saved-views-empty"
-      class="text-gray-500 dark:text-gray-400"
+      class="text-ink-secondary"
     >
       No saved views yet. Set filters on the dashboard, then use “Save view” to keep them here.
     </p>
@@ -204,14 +204,14 @@ async function move(index: number, delta: number): Promise<void> {
             <RouterLink
               :to="{ path: '/', query: view.filter_state }"
               :data-testid="`saved-view-name-${view.id}`"
-              class="font-medium text-violet-600 dark:text-violet-300 hover:underline break-words"
+              class="font-medium text-brand hover:underline break-words"
             >
               {{ view.name }}
             </RouterLink>
             <span
               v-if="view.pinned"
               :data-testid="`saved-view-pinned-badge-${view.id}`"
-              class="ml-2 text-xs rounded bg-violet-100 dark:bg-violet-500/20 text-violet-700 dark:text-violet-300 px-1.5 py-0.5"
+              class="ml-2 text-xs rounded-full bg-tile text-ink px-2 py-0.5"
             >
               Pinned
             </span>
@@ -221,7 +221,7 @@ async function move(index: number, delta: number): Promise<void> {
             <div class="flex items-center gap-1">
               <button
                 type="button"
-                class="btn-sm border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 disabled:opacity-40"
+                class="btn-sm border-control-border bg-panel text-ink hover:bg-tile disabled:opacity-40"
                 :data-testid="`view-up-${view.id}`"
                 :disabled="index === 0 || busyId !== null"
                 aria-label="Move up"
@@ -231,7 +231,7 @@ async function move(index: number, delta: number): Promise<void> {
               </button>
               <button
                 type="button"
-                class="btn-sm border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 disabled:opacity-40"
+                class="btn-sm border-control-border bg-panel text-ink hover:bg-tile disabled:opacity-40"
                 :data-testid="`view-down-${view.id}`"
                 :disabled="index === views.length - 1 || busyId !== null"
                 aria-label="Move down"
@@ -261,7 +261,7 @@ async function move(index: number, delta: number): Promise<void> {
             </AppButton>
             <template v-if="confirmingId === view.id">
               <AppButton
-                variant="warning"
+                variant="primary"
                 size="sm"
                 type="button"
                 :data-testid="`delete-confirm-${view.id}`"
@@ -280,22 +280,23 @@ async function move(index: number, delta: number): Promise<void> {
                 Cancel
               </AppButton>
             </template>
-            <button
+            <AppButton
               v-else
+              variant="warning"
+              size="sm"
               type="button"
               :data-testid="`delete-view-${view.id}`"
-              class="btn-sm border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400"
               @click="askDelete(view.id)"
             >
               Delete
-            </button>
+            </AppButton>
           </div>
         </div>
 
         <p
           v-if="rowError && rowError.id === view.id"
           :data-testid="`saved-view-error-${view.id}`"
-          class="text-sm text-red-600 dark:text-red-400 mt-2"
+          class="text-sm text-error-ink mt-2"
         >
           {{ rowError.message }}
         </p>

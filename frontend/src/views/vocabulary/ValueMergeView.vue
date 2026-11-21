@@ -146,14 +146,14 @@ async function apply(): Promise<void> {
       <AppBackLink :to="'/vocabulary'" text="Back to vocabulary" />
     </div>
 
-    <p v-if="loading" class="text-sm text-gray-500 dark:text-gray-400" data-testid="merge-loading">
+    <p v-if="loading" class="text-sm text-ink-secondary" data-testid="merge-loading">
       Loading the facet vocabulary…
     </p>
 
     <div
       v-else-if="loadError"
       role="alert"
-      class="border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-red-700 dark:text-red-300"
+      class="bg-deficit-tint rounded-md px-3 py-2 text-sm text-error-ink"
       data-testid="merge-load-error"
     >
       {{ loadError }}
@@ -162,17 +162,17 @@ async function apply(): Promise<void> {
     <div
       v-else-if="!facet || !source"
       role="alert"
-      class="border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-red-700 dark:text-red-300"
+      class="bg-deficit-tint rounded-md px-3 py-2 text-sm text-error-ink"
       data-testid="merge-not-found"
     >
       That value could not be found. It may already have been merged or deleted.
     </div>
 
     <div v-else class="max-w-2xl">
-      <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">
+      <h1 class="text-2xl text-ink font-[650] mb-2">
         Merge “{{ source.label }}”
       </h1>
-      <p class="text-gray-600 dark:text-gray-300 mb-6">
+      <p class="text-ink-secondary mb-6">
         Every document labelled “{{ source.label }}” in {{ facet.label }} will be relabelled to the
         value you choose below, and “{{ source.label }}” will be deleted. This cannot be undone.
       </p>
@@ -192,14 +192,14 @@ async function apply(): Promise<void> {
         </select>
       </div>
 
-      <p v-if="previewing" class="text-sm text-gray-500 dark:text-gray-400" data-testid="merge-previewing">
+      <p v-if="previewing" class="text-sm text-ink-secondary" data-testid="merge-previewing">
         Checking how many documents would move…
       </p>
 
       <p
         v-if="error"
         role="alert"
-        class="text-sm text-red-600 dark:text-red-400 mb-4"
+        class="text-sm text-error-ink mb-4"
         data-testid="merge-error"
       >
         {{ error }}
@@ -207,35 +207,35 @@ async function apply(): Promise<void> {
 
       <div
         v-if="canApply && targetValue"
-        class="border border-gray-200 dark:border-gray-700/60 rounded-lg p-4 mb-6"
+        class="bg-tile rounded-md p-4 mb-6"
         data-testid="merge-diff"
       >
-        <h2 class="text-xs uppercase font-semibold text-gray-500 dark:text-gray-400 mb-2">
+        <h2 class="text-sm font-semibold text-ink mb-2">
           What will change
         </h2>
         <ul class="space-y-1 text-sm">
           <li>
-            <span class="text-amber-600 dark:text-amber-400">~</span>
+            <span class="text-ink-secondary">~</span>
             {{ moved }} documents relabelled — {{ source.label }} → {{ targetValue.label }}
           </li>
           <li>
-            <span class="text-green-600 dark:text-green-400">+</span>
+            <span class="text-ink-secondary">+</span>
             gains alias "{{ source.key }}"
           </li>
           <li v-for="alias in gainedAliases" :key="`gain-${alias}`">
-            <span class="text-green-600 dark:text-green-400">+</span>
+            <span class="text-ink-secondary">+</span>
             gains alias "{{ alias }}"
           </li>
           <li v-for="alias in sharedAliases" :key="`have-${alias}`">
-            <span class="text-gray-400 dark:text-gray-500">=</span>
+            <span class="text-ink-secondary">=</span>
             already has alias "{{ alias }}"
           </li>
           <li>
-            <span class="text-red-600 dark:text-red-400">−</span>
+            <span class="text-error-ink">−</span>
             {{ source.label }} is deleted
           </li>
           <li v-if="losesColour" data-testid="merge-colour-loss">
-            <span class="text-red-600 dark:text-red-400">−</span>
+            <span class="text-error-ink">−</span>
             its colour override is lost
           </li>
         </ul>
@@ -244,12 +244,12 @@ async function apply(): Promise<void> {
       <div class="flex flex-wrap items-center gap-3">
         <button
           type="button"
-          class="btn bg-red-500 text-white hover:bg-red-600"
+          class="btn border-control-border bg-panel text-ink hover:bg-tile"
           :disabled="!canApply || applying"
           data-testid="merge-apply"
           @click="apply()"
         >
-          {{ applying ? 'Merging…' : 'Yes, merge' }}
+          {{ applying ? 'Merging…' : 'Merge value' }}
         </button>
         <AppBackLink :to="'/vocabulary'" text="Cancel" />
       </div>

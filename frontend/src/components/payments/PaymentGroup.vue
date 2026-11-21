@@ -63,18 +63,18 @@ watch(() => props.documentId, load)
   <p
     v-if="loadError"
     role="alert"
-    class="text-sm text-red-600 dark:text-red-400"
+    class="text-sm text-error-ink"
     data-testid="payment-error"
   >
     {{ loadError }}
   </p>
 
   <div v-else-if="collapsed" class="card p-5 @container" data-testid="payment-group">
-    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-1">Payment</h2>
-    <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
+    <h2 class="text-base font-[650] text-ink mb-1">Payment</h2>
+    <p class="text-sm text-ink-secondary mb-3">
       One payment, documented across {{ payment!.documents.length }} documents.
     </p>
-    <p v-if="actionError" role="alert" class="text-sm text-red-600 dark:text-red-400 mb-3">
+    <p v-if="actionError" role="alert" class="text-sm text-error-ink mb-3">
       {{ actionError }}
     </p>
     <ul class="space-y-2">
@@ -82,13 +82,13 @@ watch(() => props.documentId, load)
         v-for="doc in payment!.documents"
         :key="doc.id"
         data-testid="payment-group-row"
-        class="flex flex-col gap-2 border-t border-gray-100 pt-2 first:border-t-0 first:pt-0 @sm:flex-row @sm:items-center @sm:justify-between dark:border-gray-700/60"
+        class="flex flex-col gap-2 border-t border-line pt-2 first:border-t-0 first:pt-0 @sm:flex-row @sm:items-center @sm:justify-between"
       >
         <div class="min-w-0">
           <RouterLink :to="`/documents/${doc.id}`" class="truncate font-medium hover:underline">
             {{ doc.title ?? `Document #${doc.id}` }}
           </RouterLink>
-          <p class="text-xs text-gray-500 dark:text-gray-400">
+          <p class="text-xs text-ink-secondary">
             <span>{{ doc.amount_kind ?? 'unclassified' }}</span>
             <span v-if="formatDate(doc.document_date)"> · {{ formatDate(doc.document_date) }}</span>
           </p>
@@ -96,7 +96,7 @@ watch(() => props.documentId, load)
         <button
           v-if="doc.id !== documentId"
           type="button"
-          class="btn-sm shrink-0 self-start border-gray-200 text-gray-800 hover:border-gray-300 @sm:self-auto dark:border-gray-700/60 dark:text-gray-300"
+          class="btn-sm shrink-0 self-start border-control-border text-ink hover:bg-tile @sm:self-auto"
           data-testid="payment-split"
           :disabled="splittingId !== null"
           @click="split(doc.id)"

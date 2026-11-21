@@ -468,58 +468,51 @@ function toggleSortDirection(): void {
 
   <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
 
-  <div v-if="showAttentionRow" class="flex flex-col sm:flex-row sm:items-center gap-2 mb-4">
+  <!-- The to-do strip (brand spec §3.2: yellow = the owner has something to
+       do). One sentence per task, each followed by its action in brand. -->
+  <div
+    v-if="showAttentionRow"
+    class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-md bg-attention-tint px-3.5 py-2.5 text-sm text-ink"
+    data-testid="attention-row"
+  >
+    <span class="font-[650] text-attention">To do</span>
     <button
       v-if="showReviewButton"
       type="button"
-      :class="[
-        'flex w-full sm:w-auto items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors',
-        isReviewFilterActive
-          ? 'border-red-500 bg-red-100 text-red-800 ring-1 ring-red-400 dark:border-red-500/60 dark:bg-red-500/20 dark:text-red-200'
-          : 'border-red-300 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20',
-      ]"
+      class="group text-left"
       :aria-pressed="isReviewFilterActive"
       data-testid="needs-review-filter"
       @click="applyFilterQuery(isReviewFilterActive ? {} : { review: 'needs_review' })"
     >
-      <svg class="h-4 w-4 shrink-0 fill-current" viewBox="0 0 16 16" aria-hidden="true">
-        <path
-          d="M8 1a1 1 0 0 1 .87.5l6 10.5A1 1 0 0 1 14 13.5H2a1 1 0 0 1-.87-1.5l6-10.5A1 1 0 0 1 8 1Zm0 4a1 1 0 0 0-1 1v2a1 1 0 1 0 2 0V6a1 1 0 0 0-1-1Zm0 6a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"
-        />
-      </svg>
-      <span class="flex-1 text-left">{{ reviewButtonLabel }}</span>
-      <span v-if="isReviewFilterActive" class="text-xs font-normal opacity-80">Showing · clear</span>
+      <span class="text-ink">{{ reviewButtonLabel }}.</span>
+      {{ ' ' }}
+      <span class="font-semibold text-brand group-hover:underline">{{
+        isReviewFilterActive ? 'Showing these · Clear' : 'Show them'
+      }}</span>
     </button>
     <button
       v-if="reviewCount > 0"
       type="button"
-      class="flex w-full sm:w-auto items-center justify-center gap-1.5 rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-100 disabled:opacity-60 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20"
+      class="font-semibold text-brand hover:underline disabled:opacity-60"
       :disabled="startingQueue"
       data-testid="start-review-queue"
       @click="startReviewQueue"
     >
-      {{ startingQueue ? 'Starting…' : 'Review these one by one →' }}
+      {{ startingQueue ? 'Starting…' : 'Review them one by one' }}
     </button>
     <RouterLink
       v-if="heldEmails.count > 0"
       to="/held-emails"
-      class="flex w-full sm:w-auto items-center justify-center gap-1.5 rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-100 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20"
+      class="group"
       data-testid="held-emails-button"
     >
-      <svg class="h-4 w-4 shrink-0 fill-current" viewBox="0 0 16 16" aria-hidden="true">
-        <path
-          d="M2 3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H2Zm1.4 2h9.2L8 8.25 3.4 5ZM3 6.7l4.7 3.3a.5.5 0 0 0 .6 0L13 6.7V11H3V6.7Z"
-        />
-      </svg>
-      <span>{{ heldEmailsLabel }} →</span>
+      <span class="text-ink">{{ heldEmailsLabel }}.</span>
+      {{ ' ' }}
+      <span class="font-semibold text-brand group-hover:underline">Review them</span>
     </RouterLink>
   </div>
 
-  <div
-    v-if="loadError"
-    class="card p-4 text-gray-600 dark:text-gray-300"
-    data-testid="load-error"
-  >
+  <div v-if="loadError" class="card p-4 text-ink-secondary" data-testid="load-error">
     {{ loadError }}
   </div>
 
@@ -528,7 +521,7 @@ function toggleSortDirection(): void {
       v-if="items.length"
       class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4"
     >
-      <p class="text-sm text-gray-500 dark:text-gray-400" data-testid="result-count">
+      <p class="text-sm text-ink-secondary" data-testid="result-count">
         {{ total }} {{ total === 1 ? 'document' : 'documents' }}
       </p>
       <div class="flex flex-wrap items-end gap-3">
@@ -536,7 +529,7 @@ function toggleSortDirection(): void {
           class="flex flex-col gap-1"
           :title="sortDisabled ? 'Sorted by relevance while searching' : undefined"
         >
-          <span class="text-xs font-medium uppercase tracking-wide text-gray-400">Sort</span>
+          <span class="text-[13px] font-semibold text-ink-secondary">Sort</span>
           <div class="flex items-center gap-1.5">
             <select
               :value="applied.sort"
@@ -556,7 +549,7 @@ function toggleSortDirection(): void {
               data-testid="sort-dir-toggle"
               :aria-label="applied.dir === 'asc' ? 'Ascending, click for descending' : 'Descending, click for ascending'"
               :aria-pressed="applied.dir === 'asc'"
-              class="inline-flex items-center rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-400/10 disabled:opacity-50 disabled:hover:bg-transparent"
+              class="inline-flex items-center rounded-sm border border-control-border bg-panel px-2 py-1 text-sm text-ink hover:bg-tile disabled:opacity-50 disabled:hover:bg-panel"
               @click="toggleSortDirection"
             >
               {{ applied.dir === 'asc' ? '↑' : '↓' }}
@@ -565,8 +558,8 @@ function toggleSortDirection(): void {
         </div>
         <!-- Tiles-per-row only affects the multi-column desktop grid; below `lg`
              the grid is fixed (1 col on phones, 2 on tablets), so hide the control. -->
-        <label class="hidden lg:flex flex-col gap-1 text-sm text-gray-500 dark:text-gray-400">
-          <span class="text-xs font-medium uppercase tracking-wide text-gray-400">Tiles per row</span>
+        <label class="hidden lg:flex flex-col gap-1 text-sm text-ink-secondary">
+          <span class="text-[13px] font-semibold text-ink-secondary">Tiles per row</span>
           <select
             v-model="gridCols"
             data-testid="grid-cols-select"
@@ -581,7 +574,7 @@ function toggleSortDirection(): void {
         <RouterLink
           to="/saved-views"
           data-testid="manage-saved-views-link"
-          class="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1 text-sm text-gray-700 transition-colors hover:bg-violet-50 hover:text-violet-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-violet-400/10"
+          class="inline-flex items-center gap-1.5 rounded-sm border border-control-border bg-panel px-3 py-1 text-sm font-semibold text-ink transition-colors hover:bg-tile"
         >
           <svg class="h-4 w-4 fill-current opacity-70" viewBox="0 0 16 16" aria-hidden="true">
             <path
@@ -597,21 +590,21 @@ function toggleSortDirection(): void {
 
     <div
       v-if="!items.length && !isFiltered"
-      class="card p-8 text-center text-gray-500 dark:text-gray-400"
+      class="card p-8 text-center text-ink-secondary"
       data-testid="empty-library"
     >
       There are no documents in your library yet.
-      <RouterLink class="text-violet-600 hover:underline" :to="{ name: 'upload' }">
+      <RouterLink class="font-medium text-brand underline underline-offset-3" :to="{ name: 'upload' }">
         Upload your first document</RouterLink
       >.
     </div>
     <div
       v-else-if="!items.length"
-      class="card p-8 text-center text-gray-500 dark:text-gray-400"
+      class="card p-8 text-center text-ink-secondary"
       data-testid="empty-results"
     >
       No documents match your search. Try different words, check the filters, or
-      <a href="#" class="text-violet-600 hover:underline" @click.prevent="clearFilters"
+      <a href="#" class="font-medium text-brand underline underline-offset-3" @click.prevent="clearFilters"
         >clear the filters</a
       >.
     </div>
@@ -626,13 +619,13 @@ function toggleSortDirection(): void {
         v-for="item in items"
         :key="item.id"
         :id="`doc-card-${item.id}`"
-        class="relative bg-white dark:bg-gray-800 overflow-hidden app-doc-card"
+        class="relative overflow-hidden app-doc-card"
         :class="tileAccentClass(item.id)"
         :style="tileAccentStyle(item.id)"
         :data-kind="item.kind?.slug"
         data-testid="doc-card"
       >
-        <div class="app-doc-card__thumbnail relative aspect-[4/3] bg-gray-100 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700/60 w-full flex items-center justify-center">
+        <div class="app-doc-card__thumbnail relative aspect-[4/3] bg-tile w-full flex items-center justify-center">
           <img
             v-if="item.has_thumbnail && !brokenThumbnails.has(item.id)"
             :class="['aspect-[4/3] w-full', thumbnailFitClass]"
@@ -643,7 +636,7 @@ function toggleSortDirection(): void {
           />
           <span
             v-else
-            class="app-doc-card__thumbnail-fallback flex flex-col items-center gap-2 text-sm font-medium text-gray-400 dark:text-gray-500"
+            class="app-doc-card__thumbnail-fallback flex flex-col items-center gap-2 text-sm font-medium text-ink-secondary"
             aria-hidden="true"
           >
             <template v-if="isLockedPdf(item)">
@@ -670,12 +663,12 @@ function toggleSortDirection(): void {
                    thumbnail. One field per line; title as the heading, the
                    rest as label/value rows. -->
               <span
-                class="block w-full px-4 py-3 text-left font-normal not-italic text-gray-600 dark:text-gray-300"
+                class="block w-full px-4 py-3 text-left font-normal not-italic text-ink-secondary"
                 data-testid="markdown-preview"
               >
                 <span
                   v-if="item.title"
-                  class="block text-base font-semibold text-gray-700 dark:text-gray-200 line-clamp-2"
+                  class="block text-base font-semibold text-ink line-clamp-2"
                   >{{ item.title }}</span
                 >
                 <span
@@ -683,7 +676,7 @@ function toggleSortDirection(): void {
                   :key="row.label"
                   class="mt-1 block truncate text-sm leading-snug"
                 >
-                  <span class="text-gray-400 dark:text-gray-500">{{ row.label }}</span>
+                  <span class="text-ink-secondary">{{ row.label }}</span>
                   {{ row.value }}
                 </span>
               </span>
@@ -696,7 +689,7 @@ function toggleSortDirection(): void {
                thumbnail (the letterboxed/fallback states sit on the gray box). -->
           <div
             v-if="auth.tilePreview === 'full_width' && item.has_thumbnail && !brokenThumbnails.has(item.id)"
-            class="app-doc-card__thumbnail-fade pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-gradient-to-b from-transparent to-white dark:to-gray-800"
+            class="app-doc-card__thumbnail-fade pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-gradient-to-b from-transparent to-panel"
             aria-hidden="true"
             data-testid="thumbnail-fade"
           ></div>
@@ -710,7 +703,7 @@ function toggleSortDirection(): void {
                  makes the whole `relative` card a click target for this single
                  anchor (better on touch), without nesting extra links. -->
             <RouterLink
-              class="text-violet-600 font-semibold hover:underline after:absolute after:inset-0 after:content-['']"
+              class="text-ink font-semibold hover:underline after:absolute after:inset-0 after:content-['']"
               :to="{ name: 'document-detail', params: { id: item.id }, query: detailQuery }"
             >
               {{ item.title ?? 'Untitled document' }}
@@ -724,12 +717,12 @@ function toggleSortDirection(): void {
               <AppBadge colour="yellow" data-testid="review-badge">Needs review</AppBadge>
               <span
                 v-if="item.review_findings.length"
-                class="text-xs text-amber-700 dark:text-amber-400"
+                class="text-xs text-attention"
                 data-testid="review-reason"
               >{{ summarizeReviewReasons(item.review_findings) }}</span>
             </template>
             <template v-for="field in auth.dashboardFields" :key="field">
-              <AppBadge v-if="field === 'kind' && item.kind" colour="blue">{{ item.kind.name }}</AppBadge>
+              <AppBadge v-if="field === 'kind' && item.kind" colour="grey">{{ item.kind.name }}</AppBadge>
               <AppBadge
                 v-else-if="field === 'language' && item.language !== 'unknown'"
                 colour="grey"
@@ -743,29 +736,29 @@ function toggleSortDirection(): void {
               <AppBadge v-else-if="field === 'file_type'" colour="grey">{{ fileTypeLabel(item) }}</AppBadge>
               <span
                 v-else-if="field === 'sender' && item.sender"
-                class="app-doc-card__sender text-sm text-gray-500 dark:text-gray-400"
+                class="app-doc-card__sender text-sm text-ink-secondary"
               >
                 {{ item.sender.name }}
               </span>
               <span
                 v-else-if="field === 'date' && item.document_date"
-                class="app-doc-card__date text-sm text-gray-500 dark:text-gray-400"
+                class="app-doc-card__date text-sm text-ink-secondary"
                 data-testid="doc-date"
               >
-                <span class="text-gray-400 dark:text-gray-500">Date</span>
+                <span class="text-ink-secondary">Date</span>
                 {{ formatDate(item.document_date) }}
               </span>
               <span
                 v-else-if="TILE_DATE_FIELDS[field] && tileDate(TILE_DATE_FIELDS[field].value(item))"
-                :class="`app-doc-card__${field.replace('_', '-')} text-sm text-gray-500 dark:text-gray-400`"
+                :class="`app-doc-card__${field.replace('_', '-')} text-sm text-ink-secondary`"
                 :data-testid="`doc-${field.replace('_', '-')}`"
               >
-                <span class="text-gray-400 dark:text-gray-500">{{ TILE_DATE_FIELDS[field].label }}</span>
+                <span class="text-ink-secondary">{{ TILE_DATE_FIELDS[field].label }}</span>
                 {{ tileDate(TILE_DATE_FIELDS[field].value(item)) }}
               </span>
               <span
                 v-else-if="field === 'amount' && amountLabels.get(item.id)"
-                class="app-doc-card__amount text-sm text-gray-500 dark:text-gray-400"
+                class="app-doc-card__amount text-sm text-ink tabular-nums"
               >
                 {{ amountLabels.get(item.id) }}
               </span>
@@ -779,7 +772,7 @@ function toggleSortDirection(): void {
                 </AppBadge>
                 <span
                   v-if="item.tags.length > MAX_TAGS"
-                  class="app-doc-card__tags-more text-sm text-gray-500 dark:text-gray-400"
+                  class="app-doc-card__tags-more text-sm text-ink-secondary"
                 >
                   +{{ item.tags.length - MAX_TAGS }}
                 </span>
@@ -788,13 +781,13 @@ function toggleSortDirection(): void {
           </p>
           <p
             v-if="item.summary && !(applied.q && item.snippet) && !hideSummaryOnMobile"
-            class="text-sm text-gray-600 dark:text-gray-400 mt-1 sm:mt-2 leading-snug sm:leading-normal app-doc-card__summary line-clamp-3"
+            class="text-sm text-ink-secondary mt-1 sm:mt-2 leading-snug sm:leading-normal app-doc-card__summary line-clamp-3"
             data-testid="doc-summary"
           >{{ item.summary }}</p>
           <!-- eslint-disable-next-line vue/no-v-html -- renderSnippet escapes everything except the ts_headline <b> markers (docs/api.md §1.3.3) -->
           <p
             v-if="applied.q && item.snippet"
-            class="text-sm text-gray-500 dark:text-gray-400 mt-1 sm:mt-2 leading-snug sm:leading-normal app-doc-card__snippet"
+            class="text-sm text-ink-secondary mt-1 sm:mt-2 leading-snug sm:leading-normal app-doc-card__snippet"
             v-html="renderSnippet(item.snippet)"
           ></p>
         </div>
@@ -806,7 +799,7 @@ function toggleSortDirection(): void {
     <div v-if="items.length" class="mt-6 flex flex-col items-center gap-3">
       <p
         v-if="loadingMore"
-        class="text-sm text-gray-500 dark:text-gray-400"
+        class="text-sm text-ink-secondary"
         data-testid="loading-more"
       >
         Loading more…
@@ -814,7 +807,7 @@ function toggleSortDirection(): void {
       <button
         v-if="hasMore"
         type="button"
-        class="inline-flex items-center rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+        class="btn border-control-border bg-panel text-ink hover:bg-tile disabled:opacity-50"
         data-testid="load-more"
         :disabled="loadingMore"
         @click="loadMore"

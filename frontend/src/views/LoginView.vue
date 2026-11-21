@@ -2,6 +2,7 @@
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AppButton, AppErrorSummary, AppInput } from '@/components/app'
+import AppLogo from '@/components/layout/AppLogo.vue'
 import type { ErrorSummaryItem } from '@/components/app'
 import { ApiError } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
@@ -60,13 +61,12 @@ async function onSubmit(): Promise<void> {
 </script>
 
 <template>
-  <div id="login-page" class="min-h-[100dvh] flex items-center justify-center bg-gray-100 dark:bg-gray-900 px-4">
-    <div
-      id="login-card"
-      class="w-full max-w-md bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-8"
-    >
-      <p class="text-sm font-semibold text-violet-500 mb-1">Library</p>
-      <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-6">Sign in</h1>
+  <div id="login-page" class="min-h-[100dvh] flex items-center justify-center bg-canvas px-4">
+    <div id="login-card" class="card w-full max-w-md p-8">
+      <div class="login-logo mb-6" data-testid="login-logo">
+        <AppLogo />
+      </div>
+      <h1 class="text-2xl font-[650] text-ink mb-6">Sign in</h1>
 
       <AppErrorSummary v-if="summaryErrors.length" :errors="summaryErrors" />
 
@@ -92,3 +92,11 @@ async function onSubmit(): Promise<void> {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* AppLogo hides its name at lg+ unless the desktop sidebar is expanded. The
+   sign-in page has no sidebar, so the name always shows here. */
+.login-logo :deep(.app-logo__name) {
+  opacity: 1;
+}
+</style>

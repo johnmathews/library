@@ -97,10 +97,11 @@ describe('HeldEmailsView', () => {
     expect(row.text()).toContain('Your May invoice')
     expect(row.text()).toContain('Looks like a newsletter')
     expect(row.text()).toContain('Held 10 July 2026')
-    // llm_hold gets the violet (purple) chip.
+    // Every verdict is the neutral chip (brand spec §3.2: colour is never decoration).
     const chip = row.find('[data-testid="held-email-verdict"]')
     expect(chip.text()).toBe('LLM hold')
-    expect(chip.classes().join(' ')).toContain('violet')
+    expect(chip.classes()).toContain('bg-tile')
+    expect(chip.classes()).toContain('text-ink')
   })
 
   it('renders deterministic verdicts with a neutral gray chip', async () => {
@@ -110,8 +111,8 @@ describe('HeldEmailsView', () => {
     const w = await mountView()
     const chip = w.find('[data-testid="held-email-verdict"]')
     expect(chip.text()).toBe('Below substance')
-    expect(chip.classes().join(' ')).toContain('gray')
-    expect(chip.classes().join(' ')).not.toContain('violet')
+    expect(chip.classes()).toContain('bg-tile')
+    expect(chip.classes()).toContain('text-ink')
   })
 
   it('shows the empty state when nothing is held', async () => {

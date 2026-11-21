@@ -224,23 +224,36 @@ describe('FacetsPanel', () => {
       })) as unknown as typeof window.matchMedia
     }
 
+    // A slot paints its design-system role, which tokens.css defines per
+    // theme. jsdom loads no stylesheet, so give the slot's role a distinct
+    // value in each theme here; a swatch that did not react to the toggle
+    // would keep the light value.
+    const slot = deriveSlot('alpha')
+    const roleName = /^var\(--([a-z0-9-]+)\)$/.exec(slot.colour)![1]
+    const LIGHT = '#112233'
+    const DARK = '#445566'
+    const tokens = document.createElement('style')
+    tokens.textContent =
+      `[data-theme="light"] { --${roleName}: ${LIGHT}; } .dark { --${roleName}: ${DARK}; }`
+    document.head.appendChild(tokens)
+
     const wrapper = await open()
     const swatch = () => wrapper.find('[aria-label="Colour for Alpha"]')
-    const slot = deriveSlot('alpha')
     // jsdom normalises a `background-color` written as a hex string to
     // `rgb(r, g, b)` when the style attribute is read back, so the DOM
     // outcome is asserted in that form rather than against the hex literal.
-    expect(swatch().attributes('style')).toContain(hexToRgb(slot.light))
+    expect(swatch().attributes('style')).toContain(hexToRgb(LIGHT))
 
     const isDark = useDark({ selector: 'html' })
     isDark.value = true
     await flushPromises()
 
     expect(document.documentElement.classList.contains('dark')).toBe(true)
-    expect(swatch().attributes('style')).toContain(hexToRgb(slot.dark))
+    expect(swatch().attributes('style')).toContain(hexToRgb(DARK))
 
     isDark.value = false
     await flushPromises()
+    tokens.remove()
   })
 
   it('marks two values in one facet that resolve to the same colour', async () => {

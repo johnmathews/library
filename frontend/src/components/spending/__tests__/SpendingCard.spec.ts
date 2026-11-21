@@ -242,7 +242,7 @@ describe('SpendingCard', () => {
 
   it('does not colour the delta as good or bad', () => {
     const el = delta(mountCard(RISING)).element as HTMLElement
-    expect(el.className).not.toMatch(/text-(red|green)-/)
+    expect(el.className).not.toMatch(/text-(red|green|income|deficit)\b/)
   })
 
   it('renders a needs-attention line only when the footer has one', () => {
@@ -379,7 +379,7 @@ describe('SpendingCard', () => {
     })
     const el = delta(wrapper)
     expect(el.text()).toContain('300.00')
-    expect((el.element as HTMLElement).className).not.toMatch(/text-(red|green)-/)
+    expect((el.element as HTMLElement).className).not.toMatch(/text-(red|green|income|deficit)\b/)
   })
 
   it('dims the body while busy without hiding it', () => {
@@ -555,7 +555,7 @@ describe('SpendingCard', () => {
       ],
     })
     expect(delta(wrapper).text()).toContain('0.00')
-    expect((delta(wrapper).element as HTMLElement).className).not.toMatch(/text-(red|green)-/)
+    expect((delta(wrapper).element as HTMLElement).className).not.toMatch(/text-(red|green|income|deficit)\b/)
   })
 
   it('isolates and un-isolates a band on legend click without moving the headline', async () => {

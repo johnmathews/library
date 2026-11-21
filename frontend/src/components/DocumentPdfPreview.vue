@@ -121,7 +121,7 @@ defineExpose({ status, pageCount })
     <div
       v-if="status === 'loading'"
       data-testid="pdf-preview-loading"
-      class="relative flex h-[70vh] items-center justify-center bg-gray-100 dark:bg-gray-900/40"
+      class="relative flex h-[70vh] items-center justify-center bg-tile"
     >
       <img
         v-if="poster"
@@ -129,13 +129,13 @@ defineExpose({ status, pageCount })
         alt=""
         class="absolute inset-0 h-full w-full object-contain opacity-40"
       />
-      <span class="relative text-sm text-gray-500 dark:text-gray-400">Loading preview…</span>
+      <span class="relative text-sm text-ink-secondary">Loading preview…</span>
     </div>
     <div
       v-else-if="status === 'rendered'"
       ref="container"
       data-testid="pdf-preview-pages"
-      class="h-[70vh] overflow-y-auto bg-gray-100 dark:bg-gray-900/40"
+      class="h-[70vh] overflow-y-auto bg-tile"
     >
       <canvas
         v-for="n in pageCount"
@@ -148,23 +148,23 @@ defineExpose({ status, pageCount })
     <div
       v-else-if="status === 'password'"
       data-testid="pdf-preview-password"
-      class="flex h-[70vh] flex-col items-center justify-center gap-3 bg-gray-100 p-6 text-center text-gray-500 dark:bg-gray-900/40 dark:text-gray-400"
+      class="flex h-[70vh] flex-col items-center justify-center gap-3 bg-tile p-6 text-center text-ink-secondary"
     >
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-12 w-12" aria-hidden="true">
         <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
       </svg>
       <span class="text-sm font-medium">Protected PDF — open to unlock</span>
-      <a :href="openHref" target="_blank" rel="noopener" data-testid="pdf-preview-open" class="text-violet-600 hover:underline">Open</a>
+      <a :href="openHref" target="_blank" rel="noopener" data-testid="pdf-preview-open" class="text-brand hover:underline">Open</a>
     </div>
     <div
       v-else
       data-testid="pdf-preview-error"
-      class="flex h-[70vh] flex-col items-center justify-center gap-2 bg-gray-100 p-6 text-center text-sm text-gray-500 dark:bg-gray-900/40 dark:text-gray-400"
+      class="flex h-[70vh] flex-col items-center justify-center gap-2 bg-tile p-6 text-center text-sm text-ink-secondary"
     >
       <span>This preview couldn't be displayed.</span>
       <span class="flex gap-3">
-        <a :href="openHref" target="_blank" rel="noopener" data-testid="pdf-preview-open" class="text-violet-600 hover:underline">Open</a>
-        <DownloadLink :href="downloadHref" data-testid="pdf-preview-download" class="text-violet-600 hover:underline">Download</DownloadLink>
+        <a :href="openHref" target="_blank" rel="noopener" data-testid="pdf-preview-open" class="text-brand hover:underline">Open</a>
+        <DownloadLink :href="downloadHref" data-testid="pdf-preview-download" class="text-brand hover:underline">Download</DownloadLink>
       </span>
     </div>
   </div>

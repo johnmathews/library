@@ -145,13 +145,13 @@ async function save(): Promise<void> {
       </AppButton>
     </form>
 
-    <p v-if="draftError" class="text-sm text-red-600 dark:text-red-400" data-testid="question-draft-error">
+    <p v-if="draftError" class="text-sm text-error-ink" data-testid="question-draft-error">
       {{ draftError }}
     </p>
 
     <div v-if="draft" class="card flex flex-col gap-3 p-4" data-testid="question-draft-result">
       <template v-if="hasPreview">
-        <p class="text-sm text-gray-700 dark:text-gray-200" data-testid="question-draft-rule">
+        <p class="text-sm text-ink" data-testid="question-draft-rule">
           {{ ruleSummary(draft.rule!) }}
         </p>
         <p class="filter-label" data-testid="question-draft-split">
@@ -159,7 +159,7 @@ async function save(): Promise<void> {
         </p>
         <p
           v-if="isApproximate"
-          class="text-sm text-amber-700 dark:text-amber-300"
+          class="text-sm text-attention"
           data-testid="question-draft-approximate"
         >
           This is an approximation of your question.
@@ -174,14 +174,14 @@ async function save(): Promise<void> {
              sentence existed on the wire and reached nobody. -->
         <p
           v-if="draft.message"
-          class="text-sm text-gray-700 dark:text-gray-200"
+          class="text-sm text-ink"
           data-testid="question-draft-message"
         >
           {{ draft.message }}
         </p>
         <ul
           v-if="draft.unknown_terms.length > 0"
-          class="flex flex-wrap gap-1 text-xs text-gray-500 dark:text-gray-400"
+          class="flex flex-wrap gap-1 text-xs text-ink-secondary"
           data-testid="question-draft-unknown-terms"
         >
           <li v-for="term in draft.unknown_terms" :key="term">{{ term }}</li>
@@ -193,19 +193,19 @@ async function save(): Promise<void> {
       </template>
 
       <template v-else>
-        <p v-if="draft.message" class="text-sm text-gray-700 dark:text-gray-200" data-testid="question-draft-message">
+        <p v-if="draft.message" class="text-sm text-ink" data-testid="question-draft-message">
           {{ draft.message }}
         </p>
         <ul
           v-if="draft.unknown_terms.length > 0"
-          class="flex flex-wrap gap-1 text-xs text-gray-500 dark:text-gray-400"
+          class="flex flex-wrap gap-1 text-xs text-ink-secondary"
           data-testid="question-draft-unknown-terms"
         >
           <li v-for="term in draft.unknown_terms" :key="term">{{ term }}</li>
         </ul>
       </template>
 
-      <p v-if="saveError" class="text-sm text-red-600 dark:text-red-400" data-testid="question-draft-save-error">
+      <p v-if="saveError" class="text-sm text-error-ink" data-testid="question-draft-save-error">
         {{ saveError }}
       </p>
 

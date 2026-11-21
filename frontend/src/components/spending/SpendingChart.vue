@@ -4,10 +4,16 @@
  *
  * This component draws bands, it does not decide them: `bands()`
  * (`@/spending/palette`) owns the fold, the de-collision walk and any stored
- * colour override, and this component reads `band.light` / `band.dark` and
- * nothing else. The one exception the spec allows is the unsplit chart,
- * where `bands` is `[]` and there is nothing to fold — the single series
- * draws in the first shared-palette slot (`SPLIT_PALETTE[0]`).
+ * colour override, and this component reads `band.colour` and nothing else.
+ * The one exception the spec allows is the unsplit chart, where `bands` is
+ * `[]` and there is nothing to fold — the single series draws in
+ * `chart-spending`, and a period whose refunds exceed its payments (below the
+ * zero line) in `chart-income` (design system, Charts).
+ *
+ * Every colour is a design-system role, resolved for the current theme by
+ * `chartColour()` because a canvas cannot read `var()`. Gridlines are
+ * `chart-grid`, the zero line `control-border`, tick labels `ink-secondary`
+ * at 11px.
  */
 import { computed } from 'vue'
 import { Bar } from 'vue-chartjs'
@@ -15,7 +21,7 @@ import { BarElement, CategoryScale, Chart as ChartJS, LinearScale, Tooltip } fro
 import { useDark } from '@vueuse/core'
 import type { ChartData } from '@/api/spending'
 import { OTHER_VALUE, type Band } from '@/spending/palette'
-import { SPLIT_PALETTE } from '@/utils/splitPalette'
+import { chartColour, INCOME_COLOUR, SPENDING_COLOUR } from '@/utils/splitPalette'
 import { formatMoney, fromCents, toCents } from '@/spending/money'
 
 // A category scale, not a time scale: the x-axis is uniform periods, so
@@ -39,10 +45,13 @@ const emit = defineEmits<{ cell: [period: string, splitValue: string | null | ty
 // re-renders the chart on the toggle with no watcher of our own).
 const isDark = useDark({ selector: 'html' })
 
+/** A design-system role, resolved for the current theme. */
+const paint = (colour: string): string => chartColour(colour, isDark.value)
+
 // The surface colour is the 2px gap between touching segments, not a
-// stroke: it must match `.card`'s own background so a segment boundary
-// reads as a gap onto the page, not an outline around the bar.
-const surfaceColour = computed(() => (isDark.value ? '#1f2937' : '#ffffff'))
+// stroke: it must match `.card`'s own background (`panel`) so a segment
+// boundary reads as a gap onto the page, not an outline around the bar.
+const surfaceColour = computed(() => paint('var(--panel)'))
 
 // Isolation (the `hidden` prop) is a display filter over the bands `bands()`
 // already assigned — it must never re-run the fold or recolour a survivor,
@@ -101,16 +110,16 @@ function centsForPeriod(period: string): number {
 
 interface Series {
   label: string
-  light: string
-  dark: string
+  /** A role reference or stored hex (`Band.colour`); null for the unsplit series, coloured per bar by sign. */
+  colour: string | null
   value: string | null | typeof OTHER_VALUE
   cents: number[]
 }
 
 // One series per visible band, in band order — the chart never re-derives a
-// colour or an order, it reads `band.light` / `band.dark` verbatim. The
-// unsplit case (`bands` is `[]`) draws a single series in the first shared
-// palette slot instead, since there is no fold to read a band from.
+// colour or an order, it reads `band.colour` verbatim. The unsplit case
+// (`bands` is `[]`) draws a single series in the spending colour instead,
+// since there is no fold to read a band from.
 //
 // The sentinel MUST be `props.bands.length === 0`, never
 // `visibleBands.value.length === 0` — the latter is also true when every
@@ -125,12 +134,10 @@ interface Series {
 // chart is the honest answer to "everything is hidden".
 const series = computed<Series[]>(() => {
   if (props.bands.length === 0) {
-    const slot = SPLIT_PALETTE[0]!
     return [
       {
         label: '',
-        light: slot.light,
-        dark: slot.dark,
+        colour: null,
         value: null,
         cents: periods.value.map((p) => centsForPeriod(p)),
       },
@@ -140,8 +147,7 @@ const series = computed<Series[]>(() => {
     const keys = b.members.map((m) => keyOf(m.value))
     return {
       label: b.label,
-      light: b.light,
-      dark: b.dark,
+      colour: b.colour,
       value: b.value,
       cents: periods.value.map((p) => centsForKeys(p, keys)),
     }
@@ -202,7 +208,10 @@ const chartData = computed(() => ({
   datasets: series.value.map((s, datasetIndex) => ({
     label: s.label,
     data: s.cents.map((c) => c / 100),
-    backgroundColor: isDark.value ? s.dark : s.light,
+    backgroundColor:
+      s.colour === null
+        ? s.cents.map((c) => paint(c < 0 ? INCOME_COLOUR : SPENDING_COLOUR))
+        : paint(s.colour),
     borderWidth: 2,
     borderColor: surfaceColour.value,
     maxBarThickness: 24,
@@ -230,6 +239,8 @@ function onBarClick(_event: unknown, elements: ActiveBarElement[]): void {
   emit('cell', period, s.value)
 }
 
+const tickStyle = computed(() => ({ color: paint('var(--ink-secondary)'), font: { size: 11 } }))
+
 const chartOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
@@ -251,15 +262,20 @@ const chartOptions = computed(() => ({
       stacked: true,
       grid: { display: false },
       ticks: props.compact
-        ? { callback: (_value: unknown, index: number) => shortLabel(periods.value[index] ?? '') }
-        : {},
+        ? { ...tickStyle.value, callback: (_value: unknown, index: number) => shortLabel(periods.value[index] ?? '') }
+        : tickStyle.value,
     },
     y: {
       stacked: true,
       // A refund exceeding its bucket's payments draws below the baseline;
       // an axis that starts elsewhere hides the sign (spec §4.4 #2).
       beginAtZero: true,
-      ticks: props.compact ? { display: false } : {},
+      border: { display: false },
+      grid: {
+        color: (ctx: { tick?: { value: number } }) =>
+          paint(ctx.tick?.value === 0 ? 'var(--control-border)' : 'var(--chart-grid)'),
+      },
+      ticks: props.compact ? { display: false } : tickStyle.value,
     },
   },
 }))

@@ -69,7 +69,7 @@ onBeforeUnmount(() => {
       :aria-label="props.label"
       :aria-expanded="open"
       aria-haspopup="menu"
-      class="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700/60 dark:hover:text-gray-200 transition"
+      class="flex h-8 w-8 items-center justify-center rounded-sm text-ink-secondary hover:bg-tile hover:text-ink transition"
       @click.stop="toggle"
     >
       <svg class="h-4.5 w-4.5 fill-current" viewBox="0 0 16 16" aria-hidden="true">
@@ -90,13 +90,13 @@ onBeforeUnmount(() => {
          already works. Re-adding the roles means implementing the contract. -->
     <div
       v-if="open"
-      class="absolute right-0 top-9 z-20 min-w-[8rem] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1 shadow-lg"
+      class="absolute right-0 top-9 z-20 min-w-[8rem] rounded-lg border border-line bg-panel p-1 shadow-lg"
       @click.stop
     >
       <button
         type="button"
         data-testid="thread-rename"
-        class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700/60 transition"
+        class="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-left text-sm text-ink hover:bg-tile transition"
         @click.stop="choose('rename')"
       >
         <svg class="h-3.5 w-3.5 fill-none stroke-current" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
@@ -107,7 +107,7 @@ onBeforeUnmount(() => {
       <button
         type="button"
         data-testid="thread-delete"
-        class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition"
+        class="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-left text-sm text-ink hover:bg-tile transition"
         @click.stop="choose('delete')"
       >
         <svg class="h-3.5 w-3.5 fill-none stroke-current" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">

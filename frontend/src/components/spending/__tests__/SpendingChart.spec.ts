@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 
 vi.mock('vue-chartjs', () => ({
@@ -8,6 +8,33 @@ vi.mock('vue-chartjs', () => ({
 import SpendingChart from '../SpendingChart.vue'
 import { OTHER_VALUE, OTHER_COLOUR, type Band } from '@/spending/palette'
 import { SPLIT_PALETTE } from '@/utils/splitPalette'
+
+// jsdom does not load tokens.css, so the roles the chart reads are declared
+// here, with deliberately fake values that differ per theme and per role: a
+// chart that read the wrong role, or the light value in dark mode, cannot
+// pass by coincidence (the real category hues are the same in both themes).
+const THEME_CSS = `
+[data-theme="light"] {
+  --category-1: #100001; --category-2: #100002; --category-other: #10000f;
+  --panel: #1000a0; --chart-spending: #1000b0; --chart-income: #1000c0;
+  --chart-grid: #1000d0; --control-border: #1000e0; --ink-secondary: #1000f0;
+}
+.dark {
+  --category-1: #200001; --category-2: #200002; --category-other: #20000f;
+  --panel: #2000a0; --chart-spending: #2000b0; --chart-income: #2000c0;
+  --chart-grid: #2000d0; --control-border: #2000e0; --ink-secondary: #2000f0;
+}`
+let themeStyle: HTMLStyleElement
+beforeEach(() => {
+  themeStyle = document.createElement('style')
+  themeStyle.textContent = THEME_CSS
+  document.head.appendChild(themeStyle)
+})
+afterEach(() => {
+  themeStyle.remove()
+  localStorage.clear()
+  document.documentElement.classList.remove('dark')
+})
 import type { ChartData } from '@/api/spending'
 
 // --- Fixtures ----------------------------------------------------------
@@ -67,8 +94,7 @@ const BANDS: Band[] = [
   {
     value: 'hosting',
     label: 'Hosting',
-    light: SPLIT_PALETTE[0]!.light,
-    dark: SPLIT_PALETTE[0]!.dark,
+    colour: SPLIT_PALETTE[0]!.colour,
     totalCents: 3300,
     members: [{ value: 'hosting', label: 'Hosting', colour: null }],
     isOther: false,
@@ -76,8 +102,7 @@ const BANDS: Band[] = [
   {
     value: 'licences',
     label: 'Licences',
-    light: SPLIT_PALETTE[1]!.light,
-    dark: SPLIT_PALETTE[1]!.dark,
+    colour: SPLIT_PALETTE[1]!.colour,
     totalCents: 1800,
     members: [{ value: 'licences', label: 'Licences', colour: null }],
     isOther: false,
@@ -85,8 +110,7 @@ const BANDS: Band[] = [
   {
     value: OTHER_VALUE,
     label: 'Other (2)',
-    light: OTHER_COLOUR.light,
-    dark: OTHER_COLOUR.dark,
+    colour: OTHER_COLOUR,
     totalCents: 1350,
     members: [
       { value: 'tools', label: 'Tools', colour: null },
@@ -149,7 +173,7 @@ interface FullBorderRadius {
 interface BarDataset {
   label: string
   data: number[]
-  backgroundColor: string
+  backgroundColor: string | string[]
   borderWidth: number
   borderColor: string
   maxBarThickness: number
@@ -196,14 +220,44 @@ describe('SpendingChart', () => {
     const bands = BANDS // built by the fixture to match bands(splits, cells)'s shape
     const datasets = chartDataOf(mountChart()).datasets
     expect(datasets.map((d) => d.label)).toEqual(bands.map((b) => b.label))
-    expect(datasets.map((d) => d.backgroundColor)).toEqual(bands.map((b) => b.light))
+    // Each band's role, resolved for the light theme: category-1, category-2, then Other.
+    expect(datasets.map((d) => d.backgroundColor)).toEqual(['#100001', '#100002', '#10000f'])
+  })
+
+  // useDark reads the `vueuse-color-scheme` key at setup, so seeding it before
+  // mount is how a spec forces the dark arm (ThemeToggle.spec.ts does the same).
+  it('paints every role in its dark value when the dark theme is on', () => {
+    localStorage.setItem('vueuse-color-scheme', 'dark')
+    const datasets = chartDataOf(mountChart()).datasets
+    expect(datasets.map((d) => d.backgroundColor)).toEqual(['#200001', '#200002', '#20000f'])
+    expect(datasets.every((d) => d.borderColor === '#2000a0')).toBe(true)
+  })
+
+  it('paints an owner\'s stored hex from outside the palette exactly as stored', () => {
+    const owned: Band[] = [{ ...BANDS[0]!, colour: '#876708' }, ...BANDS.slice(1)]
+    const datasets = chartDataOf(mountChart(DATA, undefined, owned)).datasets
+    expect(datasets[0]!.backgroundColor).toBe('#876708')
+  })
+
+  it('draws gridlines in chart-grid, the zero line in control-border, ticks in ink-secondary at 11px', () => {
+    const options = optionsOf(mountChart()) as unknown as {
+      scales: {
+        y: { grid: { color: (ctx: { tick?: { value: number } }) => string }; ticks: { color: string; font: { size: number } } }
+        x: { ticks: { color: string; font: { size: number } } }
+      }
+    }
+    expect(options.scales.y.grid.color({ tick: { value: 10 } })).toBe('#1000d0')
+    expect(options.scales.y.grid.color({ tick: { value: 0 } })).toBe('#1000e0')
+    expect(options.scales.y.ticks).toMatchObject({ color: '#1000f0', font: { size: 11 } })
+    expect(options.scales.x.ticks).toMatchObject({ color: '#1000f0', font: { size: 11 } })
   })
 
   // The 2px surface gap is the separator; a border around a mark is not.
   it('separates touching segments with a surface-coloured gap, not a stroke', () => {
     const datasets = chartDataOf(mountChart()).datasets
     expect(datasets.every((d) => d.borderWidth === 2)).toBe(true)
-    expect(datasets.every((d) => d.borderColor === '#ffffff')).toBe(true)
+    // `panel`, the card's own fill, resolved for the light theme.
+    expect(datasets.every((d) => d.borderColor === '#1000a0')).toBe(true)
   })
 
   it('caps bar thickness so a two-period chart does not draw slabs', () => {
@@ -248,10 +302,20 @@ describe('SpendingChart', () => {
 
   it('renders a single unsplit series with no legend datasets to name', () => {
     // `bands()` returns [] for an unsplit chart, so the chart draws one series
-    // in the first palette slot and the legend renders nothing.
+    // of spending, bar by bar, and the legend renders nothing.
     const datasets = chartDataOf(mountChart(UNSPLIT)).datasets
     expect(datasets).toHaveLength(1)
-    expect(datasets[0]!.backgroundColor).toBe(SPLIT_PALETTE[0]!.light)
+    expect(datasets[0]!.backgroundColor).toEqual(['#1000b0', '#1000b0', '#1000b0'])
+  })
+
+  // Design system, Charts: a refund below the zero line is money in.
+  it('draws an unsplit period whose refunds exceed its payments in the income colour', () => {
+    const refunded: ChartData = {
+      ...UNSPLIT,
+      cells: UNSPLIT.cells.map((c) => (c.period === '2026-07-01' ? { ...c, total: '-4.00' } : c)),
+    }
+    const datasets = chartDataOf(mountChart(refunded)).datasets
+    expect(datasets[0]!.backgroundColor).toEqual(['#1000b0', '#1000c0', '#1000b0'])
   })
 
   // Extra coverage beyond the brief's pinned assertions ----------------------
