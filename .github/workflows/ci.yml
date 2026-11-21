@@ -86,6 +86,11 @@ jobs:
               # change must run it.
               - 'models/**'
               - 'recall-baseline.json'
+              # The design system's source: the gate (Lint step) and
+              # tests/test_design_tokens_current.py read it. Not mockups/,
+              # which nothing executes.
+              - 'brand/design-system/project/**'
+              - 'brand/design-system/checks.json'
             # Its own filter so a docs-only change runs the backend suite but
             # not e2e, compose-smoke or typecheck. docs/ only, NOT journal/ or
             # a blanket '**/*.md': the backend suite really does read real
@@ -100,6 +105,8 @@ jobs:
               - 'docs/**'
             frontend:
               - 'frontend/**'
+              # app-icon.spec.ts and canvas-tones.spec.ts read tokens.json.
+              - 'brand/design-system/project/tokens.json'
             ci:
               # The whole .github tree, not just workflows/: dependabot.yml and
               # any action/config under .github/ affect CI behaviour too.
@@ -179,6 +186,9 @@ jobs:
         run: |
           uv run ruff check .
           uv run ruff format --check .
+          # The design system gate: token shapes, contrast in both themes, the
+          # component inventory, banned words (docs/brand.md).
+          python3 scripts/check_design_system.py brand/design-system --complete
           # Workflow linting. Note the limitation, so nobody trusts this further
           # than it goes: if THIS file fails to parse, no job here runs and this
           # step never executes. It covers the other workflow files, shell in
