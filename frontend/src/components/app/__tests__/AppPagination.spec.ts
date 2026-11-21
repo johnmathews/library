@@ -35,7 +35,7 @@ describe('AppPagination', () => {
     const wrapper = mount(AppPagination, { props: { page: 2, totalPages: 5 } })
     const current = wrapper.findAll('button').find((b) => b.text() === '2')!
     expect(current.attributes('aria-current')).toBe('page')
-    expect(current.classes()).toContain('bg-violet-500')
+    expect(current.classes()).toContain('bg-brand-fill')
   })
 
   it('emits the clicked page number', async () => {

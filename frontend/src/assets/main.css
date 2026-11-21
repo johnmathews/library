@@ -1,6 +1,11 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=fallback');
-
 @import 'tailwindcss';
+/* The design system's tokens, GENERATED from brand/design-system/project/tokens.json
+ * (never edit by hand; tests/test_design_tokens_current.py fails when it is stale):
+ *   python3 scripts/design_preview.py brand/design-system \
+ *     --tokens-css frontend/src/assets/tokens.css --font-base ./fonts
+ * It declares the colour roles (light on :root, dark on .dark), spacing, radius, the
+ * .type-* classes and @font-face for the self-hosted Inter Variable and IBM Plex Mono. */
+@import './tokens.css';
 @import './utility-patterns.css' layer(components);
 
 @plugin "@tailwindcss/forms" {
@@ -9,6 +14,50 @@
 
 @custom-variant dark (&:is(.dark *));
 @custom-variant sidebar-expanded (&:is(.sidebar-expanded *));
+
+/* Tailwind utilities named after the design system's roles (docs/brand.md):
+ * bg-canvas, bg-panel, bg-tile, border-line, border-control-border, text-ink,
+ * text-ink-secondary, bg-brand-fill, text-on-brand, text-brand, bg-brand-tint, ...
+ * `inline` so each utility reads the variable, which flips under .dark. */
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-panel: var(--panel);
+  --color-tile: var(--tile);
+  --color-line: var(--line);
+  --color-control-border: var(--control-border);
+  --color-ink: var(--ink);
+  --color-on-ink: var(--on-ink);
+  --color-ink-secondary: var(--ink-secondary);
+  --color-error-ink: var(--error-ink);
+  --color-focus: var(--focus);
+  --color-brand: var(--brand);
+  --color-brand-fill: var(--brand-fill);
+  --color-on-brand: var(--on-brand);
+  --color-brand-tint: var(--brand-tint);
+  --color-brand-on-tint: var(--brand-on-tint);
+  --color-brand-solid: var(--brand-solid);
+  --color-income: var(--income);
+  --color-income-tint: var(--income-tint);
+  --color-deficit: var(--deficit);
+  --color-deficit-tint: var(--deficit-tint);
+  --color-attention: var(--attention);
+  --color-attention-tint: var(--attention-tint);
+  --color-chart-income: var(--chart-income);
+  --color-chart-spending: var(--chart-spending);
+  --color-chart-grid: var(--chart-grid);
+  --color-quiet: var(--quiet);
+  --color-category-1: var(--category-1);
+  --color-category-2: var(--category-2);
+  --color-category-3: var(--category-3);
+  --color-category-4: var(--category-4);
+  --color-category-5: var(--category-5);
+  --color-category-other: var(--category-other);
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+  /* No --font-sans or --radius-* lines: tokens.css declares them on :root, which
+     overrides Tailwind's defaults, so font-sans and rounded-sm/md/lg follow the
+     system (8/10/12px). */
+}
 
 @theme {
   --shadow-sm: 0 1px 1px 0 rgb(0 0 0 / 0.05), 0 1px 2px 0 rgb(0 0 0 / 0.02);
@@ -90,10 +139,10 @@
   --color-yellow-900: #4f3d0e;
   --color-yellow-950: #342809;
 
-  --font-inter: 'Inter', 'sans-serif';
 
-  --text-xs: 0.75rem;
-  --text-xs--line-height: 1.5;
+  /* 12.5px, not Tailwind's 12px: the design system's smallest text (type-small). */
+  --text-xs: 0.78125rem;
+  --text-xs--line-height: 1.28;
   --text-sm: 0.875rem;
   --text-sm--line-height: 1.5715;
   --text-base: 1rem;
@@ -139,48 +188,72 @@
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--color-gray-200, currentColor);
+    border-color: var(--line, currentColor);
   }
 
   html {
-    @apply font-inter antialiased;
-  }
-
-  /*
-   * Page canvas. The light-mode background is a per-user preference
-   * (Settings → Appearance): App.vue sets <html data-canvas="…"> from the
-   * stored tone, and the tokens below map each tone to a colour. The default
-   * (no attribute yet, e.g. first paint) is gray-200 — deep enough that the
-   * white document tiles read as elevated surfaces, not flush panels. Dark
-   * mode ignores the tone and keeps its near-black canvas.
-   */
-  :root {
-    --app-canvas: var(--color-gray-200);
-  }
-  :root[data-canvas='neutral'] {
-    --app-canvas: var(--color-gray-200);
-  }
-  :root[data-canvas='light'] {
-    --app-canvas: var(--color-gray-100);
-  }
-  :root[data-canvas='soft'] {
-    --app-canvas: #e9ebef;
-  }
-  :root[data-canvas='slate'] {
-    --app-canvas: #e9eaf2;
-  }
-  :root[data-canvas='sand'] {
-    --app-canvas: #efece6;
-  }
-  :root[data-canvas='mist'] {
-    --app-canvas: #e6edf0;
+    @apply font-sans antialiased;
   }
 
   body {
-    @apply text-gray-600 dark:text-gray-400;
-    background-color: var(--app-canvas);
+    color: var(--ink);
+    background-color: var(--canvas);
   }
-  .dark body {
-    background-color: var(--color-gray-900);
+
+  /* @tailwindcss/forms paints a blue focus ring and border on every focused
+     field. The system's ring is the outline below, so the plugin's ring goes
+     and the field keeps its control-border edge. `:root` on textarea and
+     select lifts them above the plugin's own (0,1,1) rule, which the build
+     places later in this layer: at equal specificity it won and hid the ring
+     (e2e/a11y.spec.ts tabs onto a select to keep it shown). */
+  [type='text']:focus, [type='email']:focus, [type='url']:focus, [type='password']:focus,
+  [type='number']:focus, [type='date']:focus, [type='search']:focus, [type='tel']:focus,
+  [type='checkbox']:focus, [type='radio']:focus, :root textarea:focus, :root select:focus {
+    --tw-ring-color: transparent;
+    --tw-ring-shadow: 0 0 #0000;
+    border-color: var(--control-border);
   }
+  [type='text']:focus-visible, [type='email']:focus-visible, [type='url']:focus-visible,
+  [type='password']:focus-visible, [type='number']:focus-visible, [type='date']:focus-visible,
+  [type='search']:focus-visible, [type='tel']:focus-visible, [type='checkbox']:focus-visible,
+  [type='radio']:focus-visible, :root textarea:focus-visible, :root select:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  /* The focus ring: a solid 2px outline at a 2px offset in the `focus` role
+     (ink). Not currentColor: the offset draws the ring on the surface AROUND
+     the control, so a violet button's white label colour gave a white ring on
+     a white card (measured 1.00:1, 2026-11-21). Ink clears 3:1 on canvas,
+     panel and tile in both themes. */
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+}
+
+/*
+ * Page canvas. Settings → Appearance offers six light-mode tones: App.vue
+ * sets <html data-canvas="…"> from the stored tone, and each tone is a value
+ * of the design system's `canvas` role. "neutral", the default, is the
+ * system's own canvas (#f4f5f7, shared with Family Finances). Dark mode
+ * ignores the tone: `:not(.dark)` keeps tokens.css's dark canvas in charge.
+ * Unlayered on purpose: tokens.css is unlayered, and an unlayered rule beats
+ * any @layer rule whatever its specificity.
+ * The swatches in api/settings.ts BACKGROUND_TONES must match these values.
+ */
+:root[data-canvas='light']:not(.dark) {
+  --canvas: #f3f4f6;
+}
+:root[data-canvas='soft']:not(.dark) {
+  --canvas: #e9ebef;
+}
+:root[data-canvas='slate']:not(.dark) {
+  --canvas: #e9eaf2;
+}
+:root[data-canvas='sand']:not(.dark) {
+  --canvas: #efece6;
+}
+:root[data-canvas='mist']:not(.dark) {
+  --canvas: #e6edf0;
 }

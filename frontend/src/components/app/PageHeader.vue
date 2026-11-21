@@ -101,7 +101,7 @@ const actionsClass = computed<string>(() =>
       v-if="description"
       data-testid="page-lede"
       :class="[
-        'min-w-0 max-w-2xl text-sm leading-relaxed text-gray-500 dark:text-gray-400',
+        'min-w-0 max-w-2xl text-sm leading-relaxed text-ink-secondary',
         // With controls the row below is a toolbar, so the lede takes its own
         // line rather than competing with a field for horizontal space.
         hasControls ? 'mb-3' : '',

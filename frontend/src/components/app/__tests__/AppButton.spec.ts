@@ -3,11 +3,11 @@ import { mount } from '@vue/test-utils'
 import AppButton from '../AppButton.vue'
 
 describe('AppButton', () => {
-  it('renders a <button> with violet primary styling and emits click', async () => {
+  it('renders a <button> with the brand-fill primary styling and emits click', async () => {
     const wrapper = mount(AppButton, { slots: { default: 'Save' } })
     const btn = wrapper.get('button')
     expect(btn.classes()).toContain('btn')
-    expect(btn.classes().join(' ')).toContain('bg-violet-500')
+    expect(btn.classes().join(' ')).toContain('bg-brand-fill')
     await btn.trigger('click')
     expect(wrapper.emitted('click')).toBeTruthy()
   })
@@ -60,9 +60,9 @@ describe('AppButton', () => {
     expect(cls).toContain('btn-lg')
     expect(cls).not.toContain('btn')
   })
-  it('maps the secondary variant to grey border styling', () => {
+  it('maps the secondary variant to the outline button (control-border edge)', () => {
     const wrapper = mount(AppButton, { props: { variant: 'secondary' }, slots: { default: 'X' } })
-    expect(wrapper.get('button').classes().join(' ')).toContain('border-gray-200')
+    expect(wrapper.get('button').classes().join(' ')).toContain('border-control-border')
   })
   it('forwards disabled to the button', () => {
     const wrapper = mount(AppButton, { props: { disabled: true }, slots: { default: 'X' } })

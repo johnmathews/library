@@ -61,15 +61,15 @@ function onLinkClick(event: MouseEvent, href?: string): void {
     ref="root"
     role="alert"
     tabindex="-1"
-    class="bg-red-50 dark:bg-red-500/10 border border-red-300 dark:border-red-500/30 rounded-lg p-4 mb-6"
+    class="bg-deficit-tint border border-error-ink rounded-lg p-4 mb-6"
   >
-    <h2 class="text-red-800 dark:text-red-400 font-semibold mb-2">{{ props.title }}</h2>
+    <h2 class="text-error-ink font-semibold mb-2">{{ props.title }}</h2>
     <ul>
       <li v-for="(error, index) in props.errors" :key="index">
         <a
           v-if="error.href"
           :href="error.href"
-          class="text-red-700 dark:text-red-400 underline"
+          class="text-error-ink underline"
           @click="onLinkClick($event, error.href)"
           >{{ error.text }}</a
         >

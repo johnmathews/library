@@ -20,28 +20,48 @@ const props = defineProps<{
 // Map each GOV.UK tag colour onto a Mosaic {bg,text} pair. Unmapped/absent
 // colours fall back to the grey/default pair.
 const colourClasses: Record<string, string> = {
-  grey: 'bg-gray-100 text-gray-600 dark:bg-gray-700/30 dark:text-gray-400',
-  green: 'bg-green-100 text-green-700 dark:bg-green-400/30 dark:text-green-400',
-  turquoise: 'bg-green-100 text-green-700 dark:bg-green-400/30 dark:text-green-400',
-  blue: 'bg-sky-100 text-sky-700 dark:bg-sky-400/30 dark:text-sky-400',
-  'light-blue': 'bg-sky-100 text-sky-700 dark:bg-sky-400/30 dark:text-sky-400',
-  red: 'bg-red-100 text-red-700 dark:bg-red-400/30 dark:text-red-400',
-  yellow: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-400/30 dark:text-yellow-400',
-  orange: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-400/30 dark:text-yellow-400',
-  purple: 'bg-violet-100 text-violet-700 dark:bg-violet-400/30 dark:text-violet-400',
-  pink: 'bg-violet-100 text-violet-700 dark:bg-violet-400/30 dark:text-violet-400',
+  // Design system: TagChip. A colour means one thing (brand spec §3.2): yellow
+  // is "needs you", red is "failed". Everything else is the neutral chip, and
+  // a finished state (green) adds a check icon instead of a colour (§8 call 4).
+  grey: 'bg-tile text-ink',
+  green: 'bg-tile text-ink',
+  turquoise: 'bg-tile text-ink',
+  blue: 'bg-tile text-ink',
+  'light-blue': 'bg-tile text-ink',
+  red: 'bg-deficit-tint text-error-ink',
+  yellow: 'bg-attention-tint text-attention',
+  orange: 'bg-attention-tint text-attention',
+  purple: 'bg-tile text-ink',
+  pink: 'bg-tile text-ink',
 }
 
 const DEFAULT_CLASSES = colourClasses.grey
 
 const classes = computed(() => colourClasses[props.colour ?? 'grey'] ?? DEFAULT_CLASSES)
+
+// A finished state keeps the neutral chip and says so with a check icon.
+const showCheck = computed(() => props.colour === 'green' || props.colour === 'turquoise')
 </script>
 
 <template>
   <span
-    class="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full"
+    class="inline-flex items-center gap-1 text-[12.5px] leading-4 font-semibold px-2.5 py-[3px] rounded-full"
     :class="classes"
   >
+    <svg
+      v-if="showCheck"
+      class="h-3 w-3 shrink-0"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="3"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+      data-testid="badge-check"
+    >
+      <path d="M5 12.5l4.5 4.5L19 7.5" />
+    </svg>
     <slot />
   </span>
 </template>

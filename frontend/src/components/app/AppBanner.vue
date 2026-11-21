@@ -18,7 +18,9 @@ const error = computed(() => props.variant === 'error')
 const titleText = computed(() => props.title ?? (success.value ? 'Success' : 'Important'))
 
 const variantClass = computed(() =>
-  success.value ? 'border-green-500' : error.value ? 'border-red-500' : 'border-sky-500',
+  // Design system: Banner. Error on deficit-tint in error-ink; success and
+  // information are the quiet tile ground in ink. No coloured edge.
+  error.value ? 'bg-deficit-tint text-error-ink' : 'bg-tile text-ink',
 )
 
 // Both success and error announce themselves (role="alert"); the passive
@@ -42,7 +44,7 @@ onMounted(() => { if (success.value) root.value?.focus() })
     ref="root"
     :role="alert ? 'alert' : undefined"
     :tabindex="success ? -1 : undefined"
-    class="bg-white dark:bg-gray-800 border-l-4 rounded-lg px-4 py-3 shadow-xs"
+    class="rounded-md px-3.5 py-2.5"
     :class="variantClass"
     :aria-labelledby="titleId"
   >

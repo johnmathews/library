@@ -83,20 +83,20 @@ function onDrop(event: DragEvent): void {
 
 <template>
   <div>
-    <p class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{{ props.label }}</p>
+    <p class="block text-sm font-medium mb-1 text-ink">{{ props.label }}</p>
     <p
       v-if="props.hint"
       :id="`${props.id}-hint`"
-      class="text-sm text-gray-500 dark:text-gray-400 mb-1"
+      class="text-sm text-ink-secondary mb-1"
     >{{ props.hint }}</p>
     <AppErrorMessage v-if="props.errorMessage" :id="`${props.id}-error`">
       {{ props.errorMessage }}
     </AppErrorMessage>
     <label
-      class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 dark:border-gray-700/60 rounded-xl p-8 cursor-pointer hover:border-violet-400 transition"
+      class="flex flex-col items-center justify-center border-2 border-dashed border-control-border rounded-xl p-8 cursor-pointer hover:border-brand transition"
       :class="[
-        { 'ring-2 ring-violet-400': dragging },
-        { 'border-red-300': props.errorMessage },
+        { 'ring-2 ring-brand': dragging },
+        { 'border-error-ink': props.errorMessage },
       ]"
       :for="props.id"
       @dragover.prevent="dragging = true"
@@ -115,7 +115,7 @@ function onDrop(event: DragEvent): void {
         @change="onChange"
       />
       <svg
-        class="w-8 h-8 mb-2 text-gray-400"
+        class="w-8 h-8 mb-2 text-ink-secondary"
         xmlns="http://www.w3.org/2000/svg"
         fill="none"
         viewBox="0 0 24 24"
@@ -129,29 +129,29 @@ function onDrop(event: DragEvent): void {
           d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"
         />
       </svg>
-      <span class="text-sm text-gray-500 dark:text-gray-400">Drop files or click to browse</span>
+      <span class="text-sm text-ink-secondary">Drop files or click to browse</span>
     </label>
 
     <div v-if="model && model.length" data-testid="selected-files" class="mt-3">
-      <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+      <p class="text-sm font-medium text-ink mb-1">
         {{ model.length === 1 ? '1 file selected' : `${model.length} files selected` }}
       </p>
-      <ul class="rounded-lg border border-gray-200 dark:border-gray-700/60 divide-y divide-gray-200 dark:divide-gray-700/60">
+      <ul class="rounded-lg border border-line divide-y divide-line">
         <li
           v-for="(file, index) in model"
           :key="`${file.name} ${file.size} ${file.lastModified}`"
           data-testid="selected-file"
           class="flex items-center gap-3 px-3 py-2"
         >
-          <span class="flex-1 min-w-0 truncate text-sm text-gray-800 dark:text-gray-100">{{
+          <span class="flex-1 min-w-0 truncate text-sm text-ink">{{
             file.name
           }}</span>
-          <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{{
+          <span class="text-xs text-ink-secondary whitespace-nowrap">{{
             formatSize(file.size)
           }}</span>
           <button
             type="button"
-            class="text-gray-400 hover:text-red-500 transition shrink-0"
+            class="text-ink-secondary hover:text-error-ink transition shrink-0"
             :aria-label="`Remove ${file.name}`"
             @click="removeFile(index)"
           >

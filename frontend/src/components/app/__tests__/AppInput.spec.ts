@@ -16,7 +16,7 @@ describe('AppInput', () => {
       props: { id: 'q', label: 'Query', modelValue: '', errorMessage: 'Required' },
     })
     expect(wrapper.text()).toContain('Required')
-    expect(wrapper.get('input').classes().join(' ')).toContain('border-red-300')
+    expect(wrapper.get('input').classes().join(' ')).toContain('border-error-ink')
     expect(wrapper.get('input').attributes('aria-invalid')).toBe('true')
     expect(wrapper.get('input').attributes('aria-describedby')).toBe('q-error')
   })

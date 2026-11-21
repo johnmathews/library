@@ -42,6 +42,6 @@ describe('AppSelect', () => {
 
     expect(wrapper.text()).toContain('Pick one')
     expect(wrapper.find('#fruit-error').exists()).toBe(true)
-    expect(wrapper.get('select').classes()).toContain('border-red-300')
+    expect(wrapper.get('select').classes()).toContain('border-error-ink')
   })
 })

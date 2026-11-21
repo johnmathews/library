@@ -139,7 +139,7 @@ function alignClass(): string {
       <div
         v-if="props.open"
         v-bind="props.panelAttrs"
-        class="z-popover rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700/60 dark:bg-gray-800"
+        class="z-popover rounded-lg border border-line bg-panel shadow-lg"
         :class="[alignClass(), props.panelClass]"
       >
         <slot />

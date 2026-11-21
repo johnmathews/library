@@ -9,7 +9,7 @@ const props = defineProps<{
 
 <template>
   <details :open="props.open">
-    <summary class="text-sm font-medium text-violet-500 cursor-pointer">{{ props.summary }}</summary>
+    <summary class="text-sm font-medium text-brand cursor-pointer">{{ props.summary }}</summary>
     <div class="text-sm mt-2">
       <slot />
     </div>

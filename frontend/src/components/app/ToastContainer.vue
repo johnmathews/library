@@ -9,9 +9,9 @@ const notifications = useNotificationsStore()
 const { toasts } = storeToRefs(notifications)
 
 const accentClass: Record<ToastVariant, string> = {
-  info: 'border-sky-500',
-  success: 'border-green-500',
-  error: 'border-red-500',
+  info: '',
+  success: '',
+  error: 'bg-deficit-tint',
 }
 </script>
 
@@ -35,14 +35,14 @@ const accentClass: Record<ToastVariant, string> = {
         :data-variant="toast.variant"
         :role="toast.variant === 'error' ? 'alert' : 'status'"
         :aria-live="toast.variant === 'error' ? 'assertive' : 'polite'"
-        class="pointer-events-auto bg-white dark:bg-gray-800 border-l-4 rounded-lg px-4 py-3 shadow-lg flex items-start gap-3"
+        class="pointer-events-auto bg-panel rounded-lg px-4 py-3 shadow-pop flex items-start gap-3"
         :class="accentClass[toast.variant]"
       >
         <!-- Status icon -->
         <span class="shrink-0 mt-0.5" aria-hidden="true">
           <svg
             v-if="toast.variant === 'success'"
-            class="w-5 h-5 text-green-500 fill-current"
+            class="w-5 h-5 text-ink fill-current"
             viewBox="0 0 20 20"
           >
             <path
@@ -51,14 +51,14 @@ const accentClass: Record<ToastVariant, string> = {
           </svg>
           <svg
             v-else-if="toast.variant === 'error'"
-            class="w-5 h-5 text-red-500 fill-current"
+            class="w-5 h-5 text-error-ink fill-current"
             viewBox="0 0 20 20"
           >
             <path
               d="M10 0a10 10 0 100 20 10 10 0 000-20Zm1 15H9v-2h2v2Zm0-4H9V5h2v6Z"
             />
           </svg>
-          <svg v-else class="w-5 h-5 text-sky-500 fill-current" viewBox="0 0 20 20">
+          <svg v-else class="w-5 h-5 text-ink-secondary fill-current" viewBox="0 0 20 20">
             <path
               d="M10 0a10 10 0 100 20 10 10 0 000-20Zm1 5H9v2h2V5Zm0 4H9v6h2V9Z"
             />
@@ -66,14 +66,14 @@ const accentClass: Record<ToastVariant, string> = {
         </span>
 
         <div class="grow min-w-0">
-          <p class="font-semibold text-sm text-gray-800 dark:text-gray-100">{{ toast.title }}</p>
-          <p v-if="toast.message" class="text-sm text-gray-600 dark:text-gray-300 break-words">
+          <p class="font-semibold text-sm text-ink">{{ toast.title }}</p>
+          <p v-if="toast.message" class="text-sm text-ink-secondary break-words">
             {{ toast.message }}
           </p>
           <RouterLink
             v-if="toast.to"
             :to="toast.to"
-            class="inline-block mt-1 text-sm font-medium text-violet-500 hover:text-violet-600 dark:hover:text-violet-400"
+            class="inline-block mt-1 text-sm font-medium text-brand hover:underline"
             @click="notifications.dismiss(toast.id)"
           >
             View
@@ -82,7 +82,7 @@ const accentClass: Record<ToastVariant, string> = {
 
         <button
           type="button"
-          class="shrink-0 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+          class="shrink-0 text-ink-secondary hover:text-ink"
           :data-testid="`toast-dismiss-${toast.id}`"
           @click="notifications.dismiss(toast.id)"
         >

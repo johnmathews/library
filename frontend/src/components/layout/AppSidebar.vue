@@ -4,6 +4,7 @@ import { useStorage } from '@vueuse/core'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useSavedViewsStore } from '@/stores/savedViews'
+import AppLogo from './AppLogo.vue'
 
 const auth = useAuthStore()
 
@@ -126,7 +127,7 @@ watch(
   <div class="min-w-fit">
     <!-- Sidebar backdrop (mobile only) -->
     <div
-      class="fixed inset-0 bg-gray-900/30 z-40 lg:hidden lg:z-auto transition-opacity duration-200"
+      class="fixed inset-0 bg-ink/30 z-40 lg:hidden lg:z-auto transition-opacity duration-200"
       :class="sidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'"
       aria-hidden="true"
     ></div>
@@ -135,26 +136,15 @@ watch(
     <div
       id="sidebar"
       ref="sidebar"
-      class="flex lg:flex! flex-col absolute z-40 left-0 top-0 lg:static lg:left-auto lg:top-auto lg:translate-x-0 h-[100dvh] overflow-y-scroll lg:overflow-y-auto no-scrollbar w-64 max-[400px]:w-full lg:w-20 lg:sidebar-expanded:!w-64 shrink-0 bg-white dark:bg-gray-800 p-4 transition-all duration-200 ease-in-out rounded-r-lg shadow-xs"
+      class="flex lg:flex! flex-col absolute z-40 left-0 top-0 lg:static lg:left-auto lg:top-auto lg:translate-x-0 h-[100dvh] overflow-y-scroll lg:overflow-y-auto no-scrollbar w-64 max-[400px]:w-full lg:w-20 lg:sidebar-expanded:!w-64 shrink-0 bg-panel p-4 transition-all duration-200 ease-in-out rounded-r-lg shadow-xs"
       :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
     >
       <!-- Sidebar header -->
       <div class="flex justify-between mb-10 pr-3 sm:px-2">
-        <!-- Logo / title — hidden when sidebar is collapsed on desktop -->
-        <!-- A <p>, not an <h1>: this wordmark is persistent chrome, and
-             PageHeader renders the page's real <h1>. As an <h1> it gave every
-             authenticated page two competing top-level headings, so a
-             screen-reader user tabbing the heading list saw "LIBRARY" before
-             the title of the page they were actually on. Presentation is
-             unchanged — the classes are identical. -->
-        <RouterLink class="block" to="/" aria-label="Library home">
-          <div>
-            <p
-              class="text-2xl md:text-xl md:pl-2 text-gray-800 dark:text-gray-100 font-bold lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200 lg:whitespace-nowrap lg:sidebar-expanded:whitespace-normal overflow-hidden"
-            >
-              LIBRARY
-            </p>
-          </div>
+        <!-- The logo: the app icon's square and the name. The name hides when
+             the desktop sidebar collapses; the square stays. -->
+        <RouterLink class="block" to="/" aria-label="Library home" data-testid="sidebar-logo">
+          <AppLogo />
         </RouterLink>
       </div>
 
@@ -165,10 +155,9 @@ watch(
             <!-- Documents link (home / `/`) -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -177,8 +166,7 @@ watch(
                   data-testid="sidebar-documents-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
@@ -186,9 +174,7 @@ watch(
                     <svg
                       class="shrink-0 fill-current"
                       :class="
-                        isActive
-                          ? 'text-violet-500'
-                          : 'text-gray-600 dark:text-gray-300'
+                        isActive ? 'text-brand-on-tint' : 'text-ink-secondary'
                       "
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
@@ -200,7 +186,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Documents</span
                     >
                   </div>
@@ -220,10 +206,9 @@ watch(
               custom
             >
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -232,15 +217,14 @@ watch(
                   :data-testid="`sidebar-dashboard-${view.id}`"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
                   <div class="flex items-center">
                     <svg
                       class="shrink-0 fill-current"
-                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      :class="isActive ? 'text-brand-on-tint' : 'text-ink-secondary'"
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
                       height="16"
@@ -249,7 +233,7 @@ watch(
                       <path d="M1 1h6v6H1V1Zm8 0h6v3H9V1ZM1 9h6v6H1V9Zm8-3h6v9H9V6Z" />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >{{ view.name }}</span
                     >
                   </div>
@@ -261,16 +245,16 @@ watch(
                  so it is a button, not a route link. The click also bubbles
                  through #sidebar-nav's close-sidebar handler, dismissing the
                  mobile drawer as the modal opens. -->
-            <li class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r">
+            <li class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0">
               <button
                 type="button"
-                class="block w-full text-left truncate transition text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white"
+                class="block w-full text-left truncate transition text-ink hover:text-ink"
                 data-testid="sidebar-search-button"
                 @click="emit('open-search')"
               >
                 <div class="flex items-center">
                   <svg
-                    class="shrink-0 fill-current text-gray-600 dark:text-gray-300"
+                    class="shrink-0 fill-current text-ink-secondary"
                     xmlns="http://www.w3.org/2000/svg"
                     width="16"
                     height="16"
@@ -284,7 +268,7 @@ watch(
                     />
                   </svg>
                   <span
-                    class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                    class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                     >Search</span
                   >
                 </div>
@@ -294,10 +278,9 @@ watch(
             <!-- Upload link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/upload" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -306,8 +289,7 @@ watch(
                   data-testid="sidebar-upload-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
@@ -315,9 +297,7 @@ watch(
                     <svg
                       class="shrink-0 fill-current"
                       :class="
-                        isActive
-                          ? 'text-violet-500'
-                          : 'text-gray-600 dark:text-gray-300'
+                        isActive ? 'text-brand-on-tint' : 'text-ink-secondary'
                       "
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
@@ -329,7 +309,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Upload</span
                     >
                   </div>
@@ -340,10 +320,9 @@ watch(
             <!-- New note link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/notes/new" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -352,8 +331,7 @@ watch(
                   data-testid="sidebar-notes-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
@@ -361,9 +339,7 @@ watch(
                     <svg
                       class="shrink-0 fill-current"
                       :class="
-                        isActive
-                          ? 'text-violet-500'
-                          : 'text-gray-600 dark:text-gray-300'
+                        isActive ? 'text-brand-on-tint' : 'text-ink-secondary'
                       "
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
@@ -375,7 +351,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >New note</span
                     >
                   </div>
@@ -386,10 +362,9 @@ watch(
             <!-- Charts link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/charts" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -398,15 +373,14 @@ watch(
                   data-testid="sidebar-charts-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
                   <div class="flex items-center">
                     <svg
                       class="shrink-0 fill-current"
-                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      :class="isActive ? 'text-brand-on-tint' : 'text-ink-secondary'"
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
                       height="16"
@@ -417,7 +391,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Charts</span
                     >
                   </div>
@@ -428,10 +402,9 @@ watch(
             <!-- Ask link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/ask" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -440,8 +413,7 @@ watch(
                   data-testid="sidebar-ask-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
@@ -449,9 +421,7 @@ watch(
                     <svg
                       class="shrink-0 fill-current"
                       :class="
-                        isActive
-                          ? 'text-violet-500'
-                          : 'text-gray-600 dark:text-gray-300'
+                        isActive ? 'text-brand-on-tint' : 'text-ink-secondary'
                       "
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
@@ -463,7 +433,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Ask</span
                     >
                   </div>
@@ -474,10 +444,9 @@ watch(
             <!-- Jobs link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/jobs" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -486,8 +455,7 @@ watch(
                   data-testid="sidebar-jobs-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
@@ -495,7 +463,7 @@ watch(
                     <svg
                       class="shrink-0 fill-current"
                       :class="
-                        isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'
+                        isActive ? 'text-brand-on-tint' : 'text-ink-secondary'
                       "
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
@@ -507,7 +475,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Jobs</span
                     >
                   </div>
@@ -518,10 +486,9 @@ watch(
             <!-- Projects link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/projects" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -530,15 +497,14 @@ watch(
                   data-testid="sidebar-projects-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
                   <div class="flex items-center">
                     <svg
                       class="shrink-0 fill-current"
-                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      :class="isActive ? 'text-brand-on-tint' : 'text-ink-secondary'"
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
                       height="16"
@@ -547,7 +513,7 @@ watch(
                       <path d="M1 2a1 1 0 0 1 1-1h4l2 2h6a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2Z" />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Projects</span
                     >
                   </div>
@@ -558,10 +524,9 @@ watch(
             <!-- Matters link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/matters" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -570,15 +535,14 @@ watch(
                   data-testid="sidebar-matters-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
                   <div class="flex items-center">
                     <svg
                       class="shrink-0 fill-current"
-                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      :class="isActive ? 'text-brand-on-tint' : 'text-ink-secondary'"
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
                       height="16"
@@ -587,7 +551,7 @@ watch(
                       <path d="M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1H8L6 2H2Zm2 7h8v2H4V8Z" />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Matters</span
                     >
                   </div>
@@ -598,10 +562,9 @@ watch(
             <!-- Vocabulary link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/vocabulary" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -610,15 +573,14 @@ watch(
                   data-testid="sidebar-vocabulary-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
                   <div class="flex items-center">
                     <svg
                       class="shrink-0 fill-current"
-                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      :class="isActive ? 'text-brand-on-tint' : 'text-ink-secondary'"
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
                       height="16"
@@ -631,7 +593,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Vocabulary</span
                     >
                   </div>
@@ -642,10 +604,9 @@ watch(
             <!-- Settings link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/settings" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -654,15 +615,14 @@ watch(
                   data-testid="sidebar-settings-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
                   <div class="flex items-center">
                     <svg
                       class="shrink-0 fill-current"
-                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      :class="isActive ? 'text-brand-on-tint' : 'text-ink-secondary'"
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
                       height="16"
@@ -673,7 +633,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Settings</span
                     >
                   </div>
@@ -684,10 +644,9 @@ watch(
             <!-- Admin link (admins only) -->
             <RouterLink v-if="auth.isAdmin" v-slot="{ href, navigate, isActive }" to="/admin" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -696,15 +655,14 @@ watch(
                   data-testid="sidebar-admin-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
                   <div class="flex items-center">
                     <svg
                       class="shrink-0 fill-current"
-                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      :class="isActive ? 'text-brand-on-tint' : 'text-ink-secondary'"
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
                       height="16"
@@ -715,7 +673,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Admin</span
                     >
                   </div>
@@ -726,10 +684,9 @@ watch(
             <!-- Recently Deleted link (kept at the bottom — a low-traffic destination) -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/deleted" custom>
               <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                class="pl-4 pr-3 py-2 rounded-sm mb-0.5 last:mb-0"
                 :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                  isActive ? 'bg-brand-tint' : 'hover:bg-tile'
                 "
               >
                 <a
@@ -738,15 +695,14 @@ watch(
                   data-testid="sidebar-deleted-link"
                   :class="
                     isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                      ? 'text-brand-on-tint font-semibold' : 'text-ink'
                   "
                   @click="navigate"
                 >
                   <div class="flex items-center">
                     <svg
                       class="shrink-0 fill-current"
-                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      :class="isActive ? 'text-brand-on-tint' : 'text-ink-secondary'"
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
                       height="16"
@@ -757,8 +713,8 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
-                      >Recently Deleted</span
+                      class="text-sm font-medium ml-3 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      >Recently deleted</span
                     >
                   </div>
                 </a>
@@ -773,12 +729,12 @@ watch(
         <div class="w-12 pl-4 pr-3 py-2">
           <button
             id="sidebar-collapse-toggle"
-            class="text-gray-400 hover:text-gray-500 dark:text-gray-500 dark:hover:text-gray-400"
+            class="text-ink-secondary hover:text-ink-secondary"
             @click.prevent="sidebarExpanded = !sidebarExpanded"
           >
             <span class="sr-only">Expand / collapse sidebar</span>
             <svg
-              class="shrink-0 fill-current text-gray-600 dark:text-gray-300 sidebar-expanded:rotate-180"
+              class="shrink-0 fill-current text-ink-secondary sidebar-expanded:rotate-180"
               xmlns="http://www.w3.org/2000/svg"
               width="16"
               height="16"

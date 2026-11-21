@@ -34,8 +34,8 @@ function goTo(page: number): void {
 }
 
 const btnBase =
-  'btn bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300'
-const activeBtn = 'btn bg-violet-500 text-white border-violet-500'
+  'btn bg-panel border-line text-ink-secondary'
+const activeBtn = 'btn bg-brand-fill text-on-brand border-brand-fill'
 const disabledBtn = 'opacity-50 cursor-not-allowed'
 </script>
 
@@ -50,7 +50,7 @@ const disabledBtn = 'opacity-50 cursor-not-allowed'
       Previous<span class="sr-only"> page</span>
     </button>
     <template v-for="(item, index) in items" :key="item.kind === 'page' ? 'p' + item.page : 'gap' + index">
-      <span v-if="item.kind === 'ellipsis'" class="px-2 text-gray-400">&ctdot;</span>
+      <span v-if="item.kind === 'ellipsis'" class="px-2 text-ink-secondary">&ctdot;</span>
       <button
         v-else
         type="button"

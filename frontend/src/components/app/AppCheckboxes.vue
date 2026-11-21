@@ -42,12 +42,12 @@ function isChecked(value: string): boolean {
     <p
       v-if="props.hint"
       :id="`${props.id}-hint`"
-      class="text-sm text-gray-500 dark:text-gray-400 mb-1"
+      class="text-sm text-ink-secondary mb-1"
     >{{ props.hint }}</p>
     <p
       v-if="props.errorMessage"
       :id="`${props.id}-error`"
-      class="text-sm text-red-500 mt-1 mb-1"
+      class="text-sm text-error-ink mt-1 mb-1"
     >{{ props.errorMessage }}</p>
     <template v-for="(item, index) in props.items" :key="item.value">
       <label class="flex items-center gap-2 py-1">
@@ -65,7 +65,7 @@ function isChecked(value: string): boolean {
       <p
         v-if="item.hint"
         :id="`${itemId(index)}-item-hint`"
-        class="text-sm text-gray-500 dark:text-gray-400"
+        class="text-sm text-ink-secondary"
       >{{ item.hint }}</p>
       <div
         v-if="item.conditional"

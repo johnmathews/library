@@ -82,19 +82,19 @@ const describedBy = computed(() => (props.errorMessage ? `${props.id}-error` : u
     <label class="sr-only" :for="props.id">{{ props.label }}</label>
     <div
       class="form-input flex flex-wrap items-center gap-1.5 w-full"
-      :class="{ 'border-red-300': props.errorMessage }"
+      :class="{ 'border-error-ink': props.errorMessage }"
       :data-testid="`${props.id}`"
     >
       <span
         v-for="value in model"
         :key="value"
-        class="inline-flex items-center gap-1 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-200 text-sm px-2 py-0.5"
+        class="inline-flex items-center gap-1 rounded bg-brand-tint text-brand text-sm px-2 py-0.5"
         :data-testid="`${props.id}-chip`"
       >
         {{ value }}
         <button
           type="button"
-          class="text-violet-500 hover:text-violet-700 dark:hover:text-violet-100 leading-none"
+          class="text-brand hover:text-brand leading-none"
           :aria-label="`Remove ${value}`"
           :data-testid="`${props.id}-remove`"
           @click="remove(value)"
@@ -121,13 +121,13 @@ const describedBy = computed(() => (props.errorMessage ? `${props.id}-error` : u
 
     <ul
       v-if="open"
-      class="mt-1 max-h-48 overflow-auto rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm text-sm"
+      class="mt-1 max-h-48 overflow-auto rounded border border-line bg-panel shadow-sm text-sm"
       :data-testid="`${props.id}-menu`"
     >
       <li v-for="option in suggestions" :key="option">
         <button
           type="button"
-          class="block w-full text-left px-3 py-1.5 hover:bg-violet-50 dark:hover:bg-violet-900/30 text-gray-800 dark:text-gray-100"
+          class="block w-full text-left px-3 py-1.5 hover:bg-brand-tint text-ink"
           :data-testid="`${props.id}-option`"
           @mousedown.prevent="add(option)"
         >
@@ -137,7 +137,7 @@ const describedBy = computed(() => (props.errorMessage ? `${props.id}-error` : u
       <li v-if="createCandidate !== null">
         <button
           type="button"
-          class="block w-full text-left px-3 py-1.5 hover:bg-violet-50 dark:hover:bg-violet-900/30 text-violet-700 dark:text-violet-300"
+          class="block w-full text-left px-3 py-1.5 hover:bg-brand-tint text-brand"
           :data-testid="`${props.id}-create`"
           @mousedown.prevent="add(createCandidate)"
         >
