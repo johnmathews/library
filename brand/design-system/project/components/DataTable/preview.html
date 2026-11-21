@@ -1,0 +1,70 @@
+<!-- @dsCard group="Tables" height=470 subtitle="Rows on a card, hairlines, a list on a phone" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataTable — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Card */
+.lb-card { background: var(--panel); border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: var(--space-5) 22px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.lb-card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.lb-card h2, .lb-h2 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 650; }
+.lb-sub { margin: -10px 0 0; color: var(--ink-secondary); font-size: 13px; line-height: 18px; }
+.lb-lead { margin: 0; color: var(--ink-secondary); font-size: 15px; line-height: 22px; }
+@media (max-width: 640px) { .lb-card { padding: var(--space-4); } }
+
+/* Links */
+.lb-link { color: var(--brand); font-weight: 600; text-decoration: none; }
+.lb-link:hover, .lb-link.is-hover { text-decoration: underline; text-underline-offset: 3px; }
+.lb-link.inline { font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+.lb-link.quiet { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.lb-back { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+
+/* Tag chips */
+.lb-tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; border-radius: var(--radius-full); background: var(--tile); color: var(--ink); font-size: 12.5px; line-height: 16px; font-weight: 600; white-space: nowrap; box-sizing: border-box; }
+.lb-tag .lb-i { width: 14px; height: 14px; }
+.lb-tag.attn { background: var(--attention-tint); color: var(--attention); }
+.lb-tag.fail { background: var(--deficit-tint); color: var(--error-ink); }
+.lb-tag button { all: unset; display: inline-grid; place-items: center; margin-right: -4px; border-radius: var(--radius-full); cursor: pointer; }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 12.5px; line-height: 16px; font-weight: 600; color: var(--ink-secondary); padding: 0 10px 8px; }
+td { padding: 10px; border-top: 1px solid var(--line); vertical-align: middle; }
+th:first-child, td:first-child { padding-left: 0; }
+th:last-child, td:last-child { padding-right: 0; }
+tbody tr:hover td { background: var(--tile); }
+.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.when { color: var(--ink-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.doc .lb-link { font-weight: 500; }
+@media (max-width: 640px) {
+  thead { display: none; }
+  table, tbody { display: block; }
+  tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+  tbody tr:first-child { border-top: 0; }
+  td { display: block; padding: 0; border: 0; }
+  .task { font-weight: 600; } .st { justify-self: end; }
+  .doc { grid-column: 1 / -1; }
+  .num, .when { font-size: 13px; text-align: left; }
+  .num { order: 5; } .when { order: 4; }
+}
+</style>
+</head>
+<body>
+<div class="lb-pad"><section class="lb-card"><div class="lb-card-head"><h2>Jobs</h2><a class="lb-link" href="#">All jobs</a></div>
+<table><thead><tr><th>Task</th><th>Status</th><th>Document</th><th class="num">Duration</th><th>Received</th></tr></thead><tbody><tr><td class="task">Extracting</td><td class="st"><span class="lb-tag"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Succeeded</span></td><td class="doc"><a class="lb-link" href="#">Annual energy statement 2026</a></td><td class="num">4.2 s</td><td class="when">14 Nov, 09:12</td></tr><tr><td class="task">Embedding</td><td class="st"><span class="lb-tag">Running</span></td><td class="doc"><a class="lb-link" href="#">Dental check-up receipt</a></td><td class="num">—</td><td class="when">14 Nov, 09:13</td></tr><tr><td class="task">Markdown</td><td class="st"><span class="lb-tag fail"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg>Failed</span></td><td class="doc"><a class="lb-link" href="#">Re: moving the boiler service</a></td><td class="num">1.1 s</td><td class="when">14 Nov, 09:13</td></tr><tr><td class="task">Extracting</td><td class="st"><span class="lb-tag">Queued</span></td><td class="doc"><a class="lb-link" href="#">Water bill, October</a></td><td class="num">—</td><td class="when">14 Nov, 09:14</td></tr></tbody></table>
+</section></div>
+</body>
+</html>

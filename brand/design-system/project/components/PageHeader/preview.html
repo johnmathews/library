@@ -1,0 +1,82 @@
+<!-- @dsCard group="Layout" height=410 subtitle="Title, lede, view controls left and page commands right" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PageHeader — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Buttons */
+.lb-btn { font: 600 13.5px/1 var(--font-sans); display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: var(--radius-sm); border: 1px solid var(--control-border); background: var(--panel); color: var(--ink); white-space: nowrap; cursor: pointer; text-decoration: none; box-sizing: border-box; }
+.lb-btn:hover, .lb-btn.is-hover { background: var(--tile); }
+.lb-btn.primary { background: var(--brand-fill); border-color: var(--brand-fill); color: var(--on-brand); }
+.lb-btn.primary:hover, .lb-btn.primary.is-hover { filter: brightness(1.1); }
+.lb-btn.ghost { border-color: transparent; background: transparent; color: var(--brand); }
+.lb-btn.icon { width: 34px; padding: 0; justify-content: center; }
+.lb-btn.round { border-radius: var(--radius-full); }
+.lb-btn[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+
+/* Filter chips */
+.lb-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--radius-full); border: 1px solid var(--control-border); background: var(--panel); font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; box-sizing: border-box; }
+.lb-chip.on { background: var(--brand-tint); border-color: var(--brand); color: var(--brand-on-tint); }
+.lb-chip.add { border-style: dashed; color: var(--ink-secondary); }
+.lb-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+/* Fields */
+.lb-field { display: grid; gap: 6px; min-width: 0; }
+.lb-label { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--ink); }
+.lb-hint { font-size: 13px; line-height: 18px; color: var(--ink-secondary); margin: 0; }
+.lb-input { font: 400 14px/20px var(--font-sans); height: 36px; padding: 0 12px; box-sizing: border-box; width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--control-border); border-radius: var(--radius-sm); }
+.lb-input::placeholder { color: var(--ink-secondary); opacity: 1; }
+.lb-input.invalid { border-color: var(--error-ink); }
+.lb-error { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; line-height: 18px; color: var(--error-ink); margin: 0; }
+.lb-search { position: relative; display: flex; align-items: center; }
+.lb-search .lb-i { position: absolute; left: 12px; color: var(--ink-secondary); }
+.lb-search .lb-input { height: 38px; padding-left: 36px; }
+@media (pointer: coarse) { .lb-input { font-size: 16px; } }
+
+.lb-ph { display: grid; gap: 12px; padding-bottom: var(--space-4); border-bottom: 1px solid var(--line); }
+.lb-ph:last-child { border-bottom: 0; padding-bottom: 0; }
+.lb-ph h1 { margin: 0; font-size: 24px; line-height: 30px; font-weight: 650; letter-spacing: -0.015em; }
+.lb-ph .lede { margin: 0; max-width: 60ch; font-size: 15px; line-height: 22px; color: var(--ink-secondary); }
+.lb-bar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.lb-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; min-width: 0; }
+.lb-controls .lb-search { width: 280px; max-width: 100%; }
+.lb-select { appearance: none; padding-right: 32px; background-image: none; }
+.lb-sel { position: relative; display: block; }
+.lb-sel .lb-i { position: absolute; right: 10px; top: 10px; pointer-events: none; color: var(--ink); }
+@media (max-width: 640px) { .lb-controls .lb-search { width: 100%; } }
+</style>
+</head>
+<body>
+<div class="lb-pad">
+  <div class="lb-ph">
+    <h1>Documents</h1>
+    <div class="lb-bar">
+      <div class="lb-controls">
+        <label class="lb-search" aria-label="Search documents"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg><input class="lb-input" placeholder="Search documents…"></label>
+        <div class="lb-chips"><span class="lb-chip">Kind <svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span><span class="lb-chip">Sender <svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span><span class="lb-chip on">Date: last 3 months <span aria-label="Clear date"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></span></span><span class="lb-chip">Tag <svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span></div>
+      </div>
+      <button class="lb-btn"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M4 15l4 4 4-4M14 6h6M14 11h4M14 16h2"/></svg> Date on document</button>
+    </div>
+  </div>
+  <div class="lb-ph">
+    <h1>Projects</h1>
+    <p class="lede">A project is a collection of documents gathered by hand, such as a house purchase or a tax year.</p>
+    <div class="lb-bar"><span></span><button class="lb-btn primary"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New project</button></div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!-- @dsCard group="Forms" height=450 subtitle="Search, text, amount, comment and error" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TextField — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Fields */
+.lb-field { display: grid; gap: 6px; min-width: 0; }
+.lb-label { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--ink); }
+.lb-hint { font-size: 13px; line-height: 18px; color: var(--ink-secondary); margin: 0; }
+.lb-input { font: 400 14px/20px var(--font-sans); height: 36px; padding: 0 12px; box-sizing: border-box; width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--control-border); border-radius: var(--radius-sm); }
+.lb-input::placeholder { color: var(--ink-secondary); opacity: 1; }
+.lb-input.invalid { border-color: var(--error-ink); }
+.lb-error { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; line-height: 18px; color: var(--error-ink); margin: 0; }
+.lb-search { position: relative; display: flex; align-items: center; }
+.lb-search .lb-i { position: absolute; left: 12px; color: var(--ink-secondary); }
+.lb-search .lb-input { height: 38px; padding-left: 36px; }
+@media (pointer: coarse) { .lb-input { font-size: 16px; } }
+
+.lb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: var(--space-4); }
+textarea.lb-input { height: 72px; padding: 8px 12px; resize: vertical; }
+.lb-input.is-focus { outline-color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="lb-pad">
+  <label class="lb-search" aria-label="Search documents"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg><input class="lb-input" placeholder="Search documents…"></label>
+  <div class="lb-grid">
+    <div class="lb-field"><label class="lb-label" for="t">Title</label><input id="t" class="lb-input is-focus" value="Annual energy statement 2026"></div>
+    <div class="lb-field"><label class="lb-label" for="a">Amount (€)</label><input id="a" class="lb-input lb-num" inputmode="decimal" value="1,284.50"></div>
+    <div class="lb-field"><label class="lb-label" for="d">Date on document</label><input id="d" class="lb-input invalid" value="31 Feb 2026" aria-invalid="true" aria-describedby="d-e"><p class="lb-error" id="d-e"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg>That date doesn't exist. Enter one like 28 Feb 2026.</p></div>
+    <div class="lb-field"><label class="lb-label" for="c">Comment</label><textarea id="c" class="lb-input" placeholder="Paid from the joint account on 20 Nov"></textarea></div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!-- @dsCard group="Layout" height=400 subtitle="Favicon, home-screen icon and the sidebar logo" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AppIcon — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* App icon: the brand-fill square with the mark in on-brand. */
+.lb-icon { display: block; flex: none; }
+.lb-icon .sq { fill: var(--brand-fill); }
+.lb-icon .mark { color: var(--on-brand); }
+.lb-icon .knock { fill: var(--brand-fill); stroke: var(--brand-fill); }
+.lb-icon .ring { fill: var(--brand-fill); stroke: currentColor; }
+
+.lb-sizes { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-5); }
+.lb-fig { margin: 0; display: grid; justify-items: center; gap: 6px; }
+.lb-fig figcaption { font-size: 13px; line-height: 18px; color: var(--ink-secondary); }
+.lb-home { border-radius: 22.5%; overflow: hidden; }
+.lb-logos { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; }
+.lb-side { background: var(--panel); box-shadow: var(--shadow-card); border-radius: var(--radius-md); padding: 14px 16px; }
+.lb-logo { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; }
+.lb-logo .name { font-size: 18px; line-height: 24px; font-weight: 650; letter-spacing: -0.015em; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="lb-mark" viewBox="0 0 32 32">
+    <g transform="translate(-1 -1)" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 5 H17 L22 10 V24 A2 2 0 0 1 20 26 H9 A2 2 0 0 1 7 24 V7 A2 2 0 0 1 9 5 Z"/>
+      <polyline points="17,5 17,10 22,10"/>
+      <line x1="11" y1="14" x2="17" y2="14"/>
+      <line x1="11" y1="18" x2="14.5" y2="18"/>
+      <circle class="knock" cx="22" cy="22" r="6.75"/>
+      <circle class="ring" cx="22" cy="22" r="4.5"/>
+      <line x1="25.5" y1="25.5" x2="28" y2="28" stroke-width="3"/>
+    </g>
+  </symbol>
+</svg>
+<div class="lb-pad">
+  <div class="lb-sizes">
+    <figure class="lb-fig"><svg class="lb-icon" width="16" height="16" viewBox="0 0 32 32" role="img" aria-label="App icon at 16px"><rect class="sq" width="32" height="32" rx="7"/><use class="mark" href="#lb-mark"/></svg><figcaption>16</figcaption></figure>
+    <figure class="lb-fig"><svg class="lb-icon" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="App icon at 32px"><rect class="sq" width="32" height="32" rx="7"/><use class="mark" href="#lb-mark"/></svg><figcaption>32</figcaption></figure>
+    <figure class="lb-fig"><svg class="lb-icon" width="64" height="64" viewBox="0 0 32 32" role="img" aria-label="App icon at 64px"><rect class="sq" width="32" height="32" rx="7"/><use class="mark" href="#lb-mark"/></svg><figcaption>64</figcaption></figure>
+    <figure class="lb-fig"><svg class="lb-icon" width="120" height="120" viewBox="0 0 32 32" role="img" aria-label="App icon at 120px"><rect class="sq" width="32" height="32" rx="7"/><use class="mark" href="#lb-mark"/></svg><figcaption>120</figcaption></figure>
+    <figure class="lb-fig"><svg class="lb-icon lb-home" width="96" height="96" viewBox="0 0 32 32" role="img" aria-label="Home-screen icon, as iOS rounds it"><rect class="sq" width="32" height="32"/><g transform="translate(3.2 3.2) scale(.8)"><use class="mark" href="#lb-mark"/></g></svg><figcaption>Home screen</figcaption></figure>
+  </div>
+  <div class="lb-logos">
+    <div class="lb-side"><a class="lb-logo" href="#" aria-label="Library home"><svg class="lb-icon" width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect class="sq" width="32" height="32" rx="7"/><use class="mark" href="#lb-mark"/></svg><span class="name">Library</span></a></div>
+    <div class="lb-side"><a class="lb-logo" href="#" aria-label="Library home"><svg class="lb-icon" width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect class="sq" width="32" height="32" rx="7"/><use class="mark" href="#lb-mark"/></svg></a></div>
+  </div>
+</div>
+</body>
+</html>

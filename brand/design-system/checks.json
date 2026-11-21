@@ -1,0 +1,31 @@
+{
+  "required_components": [
+    "AppShell", "AppIcon", "PageHeader", "Card",
+    "Button", "TextLink",
+    "TextField", "Select", "Choice", "FilterChip", "FilterPopover", "FileUpload",
+    "DocumentTile", "SummaryList", "TagChip", "AskTurn",
+    "DataTable", "Pagination",
+    "ChartStyle",
+    "Banner", "InfoHint", "Dialog", "Toast", "EmptyState",
+    "Cover"
+  ],
+  "extra_contrast_pairs": [
+    ["ink", "canvas", 5.0], ["ink", "panel", 5.0], ["ink", "tile", 5.0],
+    ["ink-secondary", "panel", 5.0], ["ink-secondary", "tile", 5.0], ["ink-secondary", "canvas", 5.0],
+    ["control-border", "tile", 3.0],
+    ["brand", "canvas", 4.5], ["brand", "panel", 4.5], ["brand", "tile", 4.5],
+    ["on-brand", "brand-fill", 4.5],
+    ["brand-on-tint", "brand-tint", 4.5], ["ink", "brand-tint", 4.5],
+    ["income", "canvas", 4.5], ["income", "panel", 4.5], ["income", "income-tint", 4.5],
+    ["deficit", "canvas", 4.5], ["deficit", "panel", 4.5], ["deficit", "deficit-tint", 4.5],
+    ["error-ink", "deficit-tint", 4.5], ["ink", "deficit-tint", 4.5],
+    ["attention", "attention-tint", 4.5], ["ink", "attention-tint", 4.5], ["ink-secondary", "attention-tint", 4.5],
+    ["on-ink", "ink", 4.5],
+    ["brand-solid", "tile", 3.0],
+    ["chart-income", "panel", 3.0], ["chart-spending", "panel", 3.0],
+    ["category-1", "panel", 3.0], ["category-2", "panel", 3.0], ["category-3", "panel", 3.0],
+    ["category-4", "panel", 3.0], ["category-5", "panel", 3.0]
+  ],
+  "forbidden_words": ["seamless", "effortless", "powerful", "Oops", "Whoops", "Sorry"],
+  "group_order": ["Layout", "Actions", "Forms", "Documents", "Tables", "Charts", "Messages"]
+}

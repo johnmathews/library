@@ -1,0 +1,55 @@
+<!-- @dsCard group="Messages" height=450 subtitle="To do, information, done and error" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banner — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Links */
+.lb-link { color: var(--brand); font-weight: 600; text-decoration: none; }
+.lb-link:hover, .lb-link.is-hover { text-decoration: underline; text-underline-offset: 3px; }
+.lb-link.inline { font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+.lb-link.quiet { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.lb-back { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+
+/* Buttons */
+.lb-btn { font: 600 13.5px/1 var(--font-sans); display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: var(--radius-sm); border: 1px solid var(--control-border); background: var(--panel); color: var(--ink); white-space: nowrap; cursor: pointer; text-decoration: none; box-sizing: border-box; }
+.lb-btn:hover, .lb-btn.is-hover { background: var(--tile); }
+.lb-btn.primary { background: var(--brand-fill); border-color: var(--brand-fill); color: var(--on-brand); }
+.lb-btn.primary:hover, .lb-btn.primary.is-hover { filter: brightness(1.1); }
+.lb-btn.ghost { border-color: transparent; background: transparent; color: var(--brand); }
+.lb-btn.icon { width: 34px; padding: 0; justify-content: center; }
+.lb-btn.round { border-radius: var(--radius-full); }
+.lb-btn[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+
+.lb-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 10px 14px; border-radius: var(--radius-md); font-size: 13.5px; line-height: 20px; background: var(--tile); color: var(--ink); }
+.lb-banner .lab { font-weight: 650; }
+.lb-banner.todo { background: var(--attention-tint); }
+.lb-banner.todo .lab { color: var(--attention); }
+.lb-banner.error { background: var(--deficit-tint); color: var(--error-ink); }
+.lb-banner.error .lb-link { color: var(--ink); }
+.lb-items { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+</style>
+</head>
+<body>
+<div class="lb-pad">
+  <div class="lb-banner todo" role="status"><span class="lab">To do</span><span class="lb-items"><span>3 documents need review. <a class="lb-link quiet" href="#">Review them one by one</a></span><span>2 emails are held. <a class="lb-link quiet" href="#">See held emails</a></span></span></div>
+  <div class="lb-banner" role="status"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.5v.01"/></svg><span>4 documents are processing. They appear in the grid once they are indexed.</span></div>
+  <div class="lb-banner" role="status"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>2 documents uploaded and indexed.</span><a class="lb-link quiet" href="#">Open them</a></div>
+  <div class="lb-banner error" role="alert"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg><span>Projects didn't load. Check the connection, then try again.</span><a class="lb-link quiet" href="#">Try again</a></div>
+</div>
+</body>
+</html>

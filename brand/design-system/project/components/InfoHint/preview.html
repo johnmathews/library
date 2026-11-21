@@ -1,0 +1,35 @@
+<!-- @dsCard group="Messages" height=190 subtitle="An explanation behind a small i, closed and open" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InfoHint — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+.lb-hintrow { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; font-weight: 600; }
+.lb-ib { all: unset; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: var(--radius-full); color: var(--ink-secondary); cursor: pointer; }
+.lb-ib .lb-i { width: 16px; height: 16px; }
+.lb-wrap { position: relative; display: grid; gap: 8px; justify-items: start; }
+.lb-bubble { width: 260px; max-width: 100%; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); padding: 10px 12px; font-size: 13px; line-height: 18px; color: var(--ink); margin: 0; }
+</style>
+</head>
+<body>
+<div class="lb-pad">
+  <span class="lb-hintrow">Needs review <button class="lb-ib" aria-label="About Needs review" aria-expanded="false"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.5v.01"/></svg></button></span>
+  <div class="lb-wrap"><span class="lb-hintrow">Total <button class="lb-ib is-focus" aria-label="About the total" aria-expanded="true"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.5v.01"/></svg></button></span>
+    <p class="lb-bubble" role="status">Refunds are subtracted. Each payment counts once, even when several documents show it.</p></div>
+</div>
+</body>
+</html>

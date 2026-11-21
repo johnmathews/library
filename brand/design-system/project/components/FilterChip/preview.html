@@ -1,0 +1,33 @@
+<!-- @dsCard group="Forms" height=190 subtitle="Idle, in use, toggle and more" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FilterChip — preview</title>
+<style>
+body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 21px; -webkit-font-smoothing: antialiased; }
+.lb-pad { padding: var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.lb-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.lb-stack { display: grid; gap: var(--space-2); }
+.lb-state { font-size: 13px; line-height: 18px; color: var(--ink-secondary); min-width: 84px; }
+.lb-num { font-variant-numeric: tabular-nums; }
+.lb-mono { font-family: var(--font-mono); font-size: 13px; }
+.lb-i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible, .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) { .lb-pad { padding: var(--space-4); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Filter chips */
+.lb-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--radius-full); border: 1px solid var(--control-border); background: var(--panel); font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; box-sizing: border-box; }
+.lb-chip.on { background: var(--brand-tint); border-color: var(--brand); color: var(--brand-on-tint); }
+.lb-chip.add { border-style: dashed; color: var(--ink-secondary); }
+.lb-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+</style>
+</head>
+<body>
+<div class="lb-pad"><div class="lb-chips">
+  <span class="lb-chip">Kind <svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span><span class="lb-chip on">Sender: Energiebedrijf Noord <span aria-label="Clear sender"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></span></span><span class="lb-chip">Recipient <svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span><span class="lb-chip on">Date: last 3 months <span aria-label="Clear date"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></span></span><span class="lb-chip">Tag <svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span><span class="lb-chip">Project <svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span><span class="lb-chip">Matter <svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span><span class="lb-chip on" role="checkbox" aria-checked="true">Needs review</span><span class="lb-chip on">Energy <span aria-label="Remove filter: Energy"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></span></span><span class="lb-chip add"><svg class="lb-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> More</span>
+</div></div>
+</body>
+</html>
