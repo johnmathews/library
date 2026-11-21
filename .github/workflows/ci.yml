@@ -432,7 +432,11 @@ jobs:
     # skipped when that output is true, the gate goes red.
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: once that moved to Ubuntu 26.04 (seen
+    # 2026-11-21), `playwright install` refused with "Playwright does not
+    # support chromium on ubuntu26.04-x64" (webkit the same). Move back when
+    # the pinned Playwright supports 26.04.
+    runs-on: ubuntu-24.04
     # Successful shards: median 369-413 s, longest 1663 s (a 1219 s apt
     # stall). The two install steps below are capped at 16 + 5 minutes, so
     # 35 is ~7 normal, plus both caps, plus headroom.

@@ -134,6 +134,12 @@ Same day, during `/done`, before the PR:
   `docs/brand.md`. The design system's focus-ring text, `docs/facets.md` and `docs/architecture.md`
   were corrected and the artifact republished.
 
+- **CI's e2e failed on the runner, not the change.** All three shards stopped at "Install
+  Playwright browsers" with "Playwright does not support chromium on ubuntu26.04-x64" (webkit the
+  same): `ubuntu-latest` had moved to Ubuntu 26.04 since `main`'s last run on 2026-11-07. Confirmed
+  from the job logs of run 44952691488. The e2e job is now pinned to `ubuntu-24.04`, with a comment
+  saying when to move back.
+
 ## 10. Open
 
 - #235: the raw-colour guard misses `rgb()` and 3- or 8-digit hex; two scoped styles already use
