@@ -43,3 +43,16 @@ export function formatMoney(amount: string, currency: string): string {
   const prefix = currency ? `${currency} ` : ''
   return `${negative ? '-' : ''}${prefix}${whole}.${String(abs % 100).padStart(2, '0')}`
 }
+
+/**
+ * A y-axis tick on a spending chart: `EUR 200`, `−EUR 100`. The currency code
+ * as everywhere else on the card, whole units unless the scale steps in
+ * fractions, and a true minus (voice.md). Chart.js hands ticks over as plain
+ * numbers in currency units.
+ */
+export function formatTick(value: number, currency: string): string {
+  const abs = Math.abs(value)
+  const digits = Number.isInteger(abs) ? 0 : 2
+  const figure = abs.toLocaleString('en-GB', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  return `${value < 0 ? '−' : ''}${currency ? `${currency} ` : ''}${figure}`
+}

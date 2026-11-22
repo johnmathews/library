@@ -7,8 +7,10 @@
  * exactly five colours to hand out. This module is the one place that: sums
  * cell totals per split value in exact integer cents; decides which values
  * are big enough to earn their own band and folds the rest into a single
- * "Other" bucket without losing a cent of the total; fixes a deterministic
- * band order so the same chart never repaints on a refetch; and assigns each
+ * "Other" bucket without losing a cent of the total; orders the bands
+ * largest first by the window's total, Other last, which is the stack order
+ * from the baseline up and the legend's order (the tooltip lists the same
+ * bands top segment first, mirroring the bar); and assigns each
  * band a colour — a stored `colour` wins its slot first, everything else is
  * hash-derived and de-collided against what stored colours already claimed.
  * Every consumer (the bar chart, the legend, the drill panel, 4c's
@@ -175,7 +177,9 @@ export function bands(splits: SplitValue[], cells: Cell[]): Band[] {
     resolved.set(i, SPLIT_PALETTE[idx]!.colour)
   })
 
-  return survivors.map((s, i) => {
+  // Colours are settled by key above, so reordering here never repaints a
+  // value: largest first, ties by key, Other last.
+  const coloured: Band[] = survivors.map((s, i) => {
     return {
       value: s.value,
       label: s.label,
@@ -184,5 +188,10 @@ export function bands(splits: SplitValue[], cells: Cell[]): Band[] {
       members: s.isOther ? s.members : [{ value: s.value, label: s.label, colour: s.colour }],
       isOther: s.isOther,
     }
+  })
+  return coloured.sort((a, b) => {
+    if (a.isOther) return b.isOther ? 0 : 1
+    if (b.isOther) return -1
+    return b.totalCents - a.totalCents || cmpKey(a.value as string | null, b.value as string | null)
   })
 }

@@ -1,7 +1,7 @@
 # Brand and design system
 
-**Status:** active. **Supersedes:** none. **Last updated:** 2026-11-21 (first version).
-**Last verified:** 2026-11-21 — method: read against the working tree. `check_design_system.py brand/design-system --complete` exits 0, both scripts are `cmp`-equal to the skill's, and each path, test and command named here was opened. The guards' red runs were not repeated in this pass.
+**Status:** active. **Supersedes:** none. **Last updated:** 2026-11-22 (§6.4 the colour guard covers every literal form; §4 the chart-gaps mockup).
+**Last verified:** 2026-11-22 — method: read against the working tree. `check_design_system.py brand/design-system --complete` exits 0, and each path, test and command named here was opened. The colour guard was run red on planted literals and green without them.
 **Covers:** brand/design-system, scripts/check_design_system.py, scripts/design_preview.py, frontend/src/assets/tokens.css, frontend/public/favicon.svg, frontend/public/app-icon.svg, frontend/scripts/build-app-icons.sh, frontend/src/components/layout/AppLogo.vue, frontend/index.html
 
 > Purpose
@@ -97,6 +97,7 @@ committed. The design-system skill's `references/mockups.md` has the loop and it
 | --- | --- | --- |
 | `261121-app-icon/` | The mark on the app icon, favicon and sidebar logo | B, a page drawn in lines under a lens |
 | `261121-documents/` | How a document type's colour shows on a tile without an outline | A, a 4px band across the tile's top |
+| `261122-chart-gaps-and-colour-roles/` | An empty month on the spending chart, money on its axis, and the roles for markdown code, tables and the thin scrollbar | A, A, A: a `quiet` stub, `EUR 200` ticks, `tile`/`line`/`quiet` |
 
 ## 5. The icon
 
@@ -167,7 +168,7 @@ control, so a violet button's white label gave a white ring on a white card. The
 | --- | --- |
 | `scripts/check_design_system.py --complete` | A token pair misses its contrast, a component is missing, a banned word appears |
 | `tests/test_design_tokens_current.py` | `tokens.css` differs from a fresh generation |
-| `frontend/src/__tests__/no-raw-colour.spec.ts` | A source file uses a Tailwind palette class, a white or black colour class, or a raw hex outside its allow-list of data files |
+| `frontend/src/__tests__/no-raw-colour.spec.ts` | A source file uses a Tailwind palette class, a white or black colour utility (`bg`, `text`, `ring-offset`, `fill`, `stroke`, `shadow`, ...), or a literal colour (3-, 4-, 6- or 8-digit hex, `rgb()`, `hsl()`, `oklch()`, ...) outside its allow-list of data and generated files. Comments are stripped first, so `#140` in a comment is not a colour |
 | `frontend/src/assets/__tests__/canvas-tones.spec.ts` | A page tone's swatch differs from its CSS, or the default differs from `tokens.json`'s canvas |
 | `frontend/src/__tests__/app-icon.spec.ts` | An icon file has the wrong size or colours |
 | `frontend/e2e/a11y.spec.ts` | axe finds a WCAG 2 A or AA violation on sign-in or seven signed-in screens, in light or dark (chromium only) |

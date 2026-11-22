@@ -67,7 +67,7 @@ The direction is Family Finances' Quiet, taken whole: functional and clear, but 
 - A chart split by a value stacks its bands in `category-1` to `category-5` by the value's identity, never its rank, and folds the tail into "Other (N)" in `category-other`.
 - A chart with no split draws spending in `chart-spending`. A refund goes below the zero line in `chart-income`.
 - A month with no documents shows a `quiet` stub, so the gap reads as empty rather than missing.
-- Gridlines are `chart-grid`, and the zero line is `control-border`. Labels are `ink-secondary` at 11px.
+- Gridlines are `chart-grid`, and the zero line is `control-border`. Axis labels are `ink-secondary` in `type-small` (12.5px), the floor for all text. The tooltip is `type-body` (14px), its period and total at 600.
 - The legend names each band with its total. A line under the chart says what the total leaves out.
 
 ## Iconography

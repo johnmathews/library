@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-225 entries.
+226 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## November 2026
 
+- **2026-11-22** — [The colour guard's gaps and the spending chart's missing month](261122-colour-guard-and-chart-gaps.md)
 - **2026-11-21** — [Library on the Quiet design system](261121-quiet-design-system.md)
 - **2026-11-07** — [The twin order lives in the view](261107-twin-rank-in-the-view.md)
 - **2026-11-07** — [Library follow-ups run closed](261107-library-followups-run-closed.md)
