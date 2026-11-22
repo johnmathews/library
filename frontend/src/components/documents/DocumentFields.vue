@@ -17,9 +17,9 @@ withDefaults(
     fields: readonly DashboardField[]
     compactDates?: boolean
     variant?: 'chips' | 'text'
-    dateLabel?: boolean
+    dateLabels?: 'all' | 'extra' | 'none'
   }>(),
-  { compactDates: false, variant: 'chips', dateLabel: true },
+  { compactDates: false, variant: 'chips', dateLabels: 'all' },
 )
 </script>
 
@@ -40,7 +40,7 @@ withDefaults(
       :field="field"
       :compact-dates="compactDates"
       :variant="variant"
-      :date-label="dateLabel"
+      :date-labels="dateLabels"
     />
   </p>
 </template>

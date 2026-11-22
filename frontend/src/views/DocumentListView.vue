@@ -13,13 +13,22 @@
  * docs/api.md §1.3.3 for why they must never hit v-html unescaped.
  */
 import { computed, reactive, ref, watch } from 'vue'
-import { useIntersectionObserver, useMediaQuery, useStorage } from '@vueuse/core'
+import { useElementSize, useIntersectionObserver, useMediaQuery, useStorage } from '@vueuse/core'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
-import { AppBadge, AppBanner, PageHeader } from '@/components/app'
+import { AppBanner, PageHeader } from '@/components/app'
 import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
 import DashboardFieldsMenu from '@/components/DashboardFieldsMenu.vue'
 import SaveViewMenu from '@/components/SaveViewMenu.vue'
 import DocumentFields from '@/components/documents/DocumentFields.vue'
+import DocumentRows from '@/components/documents/DocumentRows.vue'
+import DocumentTable from '@/components/documents/DocumentTable.vue'
+import DocumentList from '@/components/documents/DocumentList.vue'
+import type { DocumentLayoutProps } from '@/components/documents/layoutProps'
+import {
+  DASHBOARD_LAYOUTS,
+  TABLE_MIN_WIDTH,
+  useDashboardLayout,
+} from '@/composables/useDashboardLayout'
 import {
   listDocuments,
   thumbnailUrl,
@@ -352,6 +361,30 @@ const gridColsStyle = computed<Record<string, string>>(() => ({
   ...(gridCols.value === 'auto' ? {} : { '--doc-grid-cols': gridCols.value }),
 }))
 
+// --- Layout ----------------------------------------------------------------
+// Tiles, rows, table or list (composables/useDashboardLayout.ts), chosen per
+// machine. The table needs room, so where the results area is narrower than
+// TABLE_MIN_WIDTH it renders as the list. The area is measured rather than the
+// viewport, because it is the viewport minus the sidebar. Before the first
+// measurement (and in jsdom, which has no layout) the width reads 0; that
+// counts as wide, so nothing flips on an unmeasured element.
+const resultsEl = ref<HTMLElement | null>(null)
+const { width: resultsWidth } = useElementSize(resultsEl)
+const resultsAreWide = computed<boolean>(
+  () => resultsWidth.value === 0 || resultsWidth.value >= TABLE_MIN_WIDTH,
+)
+const { layout, effectiveLayout } = useDashboardLayout(resultsAreWide)
+
+// What the rows, table and list layouts are given (components/documents/layoutProps.ts).
+const layoutProps = computed<DocumentLayoutProps>(() => ({
+  items: items.value,
+  fields: auth.dashboardFields,
+  compactDates: isCompactDate.value,
+  detailQuery: detailQuery.value,
+  searching: Boolean(applied.value.q),
+  accents: tileAccents.value,
+}))
+
 // --- Sort control ----------------------------------------------------------
 // Sort round-trips through the URL like the filters, but is not a "filter"
 // (excluded from hasActiveFilters). It has no effect while a search query is
@@ -476,9 +509,27 @@ function toggleSortDirection(): void {
             </button>
           </div>
         </div>
+        <label class="flex flex-col gap-1 text-sm text-ink-secondary">
+          <span class="text-[13px] font-semibold text-ink-secondary">Layout</span>
+          <select
+            v-model="layout"
+            data-testid="layout-select"
+            aria-label="Layout"
+            class="form-select py-1 text-sm"
+          >
+            <option v-for="opt in DASHBOARD_LAYOUTS" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </label>
         <!-- Tiles-per-row only affects the multi-column desktop grid; below `lg`
-             the grid is fixed (1 col on phones, 2 on tablets), so hide the control. -->
-        <label class="hidden lg:flex flex-col gap-1 text-sm text-ink-secondary">
+             the grid is fixed (1 col on phones, 2 on tablets), so hide the control.
+             It means nothing under the other layouts, so it leaves the page
+             there (v-if); its stored value is kept for when tiles come back. -->
+        <label
+          v-if="effectiveLayout === 'tiles'"
+          class="hidden lg:flex flex-col gap-1 text-sm text-ink-secondary"
+        >
           <span class="text-[13px] font-semibold text-ink-secondary">Tiles per row</span>
           <select
             v-model="gridCols"
@@ -529,8 +580,21 @@ function toggleSortDirection(): void {
       >.
     </div>
 
+    <div ref="resultsEl" :data-layout="effectiveLayout" data-testid="dashboard-results">
+    <DocumentRows
+      v-if="items.length && effectiveLayout === 'rows'"
+      v-bind="layoutProps"
+    />
+    <DocumentTable
+      v-else-if="items.length && effectiveLayout === 'table'"
+      v-bind="layoutProps"
+    />
+    <DocumentList
+      v-else-if="items.length && effectiveLayout === 'list'"
+      v-bind="layoutProps"
+    />
     <ul
-      v-if="items.length"
+      v-else-if="items.length"
       id="dashboard-grid"
       class="app-doc-grid"
       :style="gridColsStyle"
@@ -652,6 +716,7 @@ function toggleSortDirection(): void {
         </div>
       </li>
     </ul>
+    </div>
 
     <!-- Infinite scroll: the sentinel triggers loadMore() as it enters view;
          the button is the visible a11y / no-IntersectionObserver fallback. -->

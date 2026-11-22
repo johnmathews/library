@@ -31,10 +31,14 @@ const props = withDefaults(
     field: DashboardField
     compactDates?: boolean
     variant?: 'chips' | 'text'
-    /** Show the "Date" prefix before the document's own date. */
-    dateLabel?: boolean
+    /**
+     * Which dates carry a prefix: `all` ("Date 17 Sep", "Due 1 Oct"), `extra`
+     * (only the dates beyond the document's own, for the list), or `none` (the
+     * table, whose column headings already say which date it is).
+     */
+    dateLabels?: 'all' | 'extra' | 'none'
   }>(),
-  { compactDates: false, variant: 'chips', dateLabel: true },
+  { compactDates: false, variant: 'chips', dateLabels: 'all' },
 )
 
 const chips = computed<boolean>(() => props.variant === 'chips')
@@ -79,7 +83,7 @@ const hook = computed<string>(() => props.field.replace('_', '-'))
     class="app-doc-card__date text-sm text-ink-secondary"
     data-testid="doc-date"
   >
-    <span v-if="dateLabel" class="text-ink-secondary">Date</span>
+    <span v-if="dateLabels === 'all'" class="text-ink-secondary">Date</span>
     {{ formatListDate(item.document_date, compactDates) }}
   </span>
   <span
@@ -87,7 +91,7 @@ const hook = computed<string>(() => props.field.replace('_', '-'))
     :class="`app-doc-card__${hook} text-sm text-ink-secondary`"
     :data-testid="`doc-${hook}`"
   >
-    <span v-if="dateLabel" class="text-ink-secondary">{{ extra.label }}</span>
+    <span v-if="dateLabels !== 'none'" class="text-ink-secondary">{{ extra.label }}</span>
     {{ extraValue }}
   </span>
   <span

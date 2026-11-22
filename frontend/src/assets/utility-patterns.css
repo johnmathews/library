@@ -356,6 +356,49 @@ input[type='search']::-webkit-search-results-decoration {
   }
 }
 
+/*
+ * Dashboard "Rows" layout (components/documents/DocumentRows.vue): the tile's
+ * surface without the preview, one per line. The type's colour is a 4px band
+ * down the left edge, the row's version of the tile's top band. Same layer
+ * rule as the tile: no Tailwind border utility on the markup.
+ */
+.app-doc-row {
+  background-color: var(--panel);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.18s ease;
+}
+
+.app-doc-row:hover {
+  box-shadow: var(--shadow-pop);
+}
+
+.app-doc-row.app-doc-row--accented {
+  border-left: 4px solid var(--card-accent);
+}
+
+/*
+ * Dashboard "List" layout (components/documents/DocumentList.vue): an 8px dot
+ * in the type's colour before the title. A document with no type colour keeps
+ * the dot's space (so titles line up) and draws nothing.
+ */
+.app-doc-list__dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+}
+
+.app-doc-list__dot.app-doc-list__dot--accented {
+  background-color: var(--card-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-doc-row {
+    transition: none;
+  }
+}
+
 /* Keep long titles to two lines so tiles stay a consistent height in the grid. */
 .app-doc-card__title a {
   display: -webkit-box;

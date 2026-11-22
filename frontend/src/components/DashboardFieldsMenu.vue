@@ -44,7 +44,7 @@ watch(open, (isOpen) => {
   <AppPopover
     :open="open"
     align="none"
-    :panel-attrs="{ role: 'dialog', 'aria-label': 'Card fields', 'data-testid': 'dashboard-fields-panel' }"
+    :panel-attrs="{ role: 'dialog', 'aria-label': 'Fields', 'data-testid': 'dashboard-fields-panel' }"
     panel-class="p-3 fixed inset-x-2 bottom-2 max-h-[80vh] overflow-y-auto sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mt-1 sm:w-64 sm:max-w-[calc(100vw-1rem)] sm:max-h-none sm:overflow-visible"
     @update:open="open = $event"
   >
@@ -65,7 +65,7 @@ watch(open, (isOpen) => {
       </button>
     </template>
 
-    <p class="mb-2 text-[13px] font-semibold text-ink-secondary">Card fields</p>
+    <p class="mb-2 text-[13px] font-semibold text-ink-secondary">Fields</p>
     <DashboardFieldsEditor
       :key="editorKey"
       :model-value="auth.dashboardFields"

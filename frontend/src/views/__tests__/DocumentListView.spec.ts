@@ -1380,4 +1380,117 @@ describe('DocumentListView', () => {
     expect(tile().text()).not.toContain('Processing')
     expect(documentUrls().length).toBe(fetchesBefore)
   })
+
+  describe('layouts', () => {
+    const LAYOUT_ROOT: Record<string, string> = {
+      tiles: '#dashboard-grid',
+      rows: '[data-testid="doc-rows"]',
+      table: '[data-testid="doc-table"]',
+      list: '[data-testid="doc-list"]',
+    }
+
+    function twoDocs(): void {
+      listResponse = () =>
+        jsonResponse(
+          listBody([
+            makeItem({ id: 12, title: 'Energierekening mei 2026' }),
+            makeItem({
+              id: 13,
+              title: 'Waterrekening',
+              kind: { slug: 'other', name: 'Other' },
+              review_status: 'needs_review',
+            }),
+          ]),
+        )
+    }
+
+    it('offers Tiles, Rows, Table and List, with Tiles chosen by default', async () => {
+      twoDocs()
+      const w = await mountView()
+      const select = w.find<HTMLSelectElement>('[data-testid="layout-select"]')
+      expect(select.findAll('option').map((o) => o.text())).toEqual(['Tiles', 'Rows', 'Table', 'List'])
+      expect(select.element.value).toBe('tiles')
+      expect(w.find(LAYOUT_ROOT.tiles!).exists()).toBe(true)
+    })
+
+    for (const layout of ['rows', 'table', 'list'] as const) {
+      it(`shows the same documents as ${layout}, each linking to its detail page`, async () => {
+        twoDocs()
+        const w = await mountView()
+        await w.find('[data-testid="layout-select"]').setValue(layout)
+        await flushPromises()
+
+        expect(w.find('[data-testid="dashboard-results"]').attributes('data-layout')).toBe(layout)
+        expect(w.find(LAYOUT_ROOT[layout]!).exists()).toBe(true)
+        expect(w.find(LAYOUT_ROOT.tiles!).exists()).toBe(false)
+        const cards = w.findAll('[data-testid="doc-card"]')
+        expect(cards.map((c) => c.attributes('id'))).toEqual(['doc-card-12', 'doc-card-13'])
+        expect(cards[0]!.find('a').attributes('href')).toBe('/documents/12')
+        expect(cards[0]!.text()).toContain('Eneco')
+        expect(cards[1]!.find('[data-testid="review-badge"]').exists()).toBe(true)
+        // No page preview outside the tiles.
+        expect(w.find('.app-doc-card__thumbnail').exists()).toBe(false)
+        expect(localStorage.getItem('library:doc-layout')).toBe(layout)
+      })
+    }
+
+    it('keeps the chosen layout on the next visit', async () => {
+      twoDocs()
+      localStorage.setItem('library:doc-layout', 'list')
+      const w = await mountView()
+      expect(w.find(LAYOUT_ROOT.list!).exists()).toBe(true)
+      expect(w.find<HTMLSelectElement>('[data-testid="layout-select"]').element.value).toBe('list')
+    })
+
+    it('shows Tiles per row only under tiles', async () => {
+      twoDocs()
+      const w = await mountView()
+      expect(w.find('[data-testid="grid-cols-select"]').exists()).toBe(true)
+      await w.find('[data-testid="layout-select"]').setValue('rows')
+      expect(w.find('[data-testid="grid-cols-select"]').exists()).toBe(false)
+    })
+
+    it('gives the table one column per chosen field, in the chosen order', async () => {
+      seedPrefs(['amount', 'date', 'sender'])
+      twoDocs()
+      localStorage.setItem('library:doc-layout', 'table')
+      const w = await mountView()
+      const headings = w.findAll('[data-testid="doc-table"] th').map((th) => th.text())
+      expect(headings).toEqual(['Title', 'Amount', 'Date', 'From'])
+      expect(w.findAll('[data-testid="doc-table"] tbody tr')[0]!.findAll('td')).toHaveLength(4)
+    })
+
+    it('opens a document from a click anywhere on its table row', async () => {
+      twoDocs()
+      localStorage.setItem('library:doc-layout', 'table')
+      const w = await mountView()
+      await w.findAll('[data-testid="doc-table"] tbody tr')[1]!.findAll('td')[1]!.trigger('click')
+      await flushPromises()
+      expect(router.currentRoute.value.fullPath).toBe('/documents/13')
+    })
+
+    it('draws the type colour as a band on rows and a dot in the list', async () => {
+      twoDocs()
+      localStorage.setItem('library:doc-layout', 'rows')
+      const w = await mountView()
+      const [invoice, other] = w.findAll('[data-testid="doc-card"]')
+      expect(invoice!.classes()).toContain('app-doc-row--accented')
+      expect(invoice!.attributes('style') ?? '').toContain(`--card-accent: ${DEFAULT_KIND_COLORS.invoice}`)
+      expect(other!.classes()).not.toContain('app-doc-row--accented')
+
+      await w.find('[data-testid="layout-select"]').setValue('list')
+      const dots = w.findAll('.app-doc-list__dot')
+      expect(dots[0]!.classes()).toContain('app-doc-list__dot--accented')
+      expect(dots[1]!.classes()).not.toContain('app-doc-list__dot--accented')
+    })
+
+    it('shows the search snippet in rows while searching', async () => {
+      listResponse = () =>
+        jsonResponse(listBody([makeItem({ snippet: 'uw <b>rekening</b>', rank: 0.3 })]))
+      localStorage.setItem('library:doc-layout', 'rows')
+      await router.push('/?q=rekening')
+      const w = await mountView()
+      expect(w.find('.app-doc-card__snippet').html()).toContain('<b>rekening</b>')
+    })
+  })
 })

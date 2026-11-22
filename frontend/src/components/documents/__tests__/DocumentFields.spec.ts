@@ -77,7 +77,7 @@ describe('DocumentFields', () => {
       fieldsRow(['date'], makeItem(), { compactDates: true }).find('[data-testid="doc-date"]').text(),
     ).toBe('Date 17 Sep 2019')
     expect(
-      fieldsRow(['date'], makeItem(), { dateLabel: false }).find('[data-testid="doc-date"]').text(),
+      fieldsRow(['date'], makeItem(), { dateLabels: 'extra' }).find('[data-testid="doc-date"]').text(),
     ).toBe('17 September 2019')
   })
 
@@ -87,6 +87,14 @@ describe('DocumentFields', () => {
     expect(w.find('[data-testid="doc-added-date"]').text()).toBe('Added 10 June 2026')
     // No expiry date on the document: nothing rendered for it.
     expect(w.find('[data-testid="doc-expiry-date"]').exists()).toBe(false)
+  })
+
+  it('keeps the extra-date prefix in the list and drops every prefix in the table', () => {
+    const list = fieldsRow(['date', 'due_date'], makeItem(), { dateLabels: 'extra' })
+    expect(list.find('[data-testid="doc-due-date"]').text()).toBe('Due 1 October 2019')
+    const table = fieldsRow(['date', 'due_date'], makeItem(), { dateLabels: 'none' })
+    expect(table.find('[data-testid="doc-date"]').text()).toBe('17 September 2019')
+    expect(table.find('[data-testid="doc-due-date"]').text()).toBe('1 October 2019')
   })
 
   it('formats the amount in its currency, and shows the bare figure without one', () => {
