@@ -60,7 +60,7 @@
 }
 
 @theme {
-  --shadow-sm: 0 1px 1px 0 rgb(0 0 0 / 0.05), 0 1px 2px 0 rgb(0 0 0 / 0.02);
+  --shadow-sm: var(--shadow-card);
 
   /* Stacking layer for popovers/dropdowns (AppPopover). Sits above the sticky
      app header (z-30) so panels are never clipped behind it. One token so the
@@ -210,7 +210,7 @@
   [type='number']:focus, [type='date']:focus, [type='search']:focus, [type='tel']:focus,
   [type='checkbox']:focus, [type='radio']:focus, :root textarea:focus, :root select:focus {
     --tw-ring-color: transparent;
-    --tw-ring-shadow: 0 0 #0000;
+    --tw-ring-shadow: 0 0 transparent;
     border-color: var(--control-border);
   }
   [type='text']:focus-visible, [type='email']:focus-visible, [type='url']:focus-visible,

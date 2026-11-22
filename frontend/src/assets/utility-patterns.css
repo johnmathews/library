@@ -148,10 +148,7 @@ input[type='search']::-webkit-search-results-decoration {
  */
 .thin-scrollbar {
   scrollbar-width: thin; /* Firefox */
-  scrollbar-color: rgb(0 0 0 / 0.2) transparent; /* thumb, track */
-}
-.dark .thin-scrollbar {
-  scrollbar-color: rgb(255 255 255 / 0.2) transparent;
+  scrollbar-color: var(--quiet) transparent; /* thumb, track */
 }
 .thin-scrollbar::-webkit-scrollbar {
   width: 8px;
@@ -161,17 +158,94 @@ input[type='search']::-webkit-search-results-decoration {
   background: transparent;
 }
 .thin-scrollbar::-webkit-scrollbar-thumb {
-  background-color: rgb(0 0 0 / 0.2);
+  background-color: var(--quiet);
   border-radius: 9999px;
 }
-.dark .thin-scrollbar::-webkit-scrollbar-thumb {
-  background-color: rgb(255 255 255 / 0.2);
-}
 .thin-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(0 0 0 / 0.32);
+  background-color: var(--control-border);
 }
-.dark .thin-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(255 255 255 / 0.32);
+
+/*
+ * Markdown rendered via v-html: a document's text, a note's preview, a new
+ * note's preview and the admin architecture page. Restores the prose spacing
+ * Tailwind preflight strips. One block for all four (they had drifted as
+ * copies); fills and borders are roles, so there is no dark twin
+ * (mockups/261122-chart-gaps-and-colour-roles, option A).
+ */
+.doc-markdown p {
+  margin-bottom: 0.75rem;
+}
+.doc-markdown p:last-child {
+  margin-bottom: 0;
+}
+.doc-markdown strong {
+  font-weight: 600;
+}
+.doc-markdown em {
+  font-style: italic;
+}
+.doc-markdown ul,
+.doc-markdown ol {
+  margin: 0.5rem 0 0.75rem;
+  padding-left: 1.5rem;
+}
+.doc-markdown ul {
+  list-style: disc;
+}
+.doc-markdown ol {
+  list-style: decimal;
+}
+.doc-markdown li {
+  margin-bottom: 0.25rem;
+}
+.doc-markdown h1,
+.doc-markdown h2,
+.doc-markdown h3 {
+  font-weight: 600;
+  margin: 0.75rem 0 0.5rem;
+}
+.doc-markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  padding: 0.1em 0.3em;
+  border-radius: 0.25rem;
+  background: var(--tile);
+}
+/* Fenced code blocks (wide ASCII diagrams too) scroll inside the block rather
+   than overflowing the card and the viewport on a phone. */
+.doc-markdown pre {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: var(--tile);
+  overflow-x: auto;
+}
+.doc-markdown pre code {
+  padding: 0;
+  background: none;
+  white-space: pre;
+}
+/* GFM tables: preflight strips borders and spacing, so restore them, tint the
+   header row, and scroll a wide table inside itself on a phone. */
+.doc-markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+  border-collapse: collapse;
+  font-size: 0.9375em;
+}
+.doc-markdown th,
+.doc-markdown td {
+  border: 1px solid var(--line);
+  padding: 0.375rem 0.625rem;
+  text-align: left;
+  vertical-align: top;
+}
+.doc-markdown th {
+  font-weight: 600;
+  background: var(--tile);
 }
 
 /*
