@@ -3,7 +3,9 @@
  * Dashboard "List" layout: one line per document, no cards. Hairlines between
  * lines on the page background; a small dot in the document type's colour, the
  * title, then the owner's chosen fields as quiet text on the right (under the
- * title on a phone). The table renders as this list where it has no room.
+ * title on a phone). Dates are always short and the review reason is left to
+ * the other layouts, so a line stays one line. The table renders as this list
+ * where it has no room.
  *
  * Each line is one link (a stretched title link), and carries the tile's
  * `doc-card` hook so anything that opens a document works under any layout.
@@ -41,10 +43,11 @@ defineProps<DocumentLayoutProps>()
       <DocumentFields
         :item="item"
         :fields="fields"
-        :compact-dates="compactDates"
+        :compact-dates="true"
         variant="text"
         date-labels="extra"
-        class="flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-[1.125rem] sm:justify-end sm:pl-0 sm:max-w-[60%]"
+        :review-reason="false"
+        class="flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-[1.125rem] sm:flex-nowrap sm:justify-end sm:whitespace-nowrap sm:pl-0 sm:max-w-[65%]"
       />
     </li>
   </ul>

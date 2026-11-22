@@ -15,9 +15,10 @@ import { useStorage } from '@vueuse/core'
  *
  *   - `layout` is the stored *preference*; the Layout control reflects it and
  *     it keeps its value at any width.
- *   - `effectiveLayout` is the *render decision*: the table needs room, so
- *     where the list's container is narrow it renders as the list. The stored
- *     value is never rewritten, so widening the window brings the table back.
+ *   - `effectiveLayout` is the *render decision*: the table needs room (more
+ *     with more field columns, `tableMinWidth`), so where the container is
+ *     narrower than that it renders as the list. The stored value is never
+ *     rewritten, so widening the window brings the table back.
  *
  * The caller passes `isWide` from a measurement of the container the list sits
  * in, not a viewport media query: that container is the viewport minus the
@@ -28,8 +29,16 @@ export type DashboardLayout = 'tiles' | 'rows' | 'table' | 'list'
 /** Storage key for the per-machine dashboard layout. */
 export const DASHBOARD_LAYOUT_STORAGE_KEY = 'library:doc-layout'
 
-/** Below this container width (px) the table renders as the list. */
-export const TABLE_MIN_WIDTH = 640
+/**
+ * The narrowest container (px) the table fits without scrolling sideways, for
+ * a given number of field columns: room for the title column plus about 112px
+ * a field, never under 640. Measured in a browser (2026-11-22): six fields fit
+ * a 960px area exactly and scrolled 31px at 880px; this gives 912px for six.
+ * Below it the table renders as the list.
+ */
+export function tableMinWidth(fieldCount: number): number {
+  return Math.max(640, 240 + 112 * fieldCount)
+}
 
 export const DASHBOARD_LAYOUTS: readonly { value: DashboardLayout; label: string }[] = [
   { value: 'tiles', label: 'Tiles' },

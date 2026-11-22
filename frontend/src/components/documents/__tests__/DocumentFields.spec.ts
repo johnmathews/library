@@ -71,6 +71,18 @@ describe('DocumentFields', () => {
     expect(text.indexOf('Needs review')).toBeLessThan(text.indexOf('Invoice'))
   })
 
+  it('leaves the review reason out when asked, keeping the chip', () => {
+    const item = makeItem({
+      review_status: 'needs_review',
+      review_findings: [
+        { rule: 'amount_currency_coupling', field: 'amount_total', message: 'Amount has no currency' },
+      ],
+    })
+    const w = fieldsRow(['kind'], item, { reviewReason: false })
+    expect(w.find('[data-testid="review-badge"]').exists()).toBe(true)
+    expect(w.find('[data-testid="review-reason"]').exists()).toBe(false)
+  })
+
   it('shows the document date with its label, compact on request', () => {
     expect(fieldsRow(['date']).find('[data-testid="doc-date"]').text()).toBe('Date 17 September 2019')
     expect(

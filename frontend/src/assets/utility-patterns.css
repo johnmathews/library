@@ -364,6 +364,8 @@ input[type='search']::-webkit-search-results-decoration {
  */
 .app-doc-row {
   background-color: var(--panel);
+  /* Transparent on a row with no type colour, so every title starts at the same x. */
+  border-left: 4px solid transparent;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-card);
   transition: box-shadow 0.18s ease;
@@ -374,7 +376,7 @@ input[type='search']::-webkit-search-results-decoration {
 }
 
 .app-doc-row.app-doc-row--accented {
-  border-left: 4px solid var(--card-accent);
+  border-left-color: var(--card-accent);
 }
 
 /*

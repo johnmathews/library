@@ -26,7 +26,7 @@ import DocumentList from '@/components/documents/DocumentList.vue'
 import type { DocumentLayoutProps } from '@/components/documents/layoutProps'
 import {
   DASHBOARD_LAYOUTS,
-  TABLE_MIN_WIDTH,
+  tableMinWidth,
   useDashboardLayout,
 } from '@/composables/useDashboardLayout'
 import {
@@ -363,15 +363,17 @@ const gridColsStyle = computed<Record<string, string>>(() => ({
 
 // --- Layout ----------------------------------------------------------------
 // Tiles, rows, table or list (composables/useDashboardLayout.ts), chosen per
-// machine. The table needs room, so where the results area is narrower than
-// TABLE_MIN_WIDTH it renders as the list. The area is measured rather than the
+// machine. The table needs room, more with each field column, so where the
+// results area is narrower than `tableMinWidth` it renders as the list. The area is measured rather than the
 // viewport, because it is the viewport minus the sidebar. Before the first
 // measurement (and in jsdom, which has no layout) the width reads 0; that
 // counts as wide, so nothing flips on an unmeasured element.
 const resultsEl = ref<HTMLElement | null>(null)
 const { width: resultsWidth } = useElementSize(resultsEl)
 const resultsAreWide = computed<boolean>(
-  () => resultsWidth.value === 0 || resultsWidth.value >= TABLE_MIN_WIDTH,
+  () =>
+    resultsWidth.value === 0 ||
+    resultsWidth.value >= tableMinWidth(auth.dashboardFields.length),
 )
 const { layout, effectiveLayout } = useDashboardLayout(resultsAreWide)
 

@@ -9,7 +9,7 @@
  * The title is the row's link (in `brand`, as the system's DataTable draws a
  * document). A click anywhere else on the row opens the document too, for the
  * mouse; the link stays the one keyboard stop. The view renders the list in
- * place of the table where the content area is narrower than TABLE_MIN_WIDTH.
+ * place of the table where the content area is narrower than `tableMinWidth`.
  */
 import { useRouter } from 'vue-router'
 import { AppBadge } from '@/components/app'
@@ -35,12 +35,12 @@ function openFromRow(event: MouseEvent, item: DocumentListItem): void {
     <table class="w-full text-sm">
       <thead class="text-[13px] text-ink-secondary border-b border-line">
         <tr>
-          <th scope="col" class="text-left font-semibold px-4 py-3">Title</th>
+          <th scope="col" class="text-left font-semibold px-3 py-3">Title</th>
           <th
             v-for="field in fields"
             :key="field"
             scope="col"
-            class="font-semibold px-4 py-3 whitespace-nowrap"
+            class="font-semibold px-3 py-3 whitespace-nowrap"
             :class="field === 'amount' ? 'text-right' : 'text-left'"
             :data-testid="`doc-table-col-${field}`"
           >
@@ -61,16 +61,21 @@ function openFromRow(event: MouseEvent, item: DocumentListItem): void {
           data-testid="doc-card"
           @click="openFromRow($event, item)"
         >
-          <td class="px-4 py-2.5 align-middle">
-            <span class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <!-- One line per document: the title cell takes the spare width
+               (w-full + max-w-0 lets it shrink, min-w-56 stops it vanishing)
+               and truncates, with the full title in its tooltip. -->
+          <td class="w-full min-w-56 max-w-0 px-3 py-2.5 align-middle">
+            <span class="flex items-center gap-2">
               <RouterLink
-                class="font-medium text-brand hover:underline"
+                class="min-w-0 truncate font-medium text-brand hover:underline"
+                :title="item.title ?? undefined"
                 :to="{ name: 'document-detail', params: { id: item.id }, query: detailQuery }"
               >
                 {{ item.title ?? 'Untitled document' }}
               </RouterLink>
               <AppBadge
                 v-if="item.review_status === 'needs_review'"
+                class="shrink-0"
                 colour="yellow"
                 data-testid="review-badge"
                 >Needs review</AppBadge
@@ -80,10 +85,10 @@ function openFromRow(event: MouseEvent, item: DocumentListItem): void {
           <td
             v-for="field in fields"
             :key="field"
-            class="px-4 py-2.5 align-middle"
+            class="px-3 py-2.5 align-middle whitespace-nowrap"
             :class="{
-              'text-right whitespace-nowrap': field === 'amount',
-              'whitespace-nowrap': field !== 'amount' && field !== 'tags' && field !== 'sender',
+              'text-right': field === 'amount',
+              'max-w-44 truncate': field === 'sender' || field === 'tags',
             }"
           >
             <DocumentFieldValue

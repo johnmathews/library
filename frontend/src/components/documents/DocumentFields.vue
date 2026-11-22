@@ -18,8 +18,10 @@ withDefaults(
     compactDates?: boolean
     variant?: 'chips' | 'text'
     dateLabels?: 'all' | 'extra' | 'none'
+    /** Show why a document needs review beside its chip (off in the one-line list). */
+    reviewReason?: boolean
   }>(),
-  { compactDates: false, variant: 'chips', dateLabels: 'all' },
+  { compactDates: false, variant: 'chips', dateLabels: 'all', reviewReason: true },
 )
 </script>
 
@@ -28,7 +30,7 @@ withDefaults(
     <template v-if="item.review_status === 'needs_review'">
       <AppBadge colour="yellow" data-testid="review-badge">Needs review</AppBadge>
       <span
-        v-if="item.review_findings.length"
+        v-if="reviewReason && item.review_findings.length"
         class="text-xs text-attention"
         data-testid="review-reason"
       >{{ summarizeReviewReasons(item.review_findings) }}</span>

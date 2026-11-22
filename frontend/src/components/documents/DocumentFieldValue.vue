@@ -116,7 +116,14 @@ const hook = computed<string>(() => props.field.replace('_', '-'))
         +{{ item.tags.length - MAX_TAGS }}
       </span>
     </span>
-    <span v-else class="app-doc-card__tags text-sm text-ink-secondary" data-testid="doc-tags">
+    <!-- Capped and truncated so a long tag list cannot push a one-line
+         layout onto two lines; the tooltip carries every tag. -->
+    <span
+      v-else
+      class="app-doc-card__tags inline-block max-w-48 truncate align-bottom text-sm text-ink-secondary"
+      :title="item.tags.map((tag) => tag.name).join(', ')"
+      data-testid="doc-tags"
+    >
       {{ item.tags.slice(0, MAX_TAGS).map((tag) => tag.name).join(', ') }}<span
         v-if="item.tags.length > MAX_TAGS"
         class="app-doc-card__tags-more"

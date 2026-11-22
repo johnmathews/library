@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { nextTick, ref } from 'vue'
 import {
   DASHBOARD_LAYOUT_STORAGE_KEY,
+  tableMinWidth,
   useDashboardLayout,
 } from '../useDashboardLayout'
 
@@ -52,5 +53,14 @@ describe('useDashboardLayout', () => {
   it('renders an unknown stored value as tiles', () => {
     localStorage.setItem(DASHBOARD_LAYOUT_STORAGE_KEY, 'mosaic')
     expect(useDashboardLayout(ref(true)).effectiveLayout.value).toBe('tiles')
+  })
+
+  it('needs more width for the table as field columns are added, never under 640px', () => {
+    expect(tableMinWidth(0)).toBe(640)
+    expect(tableMinWidth(3)).toBe(640)
+    // Six fields fitted a 960px area exactly in the browser and scrolled at 880px.
+    expect(tableMinWidth(6)).toBeGreaterThan(880)
+    expect(tableMinWidth(6)).toBeLessThanOrEqual(960)
+    expect(tableMinWidth(8)).toBeGreaterThan(tableMinWidth(6))
   })
 })
