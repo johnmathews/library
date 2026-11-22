@@ -13,7 +13,10 @@
  * Every colour is a design-system role, resolved for the current theme by
  * `chartColour()` because a canvas cannot read `var()`. Gridlines are
  * `chart-grid`, the zero line `control-border`, tick labels `ink-secondary`
- * at 11px.
+ * at 12.5px (`type-small`), the tooltip at 14px (`type-body`), both in the
+ * brand's font, the y ticks as money (`formatTick`). A period with no
+ * documents keeps its place on the axis and shows a 3px `quiet` stub at the
+ * zero line (`fillPeriods`, `emptyPeriodStub`).
  */
 import { computed } from 'vue'
 import { Bar } from 'vue-chartjs'
@@ -22,7 +25,8 @@ import { useDark } from '@vueuse/core'
 import type { ChartData } from '@/api/spending'
 import { OTHER_VALUE, type Band } from '@/spending/palette'
 import { chartColour, INCOME_COLOUR, SPENDING_COLOUR } from '@/utils/splitPalette'
-import { formatMoney, fromCents, toCents } from '@/spending/money'
+import { formatMoney, formatTick, fromCents, toCents } from '@/spending/money'
+import { fillPeriods } from '@/spending/periods'
 
 // A category scale, not a time scale: the x-axis is uniform periods, so
 // "nothing is 2px wide because two invoices landed three days apart" is true
@@ -60,14 +64,18 @@ const visibleBands = computed<Band[]>(() =>
   props.bands.filter((b) => !(props.hidden?.has(b.value) ?? false)),
 )
 
-// The x-axis categories: every distinct period the data carries, sorted —
-// periods are ISO date strings, so a lexicographic sort is a chronological
-// one. Unlike a TimeScale, nothing here spaces bars by elapsed time.
-const periods = computed<string[]>(() => {
-  const set = new Set<string>()
-  for (const c of props.data.cells) set.add(c.period)
-  return Array.from(set).sort()
-})
+// The x-axis categories: every period from the first the data carries to the
+// last, at the chart's grain, sorted. The API sends no cell for a period with
+// no documents, so `fillPeriods` puts those back; otherwise the axis would
+// skip them and two bars a month apart would read as continuous. Periods are
+// ISO date strings, so a lexicographic sort is a chronological one. Unlike a
+// TimeScale, nothing here spaces bars by elapsed time.
+const periods = computed<string[]>(() =>
+  fillPeriods(
+    props.data.cells.map((c) => c.period),
+    props.data.grain,
+  ),
+)
 
 // A `null` split value cannot be a Map key alongside real strings without
 // collapsing onto the string "null", so it gets a sentinel that no real
@@ -91,6 +99,12 @@ const cellCents = computed<Map<string, Map<string, number>>>(() => {
   }
   return byPeriod
 })
+
+/** True for a period the data has no cell for: no documents, drawn as a stub. */
+function isEmptyPeriod(index: number): boolean {
+  const period = periods.value[index]
+  return period === undefined || !cellCents.value.has(period)
+}
 
 function centsForKeys(period: string, keys: string[]): number {
   const byKey = cellCents.value.get(period)
@@ -189,6 +203,16 @@ function borderRadiusAt(datasetIndex: number, dataIndex: number): FullBorderRadi
   return datasetIndex === outer ? BOTTOM_ROUNDED : SQUARE
 }
 
+// The tooltip's last line: the hovered bar's total over the bands on show,
+// so hiding a band in the legend takes it out of the total as it takes it
+// out of the bar. An unsplit chart has one series, so no total line.
+function tooltipFooter(items: { dataIndex: number }[]): string {
+  if (props.bands.length === 0 || items.length === 0) return ''
+  const index = items[0]!.dataIndex
+  const cents = series.value.reduce((sum, s) => sum + (s.cents[index] ?? 0), 0)
+  return `Total: ${formatMoney(fromCents(cents), props.data.currency)}`
+}
+
 function tooltipLabel(ctx: { datasetIndex: number; dataIndex: number }): string {
   const s = series.value[ctx.datasetIndex]
   if (!s) return ''
@@ -203,6 +227,22 @@ function tooltipLabel(ctx: { datasetIndex: number; dataIndex: number }): string 
 // refetch is in flight is the consuming card's job (`SpendingCard`'s own
 // `busy` prop, task 7) — this component has no loading signal of its own to
 // drive one.
+// Bar width: about two thirds of each period's slot, so bars stay thick when
+// a wide card holds few periods and shrink to fit when it holds many; capped
+// so a chart of two or three periods does not draw slabs. Chart.js sizes a
+// bar as slot x categoryPercentage x barPercentage; the empty-period stub
+// uses the same arithmetic.
+const CATEGORY_SHARE = 0.7
+const BAR_PERCENT = 0.9
+const MAX_BAR = 120
+// The surface-coloured gap between stacked segments, drawn as each bar's
+// border. Chart.js paints a border inside the bar, so a bar's colour is
+// `barWidth - 2 * SEGMENT_GAP` wide; the empty-period stub matches that.
+const SEGMENT_GAP = 2
+function barWidth(slot: number): number {
+  return Math.min(MAX_BAR, slot * CATEGORY_SHARE * BAR_PERCENT)
+}
+
 const chartData = computed(() => ({
   labels: periods.value,
   datasets: series.value.map((s, datasetIndex) => ({
@@ -212,9 +252,11 @@ const chartData = computed(() => ({
       s.colour === null
         ? s.cents.map((c) => paint(c < 0 ? INCOME_COLOUR : SPENDING_COLOUR))
         : paint(s.colour),
-    borderWidth: 2,
+    borderWidth: SEGMENT_GAP,
     borderColor: surfaceColour.value,
-    maxBarThickness: 24,
+    categoryPercentage: CATEGORY_SHARE,
+    barPercentage: BAR_PERCENT,
+    maxBarThickness: MAX_BAR,
     borderRadius: (ctx: { dataIndex: number }) => borderRadiusAt(datasetIndex, ctx.dataIndex),
   })),
 }))
@@ -232,6 +274,7 @@ interface ActiveBarElement {
 function onBarClick(_event: unknown, elements: ActiveBarElement[]): void {
   if (!elements.length) return
   const { datasetIndex, index } = elements[0]!
+  if (isEmptyPeriod(index)) return
   const period = periods.value[index]
   if (period === undefined) return
   const s = series.value[datasetIndex]
@@ -239,7 +282,54 @@ function onBarClick(_event: unknown, elements: ActiveBarElement[]): void {
   emit('cell', period, s.value)
 }
 
-const tickStyle = computed(() => ({ color: paint('var(--ink-secondary)'), font: { size: 11 } }))
+// The stub for an empty period: 3px of `quiet` at the zero line, as wide as a
+// bar, rounded like one. Drawn by a plugin rather than as a dataset, so it has
+// no value, no tooltip, no click target and no band, and it stays when the
+// legend hides every band (the period is empty either way). The bar width
+// is the bars' own (`barWidth`).
+const STUB_HEIGHT = 3
+interface StubChart {
+  ctx: CanvasRenderingContext2D
+  scales: Record<string, { width: number; getPixelForValue: (value: number) => number }>
+  data: { labels?: unknown[] }
+}
+const emptyPeriodStub = {
+  id: 'emptyPeriodStub',
+  afterDatasetsDraw(chart: StubChart): void {
+    const labels = chart.data.labels ?? []
+    const x = chart.scales.x
+    const y = chart.scales.y
+    if (!x || !y || labels.length === 0) return
+    const width = barWidth(x.width / labels.length) - 2 * SEGMENT_GAP
+    const zero = y.getPixelForValue(0)
+    const { ctx } = chart
+    ctx.save()
+    ctx.fillStyle = paint('var(--quiet)')
+    labels.forEach((_label, index) => {
+      if (!isEmptyPeriod(index)) return
+      ctx.beginPath()
+      ctx.roundRect(x.getPixelForValue(index) - width / 2, zero - STUB_HEIGHT, width, STUB_HEIGHT, STUB_HEIGHT / 2)
+      ctx.fill()
+    })
+    ctx.restore()
+  },
+}
+const chartPlugins = [emptyPeriodStub]
+
+// A canvas does not inherit the page's font, so the chart names it: the
+// brand's `--font-sans`, read once from the tokens. Ticks are `type-small`
+// (12.5px), the smallest text in the app; the tooltip is `type-body` (14px),
+// its period and total at 600 like a label.
+const FALLBACK_FONT = 'system-ui, sans-serif'
+const fontFamily =
+  (typeof document === 'undefined'
+    ? ''
+    : getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim()) || FALLBACK_FONT
+const TICK_FONT = { family: fontFamily, size: 12.5 }
+const TOOLTIP_FONT = { family: fontFamily, size: 14, lineHeight: 1.5 }
+const TOOLTIP_STRONG = { ...TOOLTIP_FONT, weight: 600 }
+
+const tickStyle = computed(() => ({ color: paint('var(--ink-secondary)'), font: TICK_FONT }))
 
 const chartOptions = computed(() => ({
   responsive: true,
@@ -254,7 +344,25 @@ const chartOptions = computed(() => ({
     // x-axis category label, which is exactly the period string here
     // (`chartData.labels` is `periods`, a category scale) — so the default
     // is already correct and is left alone rather than reimplemented.
-    tooltip: { callbacks: { label: tooltipLabel } },
+    // Hovering any segment shows the whole bar: every series with money in
+    // that period, top segment first so the list reads like the bar (bands
+    // are largest first from the baseline, `palette.ts`), then the total.
+    // `mode` is set on the tooltip only, so a click still drills into the one
+    // segment under the pointer.
+    tooltip: {
+      mode: 'index' as const,
+      intersect: true,
+      itemSort: (a: { datasetIndex: number }, b: { datasetIndex: number }) => b.datasetIndex - a.datasetIndex,
+      // An empty period's zero-height bars, and a series with nothing in the
+      // hovered period, are not figures to read.
+      filter: (item: { dataIndex: number; raw: unknown }) => !isEmptyPeriod(item.dataIndex) && item.raw !== 0,
+      callbacks: { label: tooltipLabel, footer: tooltipFooter },
+      titleFont: TOOLTIP_STRONG,
+      bodyFont: TOOLTIP_FONT,
+      footerFont: TOOLTIP_STRONG,
+      padding: 10,
+      boxPadding: 4,
+    },
   },
   scales: {
     x: {
@@ -275,7 +383,10 @@ const chartOptions = computed(() => ({
         color: (ctx: { tick?: { value: number } }) =>
           paint(ctx.tick?.value === 0 ? 'var(--control-border)' : 'var(--chart-grid)'),
       },
-      ticks: props.compact ? { display: false } : tickStyle.value,
+      // Money as the card writes it: `EUR 200`, `−EUR 100`.
+      ticks: props.compact
+        ? { display: false }
+        : { ...tickStyle.value, callback: (value: number | string) => formatTick(Number(value), props.data.currency) },
     },
   },
 }))
@@ -289,6 +400,7 @@ const chartOptions = computed(() => ({
     <Bar
       :data="chartData"
       :options="chartOptions"
+      :plugins="chartPlugins"
     />
   </div>
 </template>

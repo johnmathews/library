@@ -75,7 +75,27 @@ describe('palette', () => {
   // A refund can exceed the payments in its bucket.
   it('ranks a negative net last without dropping it', () => {
     const b = bands([S('a', 'A'), S('b', 'B')], [C('a', '-5.00'), C('b', '20.00')])
-    expect(b.map((x) => x.totalCents)).toEqual([-500, 2000])
+    expect(b.map((x) => x.totalCents)).toEqual([2000, -500])
+  })
+
+  // One order for the stack (first band on the baseline), the legend and the
+  // tooltip: largest first by the window's total, Other always last. The
+  // colour still follows the value, not its place (mockup 261122, round 3).
+  it('orders bands largest first and Other last, whatever the keys say', () => {
+    const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+    const totals = ['1.00', '50.00', '30.00', '40.00', '20.00', '9.00', '8.00']
+    const b = bands(keys.map((k) => S(k, k)), keys.map((k, i) => C(k, totals[i]!)))
+    expect(b.map((x) => (x.value === OTHER_VALUE ? 'OTHER' : x.value))).toEqual(['b', 'd', 'c', 'e', 'f', 'OTHER'])
+  })
+
+  it('keeps each value\'s colour when the order changes', () => {
+    const keys = ['a', 'b', 'c']
+    const small = bands(keys.map((k) => S(k, k)), [C('a', '1.00'), C('b', '2.00'), C('c', '3.00')])
+    const big = bands(keys.map((k) => S(k, k)), [C('a', '30.00'), C('b', '2.00'), C('c', '3.00')])
+    const colourOf = (bs: typeof small) => Object.fromEntries(bs.map((x) => [String(x.value), x.colour]))
+    expect(small.map((x) => x.value)).toEqual(['c', 'b', 'a'])
+    expect(big.map((x) => x.value)).toEqual(['a', 'c', 'b'])
+    expect(colourOf(big)).toEqual(colourOf(small))
   })
 
   // A stored colour claims its slot before any derived one is handed out.
@@ -87,8 +107,8 @@ describe('palette', () => {
   it('honours a stored colour and does not hand its slot out twice', () => {
     const claimed = deriveSlot('b')
     const b = bands([S('a', 'A', claimed.light), S('b', 'B')], [C('a', '1.00'), C('b', '2.00')])
-    expect(b[0]!.colour).toBe(claimed.colour)
-    expect(b[1]!.colour).not.toBe(claimed.colour)
+    expect(b.find((x) => x.value === 'a')!.colour).toBe(claimed.colour)
+    expect(b.find((x) => x.value === 'b')!.colour).not.toBe(claimed.colour)
   })
 
   // De-collision must also apply BETWEEN two stored colours: a picker that
@@ -101,8 +121,8 @@ describe('palette', () => {
       [S('a', 'A', claimed.light), S('b', 'B', claimed.light)],
       [C('a', '1.00'), C('b', '2.00')],
     )
-    expect(b[0]!.colour).toBe(claimed.colour)
-    expect(b[1]!.colour).not.toBe(claimed.colour)
+    expect(b.find((x) => x.value === 'a')!.colour).toBe(claimed.colour)
+    expect(b.find((x) => x.value === 'b')!.colour).not.toBe(claimed.colour)
   })
 
   // A stored hex that names no slot (a script, or the retired olive slot) is

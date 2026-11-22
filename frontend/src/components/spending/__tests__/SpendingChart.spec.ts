@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 
 vi.mock('vue-chartjs', () => ({
-  Bar: { name: 'Bar', props: ['data', 'options'], template: '<canvas />' },
+  Bar: { name: 'Bar', props: ['data', 'options', 'plugins'], template: '<canvas />' },
 }))
 
 import SpendingChart from '../SpendingChart.vue'
@@ -17,12 +17,13 @@ const THEME_CSS = `
 [data-theme="light"] {
   --category-1: #100001; --category-2: #100002; --category-other: #10000f;
   --panel: #1000a0; --chart-spending: #1000b0; --chart-income: #1000c0;
-  --chart-grid: #1000d0; --control-border: #1000e0; --ink-secondary: #1000f0;
+  --chart-grid: #1000d0; --control-border: #1000e0; --ink-secondary: #1000f0; --quiet: #100099;
 }
+:root { --font-sans: TestSans; }
 .dark {
   --category-1: #200001; --category-2: #200002; --category-other: #20000f;
   --panel: #2000a0; --chart-spending: #2000b0; --chart-income: #2000c0;
-  --chart-grid: #2000d0; --control-border: #2000e0; --ink-secondary: #2000f0;
+  --chart-grid: #2000d0; --control-border: #2000e0; --ink-secondary: #2000f0; --quiet: #200099;
 }`
 let themeStyle: HTMLStyleElement
 beforeEach(() => {
@@ -158,6 +159,7 @@ function mountChart(
 }
 
 interface BarProps {
+  plugins?: unknown[]
   data: { labels: string[]; datasets: BarDataset[] }
   options: {
     onClick?: (event: unknown, elements: { datasetIndex: number; index: number }[]) => void
@@ -239,7 +241,9 @@ describe('SpendingChart', () => {
     expect(datasets[0]!.backgroundColor).toBe('#876708')
   })
 
-  it('draws gridlines in chart-grid, the zero line in control-border, ticks in ink-secondary at 11px', () => {
+  // Nothing in the app is smaller than `type-small` (12.5px), the axis
+  // included, and a canvas does not inherit the page's font.
+  it('draws gridlines in chart-grid, the zero line in control-border, ticks in ink-secondary at type-small', () => {
     const options = optionsOf(mountChart()) as unknown as {
       scales: {
         y: { grid: { color: (ctx: { tick?: { value: number } }) => string }; ticks: { color: string; font: { size: number } } }
@@ -248,8 +252,9 @@ describe('SpendingChart', () => {
     }
     expect(options.scales.y.grid.color({ tick: { value: 10 } })).toBe('#1000d0')
     expect(options.scales.y.grid.color({ tick: { value: 0 } })).toBe('#1000e0')
-    expect(options.scales.y.ticks).toMatchObject({ color: '#1000f0', font: { size: 11 } })
-    expect(options.scales.x.ticks).toMatchObject({ color: '#1000f0', font: { size: 11 } })
+    const tick = { color: '#1000f0', font: { family: 'TestSans', size: 12.5 } }
+    expect(options.scales.y.ticks).toMatchObject(tick)
+    expect(options.scales.x.ticks).toMatchObject(tick)
   })
 
   // The 2px surface gap is the separator; a border around a mark is not.
@@ -260,8 +265,12 @@ describe('SpendingChart', () => {
     expect(datasets.every((d) => d.borderColor === '#1000a0')).toBe(true)
   })
 
-  it('caps bar thickness so a two-period chart does not draw slabs', () => {
-    expect(chartDataOf(mountChart()).datasets[0]!.maxBarThickness).toBe(24)
+  // About two thirds of the slot, at most 120px (ChartStyle card): thick on a
+  // wide card with few periods, thin enough to fit many.
+  it('fills about two thirds of each period\'s slot, capped so a two-period chart does not draw slabs', () => {
+    const dataset = chartDataOf(mountChart()).datasets[0]! as BarDataset & { barPercentage: number; categoryPercentage: number }
+    expect(dataset.categoryPercentage * dataset.barPercentage).toBeCloseTo(0.63)
+    expect(dataset.maxBarThickness).toBe(120)
   })
 
   it('emits the cell that was clicked, with its raw split value', () => {
@@ -359,6 +368,72 @@ describe('SpendingChart', () => {
     expect(chartDataOf(wrapper).labels).toEqual(['2026-06-01', '2026-07-01', '2026-08-01'])
   })
 
+  it('writes y ticks as money in the chart\'s display currency', () => {
+    const options = optionsOf(mountChart({ ...DATA, currency: 'EUR' })) as unknown as {
+      scales: { y: { ticks: { callback: (value: number | string) => string } } }
+    }
+    expect(options.scales.y.ticks.callback(200)).toBe('EUR 200')
+    expect(options.scales.y.ticks.callback(-100)).toBe('\u2212EUR 100')
+  })
+
+  // Hovering any segment shows the whole bar: every series with money in that
+  // period, top segment first so the list reads like the bar, then the total.
+  // Clicking still drills into the one segment under the pointer.
+  describe('the tooltip', () => {
+    interface TooltipItem { datasetIndex: number; dataIndex: number; raw: number }
+    type TooltipOptions = {
+      mode: string
+      intersect: boolean
+      itemSort: (a: TooltipItem, b: TooltipItem) => number
+      filter: (item: TooltipItem) => boolean
+      callbacks: { footer: (items: TooltipItem[]) => string }
+      titleFont: object
+      bodyFont: object
+      footerFont: object
+    }
+    const tooltipOf = (w: VueWrapper) =>
+      (optionsOf(w) as unknown as { plugins: { tooltip: TooltipOptions } }).plugins.tooltip
+
+    it('shows every series in the hovered bar, not only the segment under the pointer', () => {
+      const tooltip = tooltipOf(mountChart())
+      expect(tooltip.mode).toBe('index')
+      expect(tooltip.intersect).toBe(true)
+    })
+
+    it('lists the top segment first, mirroring the stack', () => {
+      const items = [0, 1, 2].map((datasetIndex) => ({ datasetIndex, dataIndex: 0, raw: 1 }))
+      expect([...items].sort(tooltipOf(mountChart()).itemSort).map((i) => i.datasetIndex)).toEqual([2, 1, 0])
+    })
+
+    it('leaves out a series with nothing in that period', () => {
+      expect(tooltipOf(mountChart()).filter({ datasetIndex: 0, dataIndex: 0, raw: 0 })).toBe(false)
+      expect(tooltipOf(mountChart()).filter({ datasetIndex: 0, dataIndex: 0, raw: 10 })).toBe(true)
+    })
+
+    it('ends with the bar\'s total across the visible bands', () => {
+      const footer = tooltipOf(mountChart(DATA)).callbacks.footer
+      // June: hosting 10 + licences 5 + Other (tools 2 + training 1) = 18.00.
+      expect(footer([{ datasetIndex: 0, dataIndex: 0, raw: 10 }])).toBe('Total: USD 18.00')
+      // Hiding licences takes it out of the total, as it is out of the bar.
+      const hidden = tooltipOf(mountChart(DATA, new Set(['licences']))).callbacks.footer
+      expect(hidden([{ datasetIndex: 0, dataIndex: 0, raw: 10 }])).toBe('Total: USD 13.00')
+    })
+
+    // Chart.js's default is 12px Helvetica; the tooltip is where figures are
+    // read, so it takes `type-body`, the period and total at 600.
+    it('writes in type-body in the app\'s font, the period and total at 600', () => {
+      const tooltip = tooltipOf(mountChart())
+      const family = 'TestSans'
+      expect(tooltip.titleFont).toEqual({ family, size: 14, lineHeight: 1.5, weight: 600 })
+      expect(tooltip.bodyFont).toEqual({ family, size: 14, lineHeight: 1.5 })
+      expect(tooltip.footerFont).toEqual({ family, size: 14, lineHeight: 1.5, weight: 600 })
+    })
+
+    it('needs no total line for an unsplit chart', () => {
+      expect(tooltipOf(mountChart(UNSPLIT)).callbacks.footer([{ datasetIndex: 0, dataIndex: 0, raw: 18 }])).toBe('')
+    })
+  })
+
   it('drops y-axis ticks and shortens x labels when compact, without touching the data', () => {
     const wrapper = mount(SpendingChart, { props: { data: DATA, bands: BANDS, compact: true } })
     const options = optionsOf(wrapper) as unknown as {
@@ -432,5 +507,95 @@ describe('SpendingChart', () => {
     expect(datasets[1]!.borderRadius({ dataIndex: 1 })).toEqual(SQUARE)
     expect(datasets[0]!.borderRadius({ dataIndex: 1 })).toEqual(SQUARE)
     expect(datasets[2]!.borderRadius({ dataIndex: 1 })).toEqual(TOP_ROUNDED)
+  })
+})
+
+// A month with no documents has no cell (the API groups by period), so the
+// axis would skip it and July would touch September. The chart fills the gap
+// and marks it with a 3px `quiet` stub (ChartStyle card).
+describe('SpendingChart: a period with no documents', () => {
+  const GAP: ChartData = {
+    ...DATA,
+    cells: DATA.cells.filter((c) => c.period !== '2026-07-01'),
+  }
+
+  interface StubChart {
+    ctx: { fillStyle: string; beginPath: () => void; roundRect: (...a: number[]) => void; fill: () => void; save: () => void; restore: () => void }
+    chartArea: { bottom: number }
+    scales: { x: { width: number; getPixelForValue: (i: number) => number }; y: { getPixelForValue: (v: number) => number } }
+    data: { labels: string[] }
+  }
+  function drawStubs(wrapper: VueWrapper): number[][] {
+    const plugins = barProps(wrapper).plugins as { id: string; afterDatasetsDraw: (chart: StubChart) => void }[]
+    const plugin = plugins.find((p) => p.id === 'emptyPeriodStub')!
+    const rects: number[][] = []
+    let fill = ''
+    const chart: StubChart = {
+      ctx: {
+        set fillStyle(v: string) { fill = v },
+        get fillStyle() { return fill },
+        beginPath: () => {},
+        roundRect: (...a: number[]) => rects.push([...a]),
+        fill: () => {},
+        save: () => {},
+        restore: () => {},
+      },
+      chartArea: { bottom: 200 },
+      scales: { x: { width: 300, getPixelForValue: (i) => 50 + i * 100 }, y: { getPixelForValue: () => 150 } },
+      data: { labels: chartDataOf(wrapper).labels },
+    }
+    plugin.afterDatasetsDraw(chart)
+    expect(rects.length === 0 || fill === '#100099').toBe(true)
+    return rects
+  }
+
+  it('keeps the empty month on the axis, with zero in every band', () => {
+    const { labels, datasets } = chartDataOf(mountChart(GAP))
+    expect(labels).toEqual(['2026-06-01', '2026-07-01', '2026-08-01'])
+    expect(datasets.map((d) => d.data[1])).toEqual([0, 0, 0])
+  })
+
+  it('draws one 3px quiet stub at the zero line, as wide as a bar\'s colour, centred on the empty month', () => {
+    const rects = drawStubs(mountChart(GAP))
+    // 300px / 3 periods * 0.63 = 63px, under the 120px cap. A bar paints its
+    // 2px surface border inside that width on both sides, so its colour is
+    // 59px wide, and the stub matches the colour rather than the outline.
+    expect(rects).toEqual([[150 - 29.5, 150 - 3, 59, 3, 1.5]])
+  })
+
+  it('draws no stub when every month has documents', () => {
+    expect(drawStubs(mountChart(DATA))).toEqual([])
+  })
+
+  it('still draws the stub when every band is hidden by the legend', () => {
+    const allHidden = new Set(BANDS.map((b) => b.value))
+    expect(drawStubs(mountChart(GAP, allHidden))).toHaveLength(1)
+  })
+
+  it('opens nothing when the empty month is clicked', () => {
+    const wrapper = mountChart(GAP)
+    clickBar(wrapper, { datasetIndex: 0, index: 1 })
+    expect(wrapper.emitted('cell')).toBeUndefined()
+  })
+
+  it('shows no tooltip for the empty month', () => {
+    const options = optionsOf(mountChart(GAP)) as unknown as {
+      plugins: { tooltip: { filter: (item: { dataIndex: number }) => boolean } }
+    }
+    expect(options.plugins.tooltip.filter({ dataIndex: 1 })).toBe(false)
+    expect(options.plugins.tooltip.filter({ dataIndex: 0 })).toBe(true)
+  })
+
+  it('fills weeks at the week grain', () => {
+    const weekly: ChartData = {
+      ...UNSPLIT,
+      grain: 'week',
+      cells: [
+        { period: '2026-06-01', split_value: null, total: '5.00', payments: 1 },
+        { period: '2026-06-22', split_value: null, total: '7.00', payments: 1 },
+      ],
+    }
+    expect(chartDataOf(mountChart(weekly)).labels).toEqual(['2026-06-01', '2026-06-08', '2026-06-15', '2026-06-22'])
+    expect(drawStubs(mountChart(weekly))).toHaveLength(2)
   })
 })

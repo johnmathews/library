@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatMoney, fromCents, toCents } from '../money'
+import { formatMoney, formatTick, fromCents, toCents } from '../money'
 
 describe('money', () => {
   it('parses the decimal strings the API actually sends', () => {
@@ -69,5 +69,29 @@ describe('money', () => {
       expect(formatMoney('45.00', '')).toBe('45.00')
       expect(formatMoney('-45.00', '')).toBe('-45.00')
     })
+  })
+})
+
+// The chart's y-axis ticks: the currency code like every other figure on the
+// card, whole units, grouped, and a true minus (voice.md), as picked in
+// mockups/261122-chart-gaps-and-colour-roles.
+describe('formatTick', () => {
+  it('writes whole units after the currency code', () => {
+    expect(formatTick(0, 'EUR')).toBe('EUR 0')
+    expect(formatTick(200, 'EUR')).toBe('EUR 200')
+    expect(formatTick(1500, 'EUR')).toBe('EUR 1,500')
+  })
+
+  it('puts a true minus in front of a refund below the zero line', () => {
+    expect(formatTick(-100, 'EUR')).toBe('\u2212EUR 100')
+  })
+
+  it('keeps two decimals only for a fractional step', () => {
+    expect(formatTick(2.5, 'EUR')).toBe('EUR 2.50')
+  })
+
+  it('names any display currency by its code, and none when there is no currency', () => {
+    expect(formatTick(200, 'GBP')).toBe('GBP 200')
+    expect(formatTick(-200, '')).toBe('\u2212200')
   })
 })
