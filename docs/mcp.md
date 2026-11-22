@@ -1,7 +1,7 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-07 (§1.2: the SDK hold is about value, not the 4 MiB cap, because model output limits MCP uploads first; mcp also stays on 1.28.1). Earlier entries are in this file's history.
-**Last verified:** 2026-11-21 — method: partial, scoped to "What the user sees" and "Disconnecting" against the restyle's diff of `OAuthConsentView.vue` and `SettingsView.vue`: class and logo changes only (the consent card now shows the app logo); every step and label this doc names is unchanged. Earlier, 2026-11-07: partial. §1.2's hold: the live archive has no document with source `mcp`; the output-length limit is reasoning, not measured. The mcp 1.30 point: the guard test on 1.28.1 (pass) and 1.30.0 (`413`) (journal 261107-dependabot-alerts). The rest carries forward journal 261107-library-followups-run-closed.
+**Status:** active. **Last updated:** 2026-11-22 (§1.2: five held mcp advisories, not four; GHSA-qx49 is client-side; fastmcp 4.2.4 still has no body-size setting; the alerts are dismissed with a pointer here). Earlier entries are in this file's history.
+**Last verified:** 2026-11-22 — method: partial, scoped to §1.2's mcp point: read the GHSA-qx49 advisory (servers not affected), grepped `src/` and `tests/` for the SDK's OAuth client classes (tests only), and grepped the fastmcp-slim 4.2.4 wheel for `max_request_body_size` (absent). Earlier, 2026-11-21: partial, scoped to "What the user sees" and "Disconnecting" against the restyle's diff of `OAuthConsentView.vue` and `SettingsView.vue`: class and logo changes only (the consent card now shows the app logo); every step and label this doc names is unchanged. Earlier, 2026-11-07: partial. §1.2's hold: the live archive has no document with source `mcp`; the output-length limit is reasoning, not measured. The mcp 1.30 point: the guard test on 1.28.1 (pass) and 1.30.0 (`413`) (journal 261107-dependabot-alerts). The rest carries forward journal 261107-library-followups-run-closed.
 **Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, src/library/mcp_rejected_log.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py, src/library/notes_service.py, src/library/document_reads.py, src/library/search.py, src/library/ask/context.py, src/library/structured_query.py, src/library/filter_vocabulary.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -215,10 +215,14 @@ clients are not supported.
     the `413`.
 - **mcp stays on 1.28.1, too.** mcp 1.30 backports the same 4 MiB cap, and
   fastmcp 3.4.11 builds its session manager without a size, so raising it
-  would mean patching fastmcp and mcp internals. The four advisories 1.30
+  would mean patching fastmcp and mcp internals. The five advisories 1.30
   fixes don't reach this server: it runs stateless (no sessions to pile up),
-  its authorization server issues tokens only for itself, and two are
-  client-side. mcp 1.30 also turns the SDK's `/authorize` endpoint into an
+  its authorization server issues tokens only for itself, and three are
+  client-side. The high-rated one (GHSA-qx49-fqc8-xw99, 2026-11-20) is in the
+  OAuth client, which Library uses only in `tests/test_mcp_oauth.py`, and the
+  advisory names SDK-built servers as not affected. The five Dependabot
+  alerts are dismissed as tolerable risk with a pointer here, so a new mcp
+  alert stands out. A new one gets the same check: does it reach a server? mcp 1.30 also turns the SDK's `/authorize` endpoint into an
   ASGI app, which the binding-cookie wrapper in `auth/oauth_provider.py`
   would have to follow. `test_ingest_accepts_a_request_body_over_4_mib`
   (`tests/test_mcp.py`) fails with `413` under any SDK that caps the body.
