@@ -1,7 +1,7 @@
 # Frontend
 
-**Status:** active. **Last updated:** 2026-11-22 (the dashboard layouts trial in §1.2, the views table, the fields picker in §1.5 and the e2e spec list). 2026-11-22 (the colour guard's coverage, `--shadow-sm`, the spending band order, `periods.ts`, `formatTick` and the chart's stub and tooltip). 2026-11-21 (the Quiet design system: §1.2 rewritten for the generated tokens and role utilities; §1.3, §1.4, the views table, the spending palette, §1.6, §1.6.1 and §1.7 follow the new colours, icon and guards). Earlier entries are in this file's history.
-**Last verified:** 2026-11-22 — method: partial, the dashboard layouts bullet, views-table row, fields picker and e2e list re-read against `DocumentListView.vue`, `components/documents/*` and `e2e/dashboard-layouts.spec.ts` in the working tree, and the layouts checked against the running app (each layout at 375/656/768/1024/1280/1440px, sidebar open and closed) and `e2e/dashboard-layouts.spec.ts` on three projects. Earlier the same day, the sentences that edit touched re-read against `no-raw-colour.spec.ts`, `main.css`, `palette.ts`, `periods.ts`, `money.ts` and `SpendingChart.vue` in the working tree. 2026-11-21 — partial, scoped to the styling claims that edit touched. Each class, file and test named was read in the working tree (`main.css`, `tokens.css`, `utility-patterns.css`, the `App*` components, `AppLogo.vue`, `splitPalette.ts`, the guard specs). Behaviour outside styling carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-22 (the dashboard layouts trial in §1.2, the views table, the fields picker in §1.5, the dashboard popovers' alignment and the e2e spec list). 2026-11-22 (the colour guard's coverage, `--shadow-sm`, the spending band order, `periods.ts`, `formatTick` and the chart's stub and tooltip). 2026-11-21 (the Quiet design system: §1.2 rewritten for the generated tokens and role utilities; §1.3, §1.4, the views table, the spending palette, §1.6, §1.6.1 and §1.7 follow the new colours, icon and guards). Earlier entries are in this file's history.
+**Last verified:** 2026-11-22 — method: partial, the dashboard layouts bullet, views-table row, fields picker, popover alignment and e2e list re-read against `SaveViewMenu.vue`, `DashboardFieldsMenu.vue`, `AppPopover.vue`, `DocumentListView.vue`, `components/documents/*` and `e2e/dashboard-layouts.spec.ts` in the working tree, and the layouts checked against the running app (each layout at 375/656/768/1024/1280/1440px, sidebar open and closed) and `e2e/dashboard-layouts.spec.ts` on three projects. Earlier the same day, the sentences that edit touched re-read against `no-raw-colour.spec.ts`, `main.css`, `palette.ts`, `periods.ts`, `money.ts` and `SpendingChart.vue` in the working tree. 2026-11-21 — partial, scoped to the styling claims that edit touched. Each class, file and test named was read in the working tree (`main.css`, `tokens.css`, `utility-patterns.css`, the `App*` components, `AppLogo.vue`, `splitPalette.ts`, the guard specs). Behaviour outside styling carries its earlier verifications forward.
 **Covers:** frontend/src/views/, frontend/src/router/index.ts, frontend/src/components/, frontend/src/spending/, frontend/src/composables/, frontend/src/utils/contentDisposition.ts, frontend/src/utils/documentFields.ts, frontend/src/assets/, frontend/src/utils/splitPalette.ts, frontend/public/manifest.webmanifest, frontend/public/favicon.svg, frontend/public/app-icon.svg, frontend/scripts/build-app-icons.sh, frontend/index.html, frontend/e2e/a11y.spec.ts
 
 The Library web UI: a Vue 3 single-page app on Library's design system, Quiet,
@@ -568,8 +568,12 @@ API's own default (`document_date`), `buildFilters` **always sends `sort` +
 from `hasActiveFilters`** (it is not a filter). While a search query is active
 the control is disabled, because the backend orders by relevance rank when `q`
 is present. The **Fields** button (§ dashboard fields picker) sits in this same
-right-aligned controls row, alongside the tiles-per-row select and a **Saved
-views** link (`[data-testid="manage-saved-views-link"]` → `/saved-views`).
+right-aligned controls row, alongside the Layout and tiles-per-row selects and a
+**Saved views** link (`[data-testid="manage-saved-views-link"]` → `/saved-views`).
+The row wraps on narrow screens, so the Fields and Save view popovers use
+`AppPopover`'s `align="auto"`: a button in the left half of the screen opens its
+panel rightward, one in the right half leftward. Below `sm` both are a bottom
+sheet (`max-sm:inset-x-2`).
 
 ### Dashboard "Needs review" affordance (`DocumentListView.vue`)
 

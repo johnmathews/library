@@ -43,9 +43,9 @@ watch(open, (isOpen) => {
 <template>
   <AppPopover
     :open="open"
-    align="none"
+    align="auto"
     :panel-attrs="{ role: 'dialog', 'aria-label': 'Fields', 'data-testid': 'dashboard-fields-panel' }"
-    panel-class="p-3 fixed inset-x-2 bottom-2 max-h-[80vh] overflow-y-auto sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mt-1 sm:w-64 sm:max-w-[calc(100vw-1rem)] sm:max-h-none sm:overflow-visible"
+    panel-class="p-3 fixed max-sm:inset-x-2 bottom-2 max-h-[80vh] overflow-y-auto sm:absolute sm:bottom-auto sm:top-full sm:mt-1 sm:w-64 sm:max-w-[calc(100vw-1rem)] sm:max-h-none sm:overflow-visible"
     @update:open="open = $event"
   >
     <template #trigger="{ open: isOpen, toggle, triggerRef }">

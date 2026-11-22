@@ -62,6 +62,14 @@ fix (confirmed):
   table was ever visible for a frame is not known: the observer normally reports before paint
   (suspected, not observed).
 
+The full local e2e run (five projects, a fresh stack) then failed one test that this change
+caused (confirmed): `saved-views.spec.ts` on the tablet project. The Layout select made the
+dashboard's controls row wrap differently at 656px, which put **Save view** at the start of the
+second line. Its popover was pinned to the button's right edge, so it opened 49px off the left of
+the screen. The Fields and Save view popovers now use `AppPopover`'s `align="auto"`, the rule the
+filter pills already follow. Measured afterwards, both panels sat inside the screen at 390, 656, 768,
+1024 and 1280px, under tiles and under the table.
+
 ## 5. What is deliberately not done
 
 - **No hysteresis at the threshold.** The review suspected the table and list could alternate on
