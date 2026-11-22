@@ -23,8 +23,10 @@ const router = useRouter()
 
 function openFromRow(event: MouseEvent, item: DocumentListItem): void {
   // The link handles its own clicks (including cmd/ctrl-click to a new tab);
-  // a text selection is not a click to open.
+  // a modified click elsewhere on the row is not a plain "open here", and a
+  // text selection is not a click to open.
   if ((event.target as HTMLElement).closest('a')) return
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
   if (window.getSelection()?.toString()) return
   void router.push({ name: 'document-detail', params: { id: item.id }, query: props.detailQuery })
 }

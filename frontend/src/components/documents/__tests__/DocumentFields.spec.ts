@@ -11,7 +11,7 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
     title: 'Water bill',
     summary: null,
     kind: { slug: 'invoice', name: 'Invoice' },
-    sender: { id: 3, name: 'Vitens' },
+    sender: { id: 3, name: 'Waterbedrijf Noord' },
     recipient: null,
     tags: [],
     projects: [],
@@ -48,8 +48,8 @@ function fieldsRow(
 describe('DocumentFields', () => {
   it('renders the chosen fields in the chosen order', () => {
     const text = fieldsRow(['amount', 'sender', 'kind']).text()
-    expect(text.indexOf('€12.50')).toBeLessThan(text.indexOf('Vitens'))
-    expect(text.indexOf('Vitens')).toBeLessThan(text.indexOf('Invoice'))
+    expect(text.indexOf('€12.50')).toBeLessThan(text.indexOf('Waterbedrijf Noord'))
+    expect(text.indexOf('Waterbedrijf Noord')).toBeLessThan(text.indexOf('Invoice'))
   })
 
   it('leaves out fields that are not chosen', () => {

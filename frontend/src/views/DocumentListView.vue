@@ -365,15 +365,22 @@ const gridColsStyle = computed<Record<string, string>>(() => ({
 // Tiles, rows, table or list (composables/useDashboardLayout.ts), chosen per
 // machine. The table needs room, more with each field column, so where the
 // results area is narrower than `tableMinWidth` it renders as the list. The area is measured rather than the
-// viewport, because it is the viewport minus the sidebar. Before the first
-// measurement (and in jsdom, which has no layout) the width reads 0; that
-// counts as wide, so nothing flips on an unmeasured element.
+// viewport, because it is the viewport minus the sidebar. The results unmount
+// while a new filter loads, and a remounted element reads 0 until it is
+// measured again, so the last real measurement is kept: otherwise a narrow
+// area would draw the table before switching back to the list on every
+// filter change. Before any measurement (and in jsdom, which has no layout)
+// the width is 0, which counts as wide.
 const resultsEl = ref<HTMLElement | null>(null)
 const { width: resultsWidth } = useElementSize(resultsEl)
+const measuredResultsWidth = ref(0)
+watch(resultsWidth, (width) => {
+  if (width > 0) measuredResultsWidth.value = width
+})
 const resultsAreWide = computed<boolean>(
   () =>
-    resultsWidth.value === 0 ||
-    resultsWidth.value >= tableMinWidth(auth.dashboardFields.length),
+    measuredResultsWidth.value === 0 ||
+    measuredResultsWidth.value >= tableMinWidth(auth.dashboardFields.length),
 )
 const { layout, effectiveLayout } = useDashboardLayout(resultsAreWide)
 

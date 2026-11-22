@@ -1469,6 +1469,65 @@ describe('DocumentListView', () => {
       expect(router.currentRoute.value.fullPath).toBe('/documents/13')
     })
 
+    it('ignores a modified click on a table row, leaving it to the browser', async () => {
+      twoDocs()
+      localStorage.setItem('library:doc-layout', 'table')
+      const w = await mountView()
+      const cell = w.findAll('[data-testid="doc-table"] tbody tr')[1]!.findAll('td')[1]!
+      for (const modifier of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey'] as const) {
+        await cell.trigger('click', { [modifier]: true })
+        await flushPromises()
+        expect(router.currentRoute.value.fullPath).toBe('/')
+      }
+    })
+
+    it('keeps a narrow area on the list while new results load', async () => {
+      // jsdom has no layout, so drive the results area's ResizeObserver by hand.
+      const observers: { cb: ResizeObserverCallback; targets: Element[] }[] = []
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          private entry: { cb: ResizeObserverCallback; targets: Element[] }
+          constructor(cb: ResizeObserverCallback) {
+            this.entry = { cb, targets: [] }
+            observers.push(this.entry)
+          }
+          observe(el: Element): void {
+            this.entry.targets.push(el)
+          }
+          unobserve(): void {}
+          disconnect(): void {
+            this.entry.targets = []
+          }
+        },
+      )
+      const resize = (w: VueWrapper, width: number): void => {
+        const el = w.find('[data-testid="dashboard-results"]').element
+        for (const o of observers.filter((o) => o.targets.includes(el)))
+          o.cb([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver)
+      }
+      // (afterEach unstubs it.)
+      twoDocs()
+      localStorage.setItem('library:doc-layout', 'table')
+      const w = await mountView()
+      const shown = (): string | undefined =>
+        w.find('[data-testid="dashboard-results"]').attributes('data-layout')
+      resize(w, 400)
+      await flushPromises()
+      expect(shown()).toBe('list')
+
+      // A new filter unmounts the results while it loads; the remounted area
+      // has not been measured yet, and must not draw the table meanwhile.
+      await router.push('/?tag=energie')
+      await flushPromises()
+      expect(w.find('[data-testid="dashboard-results"]').exists()).toBe(true)
+      expect(shown()).toBe('list')
+
+      resize(w, 1200)
+      await flushPromises()
+      expect(shown()).toBe('table')
+    })
+
     it('draws the type colour as a band on rows and a dot in the list', async () => {
       twoDocs()
       localStorage.setItem('library:doc-layout', 'rows')
