@@ -1,0 +1,288 @@
+<title>Empty months, axis money and the last raw colours</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="tokens.css">
+<style>
+  body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); }
+  .mockup-page {
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: var(--space-8, 32px) var(--space-16, 64px);
+    max-width: 1200px; margin: 0 auto; display: grid; gap: var(--space-12, 48px);
+  }
+  .mockup-head { display: grid; gap: var(--space-2, 8px); max-width: 70ch; }
+  .mockup-head h1, .option h2, .question h2 { margin: 0; text-wrap: balance; }
+  .mockup-head p, .option p, .question > p { margin: 0; }
+  .mockup-meta { color: var(--ink-secondary); }
+  .question { display: grid; gap: var(--space-6, 24px); border-top: 1px solid var(--line); padding-top: var(--space-6, 24px); }
+  .question > p { max-width: 75ch; }
+  .option { display: grid; gap: var(--space-4, 16px); }
+  .option-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2, 8px) var(--space-3, 12px); }
+  .option-tag { color: var(--ink-secondary); }
+  .option[data-recommended] .option-tag::after { content: " · Recommended"; color: var(--ink); }
+  .panes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: var(--space-4, 16px); }
+  .pane { min-width: 0; background: var(--canvas); color: var(--ink); border: 1px solid var(--line);
+          border-radius: var(--radius-lg, 10px); padding: var(--space-4, 16px); overflow-x: auto; }
+  .pane-label { color: var(--ink-secondary); margin: 0 0 var(--space-3, 12px); }
+  .measures { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-2, 8px); }
+  .measures li { border: 1px solid var(--line); border-radius: var(--radius-sm, 4px); padding: 2px var(--space-2, 8px); font-variant-numeric: tabular-nums; }
+  .measures li[data-pass="no"] { border-color: currentColor; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  /* The spending card, from ChartStyle/preview.html. */
+  .lb-card { background: var(--panel); border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: var(--space-5) 22px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+  .lb-card h3 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 650; }
+  .lb-sub { margin: -10px 0 0; color: var(--ink-secondary); font-size: 13px; line-height: 18px; }
+  .lb-total { margin: 0; font-size: 22px; line-height: 28px; font-weight: 650; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .lb-chart svg { width: 100%; max-width: 520px; height: auto; display: block; }
+  .lb-chart text { fill: var(--ink-secondary); font-size: 11px; font-family: var(--font-sans); font-variant-numeric: tabular-nums; }
+  .lb-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; list-style: none; font-size: 13px; line-height: 18px; color: var(--ink-secondary); }
+  .lb-legend li { display: inline-flex; align-items: center; gap: 6px; }
+  .lb-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
+  .lb-legend b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .lb-foot { margin: 0; font-size: 13px; line-height: 18px; color: var(--ink-secondary); }
+  @media (max-width: 640px) { .lb-card { padding: var(--space-4); } }
+
+  /* A note in the app's markdown styles (NoteEditorPanel, NewNoteView, the admin architecture page). */
+  .note { background: var(--panel); border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: var(--space-5); font-size: 14px; line-height: 21px; }
+  .note p { margin: 0 0 0.5rem; }
+  .note code { font-family: var(--font-mono); font-size: 0.875em; padding: 0.1em 0.3em; border-radius: 0.25rem; background: var(--md-fill); }
+  .note pre { margin: 0.75rem 0; padding: 0.75rem 1rem; border-radius: 0.5rem; background: var(--md-fill); overflow-x: auto; }
+  .note pre code { padding: 0; background: none; }
+  .note table { border-collapse: collapse; font-size: 0.9375em; margin: 0.75rem 0; }
+  .note th, .note td { border: 1px solid var(--md-border); padding: 0.375rem 0.625rem; text-align: left; }
+  .note th { font-weight: 600; background: var(--md-head); }
+  .scroller { height: 96px; overflow-y: scroll; margin-top: var(--space-3); padding-right: 4px; color: var(--ink-secondary); font-size: 13px; line-height: 20px;
+              scrollbar-width: thin; scrollbar-color: var(--md-thumb) transparent; }
+  .scroller::-webkit-scrollbar { width: 8px; }
+  .scroller::-webkit-scrollbar-track { background: transparent; }
+  .scroller::-webkit-scrollbar-thumb { background-color: var(--md-thumb); border-radius: 9999px; }
+  .scroller p { margin: 0; }
+
+  /* Today: translucent black or white, a hand-written twin per theme. Shown for comparison only. */
+  #today, #today [data-theme="light"] { --md-fill: rgb(0 0 0 / 0.06); --md-border: rgb(0 0 0 / 0.12); --md-head: rgb(0 0 0 / 0.04); --md-thumb: rgb(0 0 0 / 0.2); }
+  #today [data-theme="dark"] { --md-fill: rgb(255 255 255 / 0.08); --md-border: rgb(255 255 255 / 0.15); --md-head: rgb(255 255 255 / 0.06); --md-thumb: rgb(255 255 255 / 0.2); }
+  /* Colours A: existing roles, nothing new. */
+  #ca, #ca [data-theme] { --md-fill: var(--tile); --md-border: var(--line); --md-head: var(--tile); --md-thumb: var(--quiet); }
+  /* Colours B: today's look, derived from ink so it follows the theme by itself. */
+  #cb, #cb [data-theme] { --md-fill: color-mix(in srgb, var(--ink) 7%, transparent); --md-border: color-mix(in srgb, var(--ink) 14%, transparent); --md-head: color-mix(in srgb, var(--ink) 5%, transparent); --md-thumb: color-mix(in srgb, var(--ink) 22%, transparent); }
+</style>
+
+<main class="mockup-page">
+  <header class="mockup-head">
+    <p class="type-caption mockup-meta">Mockup · 2026-11-22 · Library · issues #235 and #236</p>
+    <h1 class="type-display">Empty months, axis money and the last raw colours</h1>
+    <p class="type-body">Three small questions. The ChartStyle card promises a stub for an empty month and euro ticks that the chart doesn't draw, so either the chart learns them or the card drops them. And 23 colours are still written as <code>rgb()</code> (markdown code, tables and the thin scrollbar), which the tightened colour guard will refuse. Everything else on the chart and the notes stays as it is. All figures here are made up.</p>
+  </header>
+
+  <!-- ===================== Question 1 ===================== -->
+  <section class="question" aria-labelledby="q1">
+    <h2 class="type-title-1" id="q1">1. A month with no documents</h2>
+    <p class="type-body">Today the chart builds its axis from the months that have documents, so an empty August is simply not there: July and September sit side by side and the gap is invisible. The card wants the month kept, with a 3px stub in <code>quiet</code>.</p>
+
+    <section class="option" id="e1" data-recommended aria-labelledby="e1-h">
+      <div class="option-head"><h3 class="type-title-2" id="e1-h">A. Keep the month, draw the stub</h3><span class="type-label option-tag">Option A</span></div>
+      <p class="type-body">Every month from the first to the last on the axis, and a 3px <code>quiet</code> stub where there is nothing. The card stays as written. Works the same for weeks, quarters and years.</p>
+      <div class="panes">
+        <div class="pane" data-theme="light"><p class="type-label pane-label">Light</p><div data-chart="split" data-gaps="stub" data-ticks="code"></div></div>
+        <div class="pane" data-theme="dark"><p class="type-label pane-label">Dark</p><div data-chart="split" data-gaps="stub" data-ticks="code"></div></div>
+      </div>
+      <ul class="measures type-caption">
+        <li data-fg="var(--quiet)" data-bg="var(--panel)" data-min="3">Stub on the card</li>
+      </ul>
+      <p class="type-caption mockup-meta">The stub is below 3:1 in light. It is not the only signal: the month's label stays on the axis and its bar is empty. It is the card's existing pick; the stub could use <code>control-border</code> (the zero line's colour) instead, which clears 3:1 but merges into the zero line.</p>
+    </section>
+
+    <section class="option" id="e2" aria-labelledby="e2-h">
+      <div class="option-head"><h3 class="type-title-2" id="e2-h">B. Keep the month, leave it empty</h3><span class="type-label option-tag">Option B</span></div>
+      <p class="type-body">The month stays on the axis with nothing drawn. The gap is honest but reads like a missing bar. The card drops the stub.</p>
+      <div class="panes">
+        <div class="pane" data-theme="light"><p class="type-label pane-label">Light</p><div data-chart="split" data-gaps="blank" data-ticks="code"></div></div>
+        <div class="pane" data-theme="dark"><p class="type-label pane-label">Dark</p><div data-chart="split" data-gaps="blank" data-ticks="code"></div></div>
+      </div>
+    </section>
+
+    <section class="option" id="e3" aria-labelledby="e3-h">
+      <div class="option-head"><h3 class="type-title-2" id="e3-h">C. As today: the month is not on the axis</h3><span class="type-label option-tag">Option C</span></div>
+      <p class="type-body">No change to the chart; the card drops the stub. July and September touch, so six months of spending can look like five.</p>
+      <div class="panes">
+        <div class="pane" data-theme="light"><p class="type-label pane-label">Light</p><div data-chart="split" data-gaps="skip" data-ticks="code"></div></div>
+        <div class="pane" data-theme="dark"><p class="type-label pane-label">Dark</p><div data-chart="split" data-gaps="skip" data-ticks="code"></div></div>
+      </div>
+    </section>
+  </section>
+
+  <!-- ===================== Question 2 ===================== -->
+  <section class="question" aria-labelledby="q2">
+    <h2 class="type-title-1" id="q2">2. Money on the axis</h2>
+    <p class="type-body">Today the y-axis shows bare numbers. The card asks for "€200" and "−€100", but every other figure in the app reads "EUR 991.00", on purpose: the chart's display currency is a setting, and a symbol suggests the documents were in it (<code>spending/money.ts</code>). The card's own totals and legend use € too, so whichever is picked, the card's figures change to match the app.</p>
+
+    <section class="option" id="t1" data-recommended aria-labelledby="t1-h">
+      <div class="option-head"><h3 class="type-title-2" id="t1-h">A. The currency code: "EUR 200", "−EUR 100"</h3><span class="type-label option-tag">Option A</span></div>
+      <p class="type-body">One money format on the whole card, the headline's. Wider labels, so the plot area is about 16px narrower.</p>
+      <div class="panes">
+        <div class="pane" data-theme="light"><p class="type-label pane-label">Light</p><div data-chart="refund" data-gaps="stub" data-ticks="code"></div></div>
+        <div class="pane" data-theme="dark"><p class="type-label pane-label">Dark</p><div data-chart="refund" data-gaps="stub" data-ticks="code"></div></div>
+      </div>
+      <ul class="measures type-caption">
+        <li data-fg="var(--ink-secondary)" data-bg="var(--panel)" data-min="4.5">Tick labels on the card</li>
+      </ul>
+    </section>
+
+    <section class="option" id="t2" aria-labelledby="t2-h">
+      <div class="option-head"><h3 class="type-title-2" id="t2-h">B. The symbol: "€200", "−€100"</h3><span class="type-label option-tag">Option B</span></div>
+      <p class="type-body">The card as written: compact, but the axis says € while the headline above it says EUR. Other display currencies would fall back to their code.</p>
+      <div class="panes">
+        <div class="pane" data-theme="light"><p class="type-label pane-label">Light</p><div data-chart="refund" data-gaps="stub" data-ticks="symbol"></div></div>
+        <div class="pane" data-theme="dark"><p class="type-label pane-label">Dark</p><div data-chart="refund" data-gaps="stub" data-ticks="symbol"></div></div>
+      </div>
+    </section>
+
+    <section class="option" id="t3" aria-labelledby="t3-h">
+      <div class="option-head"><h3 class="type-title-2" id="t3-h">C. Bare numbers, as today: "200", "−100"</h3><span class="type-label option-tag">Option C</span></div>
+      <p class="type-body">The headline names the currency once; the axis carries only the scale. The card drops the euro ticks.</p>
+      <div class="panes">
+        <div class="pane" data-theme="light"><p class="type-label pane-label">Light</p><div data-chart="refund" data-gaps="stub" data-ticks="bare"></div></div>
+        <div class="pane" data-theme="dark"><p class="type-label pane-label">Dark</p><div data-chart="refund" data-gaps="stub" data-ticks="bare"></div></div>
+      </div>
+    </section>
+  </section>
+
+  <!-- ===================== Question 3 ===================== -->
+  <section class="question" aria-labelledby="q3">
+    <h2 class="type-title-1" id="q3">3. Markdown code, tables and the thin scrollbar</h2>
+    <p class="type-body">These are the last colours written as <code>rgb()</code>, each with a hand-written dark twin. They move onto the system either way; the question is whether the look shifts to existing roles or stays as it is today.</p>
+
+    <section class="option" id="today" aria-labelledby="today-h">
+      <div class="option-head"><h3 class="type-title-2" id="today-h">Today, for comparison</h3><span class="type-label option-tag">Not an option</span></div>
+      <div class="panes">
+        <div class="pane" data-theme="light"><p class="type-label pane-label">Light</p><div data-note></div></div>
+        <div class="pane" data-theme="dark"><p class="type-label pane-label">Dark</p><div data-note></div></div>
+      </div>
+    </section>
+
+    <section class="option" id="ca" data-recommended aria-labelledby="ca-h">
+      <div class="option-head"><h3 class="type-title-2" id="ca-h">A. Existing roles: <code>tile</code>, <code>line</code>, <code>quiet</code></h3><span class="type-label option-tag">Option A</span></div>
+      <p class="type-body">Code and header cells on <code>tile</code> (the same fill as a document tile), table borders in <code>line</code>, the scrollbar thumb in <code>quiet</code>. No new token; a little firmer than today in light, about the same in dark.</p>
+      <div class="panes">
+        <div class="pane" data-theme="light"><p class="type-label pane-label">Light</p><div data-note></div></div>
+        <div class="pane" data-theme="dark"><p class="type-label pane-label">Dark</p><div data-note></div></div>
+      </div>
+      <ul class="measures type-caption">
+        <li data-fg="var(--ink)" data-bg="var(--tile)" data-min="4.5">Code text on tile</li>
+        <li data-fg="var(--quiet)" data-bg="var(--panel)">Scrollbar thumb on the card</li>
+      </ul>
+    </section>
+
+    <section class="option" id="cb" aria-labelledby="cb-h">
+      <div class="option-head"><h3 class="type-title-2" id="cb-h">B. Today's look, mixed from <code>ink</code></h3><span class="type-label option-tag">Option B</span></div>
+      <p class="type-body">The same translucent tints, written once as <code>color-mix(var(--ink) 7%, transparent)</code> so they follow the theme without a dark twin. Looks like today; the guard would allow <code>color-mix()</code> of a role.</p>
+      <div class="panes">
+        <div class="pane" data-theme="light"><p class="type-label pane-label">Light</p><div data-note></div></div>
+        <div class="pane" data-theme="dark"><p class="type-label pane-label">Dark</p><div data-note></div></div>
+      </div>
+    </section>
+  </section>
+</main>
+
+<script>
+  // Spending charts in the card's drawing (ChartStyle/preview.html), parameterised by the question.
+  (() => {
+    const MONTHS = ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov']
+    const SPLIT = { // per month: [category-1, category-2, other]; null = no documents
+      Jun: [94, 31, 22], Jul: [92, 31, 0], Aug: null, Sep: [97, 33, 40], Oct: [99, 31, 12], Nov: [103, 31, 49],
+    }
+    const REFUND = { Jun: [124], Jul: [49], Aug: null, Sep: [141], Oct: [97, -40], Nov: [159] }
+    const minus = '−'
+    const tick = (v, mode) => {
+      const sign = v < 0 ? minus : ''
+      const n = Math.abs(v).toLocaleString('en-GB')
+      return mode === 'code' ? `${sign}EUR ${n}` : mode === 'symbol' ? `${sign}€${n}` : `${sign}${n}`
+    }
+    const fill = (v) => `style="fill:var(${v})"`
+    function draw(el) {
+      const kind = el.dataset.chart, gaps = el.dataset.gaps, ticks = el.dataset.ticks
+      const data = kind === 'split' ? SPLIT : REFUND
+      const months = gaps === 'skip' ? MONTHS.filter((m) => data[m]) : MONTHS
+      const left = ticks === 'code' ? 62 : ticks === 'symbol' ? 46 : 38
+      const W = 380, plotW = W - left, top = 16
+      const scale = kind === 'split' ? 0.8 : 0.6 // px per euro
+      const max = kind === 'split' ? 200 : 200, min = kind === 'split' ? 0 : -50
+      const zero = top + max * scale
+      const H = zero - min * scale + 28
+      const step = plotW / months.length, bw = 26
+      let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Spending per month, June to November">`
+      const lines = kind === 'split' ? [0, 100, 200] : [-50, 0, 100, 200]
+      for (const v of lines) {
+        const y = zero - v * scale
+        s += `<line x1="${left}" x2="${W}" y1="${y}" y2="${y}" style="stroke:var(${v === 0 ? '--control-border' : '--chart-grid'})"/>`
+        s += `<text x="${left - 8}" y="${y + 4}" text-anchor="end">${tick(v, ticks)}</text>`
+      }
+      months.forEach((m, i) => {
+        const x = left + i * step + (step - bw) / 2
+        const vals = data[m]
+        if (!vals) {
+          if (gaps === 'stub') s += `<rect x="${x}" y="${zero - 3}" width="${bw}" height="3" rx="1.5" ${fill('--quiet')}/>`
+        } else if (kind === 'split') {
+          let y = zero
+          vals.forEach((v, j) => {
+            if (!v) return
+            const h = v * scale
+            y -= h
+            s += `<rect x="${x}" y="${y}" width="${bw}" height="${h - 2}" ${fill(['--category-1', '--category-2', '--category-other'][j])}/>`
+            y -= 0
+          })
+        } else {
+          const [pos, neg] = vals
+          s += `<rect x="${x}" y="${zero - pos * scale}" width="${bw}" height="${pos * scale - 1}" rx="3" ${fill('--chart-spending')}/>`
+          if (neg) s += `<rect x="${x}" y="${zero + 1}" width="${bw}" height="${-neg * scale}" rx="3" ${fill('--chart-income')}/>`
+        }
+        s += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${m}</text>`
+      })
+      s += '</svg>'
+      const head = kind === 'split'
+        ? `<h3>Energy and water</h3><p class="lb-sub">How much goes to energy and water each month?</p><p class="lb-total">EUR 991.00</p>`
+        : `<h3>Household repairs</h3><p class="lb-sub">How much goes to repairs each month?</p><p class="lb-total">EUR 530.00</p>`
+      const legend = kind === 'split'
+        ? `<ul class="lb-legend"><li><i style="background:var(--category-1)"></i>Energiebedrijf Noord <b>EUR 485.00</b></li><li><i style="background:var(--category-2)"></i>Waterbedrijf West <b>EUR 157.00</b></li><li><i style="background:var(--category-other)"></i>Other (2) <b>EUR 123.00</b></li></ul>`
+        : `<ul class="lb-legend"><li><i style="background:var(--chart-spending)"></i>Spent <b>EUR 570.00</b></li><li><i style="background:var(--chart-income)"></i>Refunded <b>+EUR 40.00</b></li></ul>`
+      el.innerHTML = `<section class="lb-card lb-chart">${head}${s}${legend}<p class="lb-foot">Refunds are subtracted. Each payment counts once, even when several documents show it.</p></section>`
+    }
+    document.querySelectorAll('[data-chart]').forEach(draw)
+
+    const NOTE = `<div class="note">
+      <p>Call with the plumber, 14 Nov 2026. The boiler code was <code>F28</code>, a gas-supply fault, not the pump.</p>
+      <pre><code>Visit 1   14 Nov   diagnosis
+Visit 2   21 Nov   new gas valve</code></pre>
+      <table><thead><tr><th>Part</th><th>Price</th></tr></thead><tbody><tr><td>Gas valve</td><td>EUR 86.00</td></tr><tr><td>Labour, 1 hour</td><td>EUR 65.00</td></tr></tbody></table>
+      <div class="scroller">${Array.from({ length: 10 }, (_, i) => `<p>Conversation line ${i + 1}: a scroll region with the thin scrollbar.</p>`).join('')}</div>
+    </div>`
+    document.querySelectorAll('[data-note]').forEach((el) => { el.innerHTML = NOTE })
+  })();
+
+  // Measures (from the mockup skeleton).
+  (() => {
+    const rgb = (value, scope, theme) => {
+      const probe = document.createElement('span')
+      probe.dataset.theme = theme
+      probe.style.color = value
+      scope.append(probe)
+      const parts = getComputedStyle(probe).color.match(/[\d.]+/g).map(Number)
+      probe.remove()
+      return parts.slice(0, 3)
+    }
+    const lum = ([r, g, b]) => [r, g, b]
+      .map((c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4 })
+      .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0)
+    const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05) }
+    for (const li of document.querySelectorAll('.measures li[data-fg]')) {
+      const scope = li.closest('.option') || document.body
+      const min = Number(li.dataset.min || 0)
+      const results = ['light', 'dark'].map((theme) => {
+        const r = ratio(rgb(li.dataset.fg, scope, theme), rgb(li.dataset.bg, scope, theme))
+        return { theme, r, ok: !min || r >= min }
+      })
+      li.dataset.pass = results.every((x) => x.ok) ? 'yes' : 'no'
+      li.append(`: ${results.map((x) => `${x.theme} ${x.r.toFixed(1)}:1${x.ok ? '' : ' (below ' + min + ':1)'}`).join(', ')}`)
+    }
+  })()
+</script>

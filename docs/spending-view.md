@@ -1,7 +1,7 @@
 # The spending view
 
-**Status:** active. **Last updated:** 2026-11-21 (§7: five palette slots from the design system's `category-1` to `category-5`, with the fold after five). Earlier entries are in this file's history.
-**Last verified:** 2026-11-21 — method: partial, scoped to §7. Read `utils/splitPalette.ts` (`SPLIT_PALETTE`, `OTHER_COLOUR`, `chartColour()`) and `spending/palette.ts` (`MAX_BANDS`) in the working tree. §§1-6 and 8-9 were not re-checked.
+**Status:** active. **Last updated:** 2026-11-22 (§4: empty periods stay on the axis with a stub; y ticks as money; band order and the whole-bar tooltip; the chart's text sizes; §7: the stub's colour). Earlier entries are in this file's history.
+**Last verified:** 2026-11-22 — method: partial, scoped to the chart paragraphs of §4 and to §7. Read `SpendingChart.vue`, `spending/periods.ts`, `spending/palette.ts` (band order) and `spending/money.ts` (`formatTick`) and their specs in the working tree. Other sections were not re-checked.
 **Covers:** frontend/src/views/SpendingWorkspaceView.vue, frontend/src/views/SpendingBoardView.vue, frontend/src/components/spending/, src/library/api/spending.py
 
 > **Note on examples.** This repository is public. Every sender, category and
@@ -102,9 +102,22 @@ The chart is a **stacked bar** per period. The stack's height is the total,
 and that total does not change when you turn the split on or off — that
 invariance is the point: slicing the money differently must never change how
 much of it there is. The y-axis always includes zero, because a refund can
-push a bucket below the line.
+push a bucket below the line. Its ticks are money in the chart's currency:
+`EUR 200`, `−EUR 100`.
 
-**The legend** names every split value with its total. Clicking one **isolates**
+**A period with no documents** keeps its place on the axis and shows a 3px
+stub at the zero line, so a gap reads as empty rather than vanishing. The API
+sends no cell for such a period, so the chart fills every period from the
+first to the last at the chart's grain (`spending/periods.ts`). The stub has no
+tooltip and opens nothing when clicked.
+
+Bands are stacked **largest first from the baseline**, by their total over the
+range, with Other on top. Hovering a bar lists every band with money in that
+period, top segment first so the list reads like the bar, then the bar's
+total. The chart's text follows the type scale: ticks at 12.5px, the smallest
+text in the app, and the tooltip at 14px, both in the app's font.
+
+**The legend** names every split value with its total, largest first. Clicking one **isolates**
 it; modifier-clicking **excludes** it. This is a display filter only — the
 headline stays the number the archive reported, and a separate line tells you
 what you are currently looking at. An isolate that quietly rewrote the headline
@@ -239,6 +252,9 @@ Past five values, the smallest are folded into a single **Other (N)** band in
 `category-other`.
 The fold never changes the total — it is a grouping, not an omission — and
 clicking it shows what went into it, with each value clickable in turn.
+
+The stub for a period with no documents is `quiet`, the colour of nothing to
+read; it is not a band and never takes a slot.
 
 If you want a specific colour for a specific value, set it in the vocabulary
 panel; a stored colour always wins.

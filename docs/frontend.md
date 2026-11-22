@@ -1,7 +1,7 @@
 # Frontend
 
-**Status:** active. **Last updated:** 2026-11-21 (the Quiet design system: §1.2 rewritten for the generated tokens and role utilities; §1.3, §1.4, the views table, the spending palette, §1.6, §1.6.1 and §1.7 follow the new colours, icon and guards). Earlier entries are in this file's history.
-**Last verified:** 2026-11-21 — method: partial, scoped to the styling claims this edit touched. Each class, file and test named was read in the working tree (`main.css`, `tokens.css`, `utility-patterns.css`, the `App*` components, `AppLogo.vue`, `splitPalette.ts`, the guard specs). Behaviour outside styling carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-22 (the colour guard's coverage, `--shadow-sm`, the spending band order, `periods.ts`, `formatTick` and the chart's stub and tooltip). 2026-11-21 (the Quiet design system: §1.2 rewritten for the generated tokens and role utilities; §1.3, §1.4, the views table, the spending palette, §1.6, §1.6.1 and §1.7 follow the new colours, icon and guards). Earlier entries are in this file's history.
+**Last verified:** 2026-11-22 — method: partial, the sentences this edit touched re-read against `no-raw-colour.spec.ts`, `main.css`, `palette.ts`, `periods.ts`, `money.ts` and `SpendingChart.vue` in the working tree. 2026-11-21 — partial, scoped to the styling claims that edit touched. Each class, file and test named was read in the working tree (`main.css`, `tokens.css`, `utility-patterns.css`, the `App*` components, `AppLogo.vue`, `splitPalette.ts`, the guard specs). Behaviour outside styling carries its earlier verifications forward.
 **Covers:** frontend/src/views/, frontend/src/router/index.ts, frontend/src/components/, frontend/src/spending/, frontend/src/composables/, frontend/src/utils/contentDisposition.ts, frontend/src/assets/, frontend/src/utils/splitPalette.ts, frontend/public/manifest.webmanifest, frontend/public/favicon.svg, frontend/public/app-icon.svg, frontend/scripts/build-app-icons.sh, frontend/index.html, frontend/e2e/a11y.spec.ts
 
 The Library web UI: a Vue 3 single-page app on Library's design system, Quiet,
@@ -83,7 +83,8 @@ and fails when the two differ. It declares:
   `shadow-pop`. Tailwind's `font-sans` and `rounded-sm`/`-md`/`-lg` follow
   tokens.css, because it redeclares those variables on `:root`.
 - **Type scale.** `--text-xs` is 12.5px, the system's smallest size
-  (`type-small`). The rest of the `--text-*` scale, `--shadow-sm`,
+  (`type-small`). The rest of the `--text-*` scale, `--shadow-sm` (an alias
+  of `--shadow-card`, so Tailwind's `shadow-sm` follows the theme),
   `--z-popover` and `--breakpoint-xs: 480px` stay in `@theme`. The old Mosaic
   ramps (gray, violet, sky, green, red, yellow) are still declared there, and
   `no-raw-colour.spec.ts` (§1.7) fails any component that uses one.
@@ -944,17 +945,25 @@ either itself:
   component draws: sums cell totals per split value in exact cents, folds
   whatever doesn't fit the shared five-slot palette
   (`@/utils/splitPalette` — see below) into a single "Other" band without
-  losing a cent, fixes a deterministic band order so a chart never repaints
-  on refetch, and assigns each band a colour (a stored colour wins its slot
+  losing a cent, fixes one band order (largest first by the range's total,
+  Other last) that the stack, the legend and the tooltip all follow, and assigns each band a colour (a stored colour wins its slot
   first; everything else is hash-derived and de-collided against what's
   already claimed). Every consumer — `SpendingChart`, `SpendingLegend`,
   `SpendingCard`, the drill panel — reads `bands()`'s output; none derives a
-  colour of its own.
+  colour of its own. Colours are assigned by value before the sort, so a
+  band keeps its colour when the order changes.
+- **`spending/periods.ts`** — `fillPeriods()`: every period from the first to
+  the last at the chart's grain, because the API sends no cell for an empty
+  one. **`spending/money.ts`** `formatTick()` writes the y ticks ("EUR 200",
+  "−EUR 100").
 - **`SpendingChart.vue`** — the stacked-bar mark (Chart.js via
   `vue-chartjs`). Draws `band.light`/`band.dark` verbatim; the one exception
   is the unsplit chart (`bands` is `[]`), which draws its single series in
   `SPLIT_PALETTE[0]`. Never keyed on `data`, so a parent can hold the
-  previous render on screen (dimmed) through a refetch without a flash.
+  previous render on screen (dimmed) through a refetch without a flash. An
+  empty period draws a 3px `quiet` stub (a plugin, not a dataset, so it has
+  no tooltip or click); hovering a bar lists every band in it, top segment
+  first, then the bar's total.
 - **`SpendingLegend.vue`** — a display filter over the same `bands` prop the
   chart draws from. Click **isolates** a band; modifier-click (Cmd/Ctrl)
   **excludes** just that one. Both are client-side filters the parent also
@@ -1181,7 +1190,9 @@ and the share API against the real stack to prove the fetch and the filename.
 - Design-system guards (brand.md §6.4), all in the unit suite except the last.
   `src/__tests__/no-raw-colour.spec.ts` fails on any Tailwind palette class
   (`text-gray-500`, `dark:bg-violet-500`), a white or black colour class
-  (`bg-white`), or a raw `#rrggbb` outside its allow-list of data files
+  (`bg-white`, `fill-white`, `ring-offset-gray-100`), or a literal colour
+  (3-, 4-, 6- or 8-digit hex, `rgb()`, `hsl()`, `oklch()` and the other
+  colour functions) outside its allow-list of data files
   (`tokens.css`, `main.css`'s page tones, `api/settings.ts`,
   `utils/splitPalette.ts`). `src/assets/__tests__/canvas-tones.spec.ts` and
   `src/__tests__/app-icon.spec.ts` hold the page tones and the icon to
