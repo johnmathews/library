@@ -13,23 +13,31 @@
  * docs/api.md §1.3.3 for why they must never hit v-html unescaped.
  */
 import { computed, reactive, ref, watch } from 'vue'
-import { useIntersectionObserver, useMediaQuery, useStorage } from '@vueuse/core'
+import { useElementSize, useIntersectionObserver, useMediaQuery, useStorage } from '@vueuse/core'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
-import { AppBadge, AppBanner, PageHeader } from '@/components/app'
+import { AppBanner, PageHeader } from '@/components/app'
 import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
 import DashboardFieldsMenu from '@/components/DashboardFieldsMenu.vue'
 import SaveViewMenu from '@/components/SaveViewMenu.vue'
+import DocumentFields from '@/components/documents/DocumentFields.vue'
+import DocumentRows from '@/components/documents/DocumentRows.vue'
+import DocumentTable from '@/components/documents/DocumentTable.vue'
+import DocumentList from '@/components/documents/DocumentList.vue'
+import type { DocumentLayoutProps } from '@/components/documents/layoutProps'
 import {
-  DOCUMENT_LANGUAGES,
+  DASHBOARD_LAYOUTS,
+  tableMinWidth,
+  useDashboardLayout,
+} from '@/composables/useDashboardLayout'
+import {
   listDocuments,
   thumbnailUrl,
   type DocumentFilters,
-  type DocumentLanguage,
   type DocumentListItem,
 } from '@/api/documents'
 import { renderSnippet } from '@/utils/snippet'
 import { resolveKindColor } from '@/utils/kindColor'
-import { summarizeReviewReasons } from '@/utils/validationReason'
+import { fileTypeLabel, formatListDate } from '@/utils/documentFields'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
@@ -48,7 +56,6 @@ import {
 } from '@/utils/documentQuery'
 
 const PAGE_SIZE = 25
-const MAX_TAGS = 4
 
 const route = useRoute()
 const router = useRouter()
@@ -279,22 +286,9 @@ useIntersectionObserver(sentinel, ([entry]) => {
 
 const brokenThumbnails = reactive(new Set<number>())
 
-const dateFormat = new Intl.DateTimeFormat('en-GB', {
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-})
-
 // Phones (<=640px) get a compact date — "17 Sep 2019" instead of "17 September
 // 2019" — so tile metadata sits on fewer lines. `useMediaQuery` is reactive, so
-// crossing the 640px boundary re-renders every date. en-GB abbreviates
-// September as "Sept", so each month token is clamped to 3 letters for a
-// uniform short form (Jan…Dec).
-const dateFormatShort = new Intl.DateTimeFormat('en-GB', {
-  day: 'numeric',
-  month: 'short',
-  year: 'numeric',
-})
+// crossing the 640px boundary re-renders every date (utils/documentFields.ts).
 const isCompactDate = useMediaQuery('(max-width: 640px)')
 
 // On phones (<= 640px), the "hide tile description on mobile" account preference
@@ -305,29 +299,8 @@ const isCompactDate = useMediaQuery('(max-width: 640px)')
 // specificity. A reactive `v-if` sidesteps the cascade and also shortens the tile.
 const hideSummaryOnMobile = computed<boolean>(() => auth.hideSummaryMobile && isCompactDate.value)
 
-function formatDateShort(parsed: Date): string {
-  return dateFormatShort
-    .formatToParts(parsed)
-    .map((part) => (part.type === 'month' ? part.value.slice(0, 3) : part.value))
-    .join('')
-}
-
 function formatDate(iso: string | null): string {
-  if (!iso) return ''
-  const parsed = new Date(`${iso}T00:00:00Z`)
-  if (Number.isNaN(parsed.getTime())) return iso
-  return isCompactDate.value ? formatDateShort(parsed) : dateFormat.format(parsed)
-}
-
-function languageName(language: DocumentLanguage): string {
-  return DOCUMENT_LANGUAGES.find((item) => item.value === language)?.text ?? language
-}
-
-function fileTypeLabel(item: DocumentListItem): string {
-  if (item.mime_type === 'application/pdf') return 'PDF'
-  if (item.mime_type.startsWith('image/')) return 'Image'
-  if (item.mime_type.startsWith('text/')) return 'Text'
-  return 'File'
+  return formatListDate(iso, isCompactDate.value)
 }
 
 // A PDF with no thumbnail couldn't be rendered — almost always because it is
@@ -356,31 +329,6 @@ function previewMetadata(item: DocumentListItem): { label: string; value: string
 function hasPreviewMetadata(item: DocumentListItem): boolean {
   return Boolean(item.title) || previewMetadata(item).length > 0
 }
-
-function formatAmount(item: DocumentListItem): string | null {
-  if (item.amount_total === null) return null
-  if (item.currency) {
-    try {
-      return new Intl.NumberFormat('en-GB', {
-        style: 'currency',
-        currency: item.currency,
-        // amount_total is a decimal STRING (backend preserves precision).
-        // Number() is safe for the bill/invoice magnitudes this app stores;
-        // it would lose precision only beyond ~15 significant digits.
-      }).format(Number(item.amount_total))
-    } catch {
-      return `${item.currency} ${item.amount_total}`
-    }
-  }
-  return item.amount_total
-}
-
-// Format each amount once per items change (not twice per render per tile).
-const amountLabels = computed<Map<number, string | null>>(() => {
-  const labels = new Map<number, string | null>()
-  for (const item of items.value) labels.set(item.id, formatAmount(item))
-  return labels
-})
 
 // Per-tile border accent by document kind (user override → default palette →
 // null). Precomputed once per item; a null means "no accent", so the tile keeps
@@ -413,24 +361,38 @@ const gridColsStyle = computed<Record<string, string>>(() => ({
   ...(gridCols.value === 'auto' ? {} : { '--doc-grid-cols': gridCols.value }),
 }))
 
-// Dashboard tile date fields beyond the plain document date. Each configurable
-// date carries a short muted prefix so several dates on one tile stay
-// unambiguous (the document date keeps its bare rendering as the primary date).
-// `created_at`/`updated_at` are datetimes, so `tileDate` slices to the date
-// portion before `formatDate` (which expects `YYYY-MM-DD`).
-const TILE_DATE_FIELDS: Record<
-  string,
-  { label: string; value: (item: DocumentListItem) => string | null }
-> = {
-  due_date: { label: 'Due', value: (i) => i.due_date },
-  expiry_date: { label: 'Expires', value: (i) => i.expiry_date },
-  added_date: { label: 'Added', value: (i) => i.created_at },
-  last_edited: { label: 'Edited', value: (i) => i.updated_at },
-}
+// --- Layout ----------------------------------------------------------------
+// Tiles, rows, table or list (composables/useDashboardLayout.ts), chosen per
+// machine. The table needs room, more with each field column, so where the
+// results area is narrower than `tableMinWidth` it renders as the list. The area is measured rather than the
+// viewport, because it is the viewport minus the sidebar. The results unmount
+// while a new filter loads, and a remounted element reads 0 until it is
+// measured again, so the last real measurement is kept: otherwise a narrow
+// area would draw the table before switching back to the list on every
+// filter change. Before any measurement (and in jsdom, which has no layout)
+// the width is 0, which counts as wide.
+const resultsEl = ref<HTMLElement | null>(null)
+const { width: resultsWidth } = useElementSize(resultsEl)
+const measuredResultsWidth = ref(0)
+watch(resultsWidth, (width) => {
+  if (width > 0) measuredResultsWidth.value = width
+})
+const resultsAreWide = computed<boolean>(
+  () =>
+    measuredResultsWidth.value === 0 ||
+    measuredResultsWidth.value >= tableMinWidth(auth.dashboardFields.length),
+)
+const { layout, effectiveLayout } = useDashboardLayout(resultsAreWide)
 
-function tileDate(iso: string | null): string | null {
-  return iso ? formatDate(iso.slice(0, 10)) : null
-}
+// What the rows, table and list layouts are given (components/documents/layoutProps.ts).
+const layoutProps = computed<DocumentLayoutProps>(() => ({
+  items: items.value,
+  fields: auth.dashboardFields,
+  compactDates: isCompactDate.value,
+  detailQuery: detailQuery.value,
+  searching: Boolean(applied.value.q),
+  accents: tileAccents.value,
+}))
 
 // --- Sort control ----------------------------------------------------------
 // Sort round-trips through the URL like the filters, but is not a "filter"
@@ -556,9 +518,27 @@ function toggleSortDirection(): void {
             </button>
           </div>
         </div>
+        <label class="flex flex-col gap-1 text-sm text-ink-secondary">
+          <span class="text-[13px] font-semibold text-ink-secondary">Layout</span>
+          <select
+            v-model="layout"
+            data-testid="layout-select"
+            aria-label="Layout"
+            class="form-select py-1 text-sm"
+          >
+            <option v-for="opt in DASHBOARD_LAYOUTS" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </label>
         <!-- Tiles-per-row only affects the multi-column desktop grid; below `lg`
-             the grid is fixed (1 col on phones, 2 on tablets), so hide the control. -->
-        <label class="hidden lg:flex flex-col gap-1 text-sm text-ink-secondary">
+             the grid is fixed (1 col on phones, 2 on tablets), so hide the control.
+             It means nothing under the other layouts, so it leaves the page
+             there (v-if); its stored value is kept for when tiles come back. -->
+        <label
+          v-if="effectiveLayout === 'tiles'"
+          class="hidden lg:flex flex-col gap-1 text-sm text-ink-secondary"
+        >
           <span class="text-[13px] font-semibold text-ink-secondary">Tiles per row</span>
           <select
             v-model="gridCols"
@@ -609,8 +589,21 @@ function toggleSortDirection(): void {
       >.
     </div>
 
+    <div ref="resultsEl" :data-layout="effectiveLayout" data-testid="dashboard-results">
+    <DocumentRows
+      v-if="items.length && effectiveLayout === 'rows'"
+      v-bind="layoutProps"
+    />
+    <DocumentTable
+      v-else-if="items.length && effectiveLayout === 'table'"
+      v-bind="layoutProps"
+    />
+    <DocumentList
+      v-else-if="items.length && effectiveLayout === 'list'"
+      v-bind="layoutProps"
+    />
     <ul
-      v-if="items.length"
+      v-else-if="items.length"
       id="dashboard-grid"
       class="app-doc-grid"
       :style="gridColsStyle"
@@ -712,73 +705,12 @@ function toggleSortDirection(): void {
           <!-- Card metadata rendered in the user's chosen field order (stored per
                user in dashboard_fields). The "Needs review" badge is pinned first
                and is NOT part of the toggleable/orderable field set. -->
-          <p class="flex flex-wrap items-center gap-x-2 gap-y-1 sm:gap-2 app-doc-card__meta">
-            <template v-if="item.review_status === 'needs_review'">
-              <AppBadge colour="yellow" data-testid="review-badge">Needs review</AppBadge>
-              <span
-                v-if="item.review_findings.length"
-                class="text-xs text-attention"
-                data-testid="review-reason"
-              >{{ summarizeReviewReasons(item.review_findings) }}</span>
-            </template>
-            <template v-for="field in auth.dashboardFields" :key="field">
-              <AppBadge v-if="field === 'kind' && item.kind" colour="grey">{{ item.kind.name }}</AppBadge>
-              <AppBadge
-                v-else-if="field === 'language' && item.language !== 'unknown'"
-                colour="grey"
-              >
-                {{ languageName(item.language) }}
-              </AppBadge>
-              <template v-else-if="field === 'status'">
-                <AppBadge v-if="item.status === 'failed'" colour="red">Failed</AppBadge>
-                <AppBadge v-else-if="item.status !== 'indexed'" colour="yellow">Processing</AppBadge>
-              </template>
-              <AppBadge v-else-if="field === 'file_type'" colour="grey">{{ fileTypeLabel(item) }}</AppBadge>
-              <span
-                v-else-if="field === 'sender' && item.sender"
-                class="app-doc-card__sender text-sm text-ink-secondary"
-              >
-                {{ item.sender.name }}
-              </span>
-              <span
-                v-else-if="field === 'date' && item.document_date"
-                class="app-doc-card__date text-sm text-ink-secondary"
-                data-testid="doc-date"
-              >
-                <span class="text-ink-secondary">Date</span>
-                {{ formatDate(item.document_date) }}
-              </span>
-              <span
-                v-else-if="TILE_DATE_FIELDS[field] && tileDate(TILE_DATE_FIELDS[field].value(item))"
-                :class="`app-doc-card__${field.replace('_', '-')} text-sm text-ink-secondary`"
-                :data-testid="`doc-${field.replace('_', '-')}`"
-              >
-                <span class="text-ink-secondary">{{ TILE_DATE_FIELDS[field].label }}</span>
-                {{ tileDate(TILE_DATE_FIELDS[field].value(item)) }}
-              </span>
-              <span
-                v-else-if="field === 'amount' && amountLabels.get(item.id)"
-                class="app-doc-card__amount text-sm text-ink tabular-nums"
-              >
-                {{ amountLabels.get(item.id) }}
-              </span>
-              <span
-                v-else-if="field === 'tags' && item.tags.length"
-                class="inline-flex flex-wrap items-center gap-2 app-doc-card__tags"
-                data-testid="doc-tags"
-              >
-                <AppBadge v-for="tag in item.tags.slice(0, MAX_TAGS)" :key="tag.slug" colour="grey">
-                  {{ tag.name }}
-                </AppBadge>
-                <span
-                  v-if="item.tags.length > MAX_TAGS"
-                  class="app-doc-card__tags-more text-sm text-ink-secondary"
-                >
-                  +{{ item.tags.length - MAX_TAGS }}
-                </span>
-              </span>
-            </template>
-          </p>
+          <DocumentFields
+            :item="item"
+            :fields="auth.dashboardFields"
+            :compact-dates="isCompactDate"
+            class="flex flex-wrap items-center gap-x-2 gap-y-1 sm:gap-2 app-doc-card__meta"
+          />
           <p
             v-if="item.summary && !(applied.q && item.snippet) && !hideSummaryOnMobile"
             class="text-sm text-ink-secondary mt-1 sm:mt-2 leading-snug sm:leading-normal app-doc-card__summary line-clamp-3"
@@ -793,6 +725,7 @@ function toggleSortDirection(): void {
         </div>
       </li>
     </ul>
+    </div>
 
     <!-- Infinite scroll: the sentinel triggers loadMore() as it enters view;
          the button is the visible a11y / no-IntersectionObserver fallback. -->

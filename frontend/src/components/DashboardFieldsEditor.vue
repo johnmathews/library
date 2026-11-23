@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * Reusable editor for the per-user dashboard card fields: toggle each field on
+ * Reusable editor for the per-user dashboard fields: toggle each field on
  * or off and reorder them. The stored value (`dashboard_fields`) is an ordered
- * list of the ENABLED fields — that order drives the card meta row in
+ * list of the ENABLED fields — that order drives every layout's fields in
  * DocumentListView. Disabled fields are kept in the list (so they can be
  * re-enabled in place) but are not part of the emitted value.
  *
