@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useJobsStore } from '@/stores/jobs'
 import { useSavedViewsStore } from '@/stores/savedViews'
 import { usePageTitle } from '@/composables/usePageTitle'
+import { TABLE_WIDTH_MARGIN, tableMinWidth } from '@/composables/useDashboardLayout'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -110,6 +111,9 @@ describe('DocumentListView', () => {
     // Isolate persisted UI prefs (e.g. `library:doc-sort-v1`) between tests so a
     // sort choice in one case never leaks into the next.
     localStorage.clear()
+    // Most of this file is about the tiles (thumbnails, the grid, the summary),
+    // so it pins them; the 'layouts' block clears this to test the default.
+    localStorage.setItem('library:doc-layout-v2', 'tiles')
     // The taxonomy-options cache lives in Pinia now; the fresh `createPinia()`
     // below gives each test an empty cache (no explicit reset needed).
     listResponse = () => jsonResponse(listBody([]))
@@ -1404,13 +1408,18 @@ describe('DocumentListView', () => {
         )
     }
 
-    it('offers Tiles, Rows, Table and List, with Tiles chosen by default', async () => {
+    it('offers Rows, Tiles, Table and List, with Rows chosen on a fresh device', async () => {
+      localStorage.removeItem('library:doc-layout-v2')
+      // The trial's key holds `tiles` on every browser that opened the
+      // dashboard before Rows became the default; it must not win.
+      localStorage.setItem('library:doc-layout', 'tiles')
       twoDocs()
       const w = await mountView()
       const select = w.find<HTMLSelectElement>('[data-testid="layout-select"]')
-      expect(select.findAll('option').map((o) => o.text())).toEqual(['Tiles', 'Rows', 'Table', 'List'])
-      expect(select.element.value).toBe('tiles')
-      expect(w.find(LAYOUT_ROOT.tiles!).exists()).toBe(true)
+      expect(select.findAll('option').map((o) => o.text())).toEqual(['Rows', 'Tiles', 'Table', 'List'])
+      expect(select.element.value).toBe('rows')
+      expect(w.find(LAYOUT_ROOT.rows!).exists()).toBe(true)
+      expect(w.find(LAYOUT_ROOT.tiles!).exists()).toBe(false)
     })
 
     for (const layout of ['rows', 'table', 'list'] as const) {
@@ -1430,13 +1439,13 @@ describe('DocumentListView', () => {
         expect(cards[1]!.find('[data-testid="review-badge"]').exists()).toBe(true)
         // No page preview outside the tiles.
         expect(w.find('.app-doc-card__thumbnail').exists()).toBe(false)
-        expect(localStorage.getItem('library:doc-layout')).toBe(layout)
+        expect(localStorage.getItem('library:doc-layout-v2')).toBe(layout)
       })
     }
 
     it('keeps the chosen layout on the next visit', async () => {
       twoDocs()
-      localStorage.setItem('library:doc-layout', 'list')
+      localStorage.setItem('library:doc-layout-v2', 'list')
       const w = await mountView()
       expect(w.find(LAYOUT_ROOT.list!).exists()).toBe(true)
       expect(w.find<HTMLSelectElement>('[data-testid="layout-select"]').element.value).toBe('list')
@@ -1453,7 +1462,7 @@ describe('DocumentListView', () => {
     it('gives the table one column per chosen field, in the chosen order', async () => {
       seedPrefs(['amount', 'date', 'sender'])
       twoDocs()
-      localStorage.setItem('library:doc-layout', 'table')
+      localStorage.setItem('library:doc-layout-v2', 'table')
       const w = await mountView()
       const headings = w.findAll('[data-testid="doc-table"] th').map((th) => th.text())
       expect(headings).toEqual(['Title', 'Amount', 'Date', 'From'])
@@ -1462,7 +1471,7 @@ describe('DocumentListView', () => {
 
     it('opens a document from a click anywhere on its table row', async () => {
       twoDocs()
-      localStorage.setItem('library:doc-layout', 'table')
+      localStorage.setItem('library:doc-layout-v2', 'table')
       const w = await mountView()
       await w.findAll('[data-testid="doc-table"] tbody tr')[1]!.findAll('td')[1]!.trigger('click')
       await flushPromises()
@@ -1471,7 +1480,7 @@ describe('DocumentListView', () => {
 
     it('ignores a modified click on a table row, leaving it to the browser', async () => {
       twoDocs()
-      localStorage.setItem('library:doc-layout', 'table')
+      localStorage.setItem('library:doc-layout-v2', 'table')
       const w = await mountView()
       const cell = w.findAll('[data-testid="doc-table"] tbody tr')[1]!.findAll('td')[1]!
       for (const modifier of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey'] as const) {
@@ -1481,8 +1490,8 @@ describe('DocumentListView', () => {
       }
     })
 
-    it('keeps a narrow area on the list while new results load', async () => {
-      // jsdom has no layout, so drive the results area's ResizeObserver by hand.
+    /** jsdom has no layout, so drive the results area's ResizeObserver by hand. */
+    function stubResizeObserver(): (w: VueWrapper, width: number) => void {
       const observers: { cb: ResizeObserverCallback; targets: Element[] }[] = []
       vi.stubGlobal(
         'ResizeObserver',
@@ -1501,14 +1510,18 @@ describe('DocumentListView', () => {
           }
         },
       )
-      const resize = (w: VueWrapper, width: number): void => {
+      // (afterEach unstubs it.)
+      return (w: VueWrapper, width: number): void => {
         const el = w.find('[data-testid="dashboard-results"]').element
         for (const o of observers.filter((o) => o.targets.includes(el)))
           o.cb([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver)
       }
-      // (afterEach unstubs it.)
+    }
+
+    it('keeps a narrow area on the list while new results load', async () => {
+      const resize = stubResizeObserver()
       twoDocs()
-      localStorage.setItem('library:doc-layout', 'table')
+      localStorage.setItem('library:doc-layout-v2', 'table')
       const w = await mountView()
       const shown = (): string | undefined =>
         w.find('[data-testid="dashboard-results"]').attributes('data-layout')
@@ -1528,9 +1541,38 @@ describe('DocumentListView', () => {
       expect(shown()).toBe('table')
     })
 
+    it('does not flip between table and list inside a scrollbar of the minimum width', async () => {
+      // #247: showing the table can add a classic scrollbar (about 17px), which
+      // narrows the area, which used to switch back to the list, whose shorter
+      // page dropped the scrollbar again.
+      const resize = stubResizeObserver()
+      seedPrefs(['kind', 'sender', 'tags', 'date', 'language', 'status'])
+      twoDocs()
+      localStorage.setItem('library:doc-layout-v2', 'table')
+      const w = await mountView()
+      const shown = (): string | undefined =>
+        w.find('[data-testid="dashboard-results"]').attributes('data-layout')
+      const min = tableMinWidth(6)
+      const at = async (width: number): Promise<string | undefined> => {
+        resize(w, width)
+        await flushPromises()
+        return shown()
+      }
+
+      expect(await at(min - 1)).toBe('list')
+      // Widening by less than the margin leaves the list in place...
+      expect(await at(min + 10)).toBe('list')
+      expect(await at(min + TABLE_WIDTH_MARGIN - 1)).toBe('list')
+      // ...and past it the table comes back and survives its own scrollbar.
+      expect(await at(min + TABLE_WIDTH_MARGIN)).toBe('table')
+      expect(await at(min + TABLE_WIDTH_MARGIN - 17)).toBe('table')
+      expect(await at(min)).toBe('table')
+      expect(await at(min - 1)).toBe('list')
+    })
+
     it('draws the type colour as a band on rows and a dot in the list', async () => {
       twoDocs()
-      localStorage.setItem('library:doc-layout', 'rows')
+      localStorage.setItem('library:doc-layout-v2', 'rows')
       const w = await mountView()
       const [invoice, other] = w.findAll('[data-testid="doc-card"]')
       expect(invoice!.classes()).toContain('app-doc-row--accented')
@@ -1546,7 +1588,7 @@ describe('DocumentListView', () => {
     it('shows the search snippet in rows while searching', async () => {
       listResponse = () =>
         jsonResponse(listBody([makeItem({ snippet: 'uw <b>rekening</b>', rank: 0.3 })]))
-      localStorage.setItem('library:doc-layout', 'rows')
+      localStorage.setItem('library:doc-layout-v2', 'rows')
       await router.push('/?q=rekening')
       const w = await mountView()
       expect(w.find('.app-doc-card__snippet').html()).toContain('<b>rekening</b>')

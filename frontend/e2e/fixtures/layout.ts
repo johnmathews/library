@@ -45,6 +45,20 @@ export async function expectNoHorizontalOverflow(page: Page, label: string): Pro
   ).toBeLessThanOrEqual(clientWidth + 1)
 }
 
+/**
+ * Choose the dashboard layout before the app boots, as a person would have
+ * with the Layout select. Rows is the default on a fresh browser; a spec about
+ * tiles (the grid, the top band, tiles per row) pins them with this. Call it
+ * before the first `goto`: an init script runs on every later navigation.
+ * The key mirrors `DASHBOARD_LAYOUT_STORAGE_KEY` (useDashboardLayout.ts).
+ */
+export async function pinDashboardLayout(
+  page: Page,
+  layout: 'rows' | 'tiles' | 'table' | 'list',
+): Promise<void> {
+  await page.addInitScript((value) => localStorage.setItem('library:doc-layout-v2', value), layout)
+}
+
 /** Computed column count of the dashboard grid (0 when no grid is present). */
 export async function gridColumnCount(page: Page): Promise<number> {
   const grid = page.locator('.app-doc-grid')

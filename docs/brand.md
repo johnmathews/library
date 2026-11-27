@@ -1,7 +1,7 @@
 # Brand and design system
 
-**Status:** active. **Supersedes:** none. **Last updated:** 2026-11-22 (§6.4 the colour guard covers every literal form; §4 the chart-gaps mockup).
-**Last verified:** 2026-11-22 — method: read against the working tree. `check_design_system.py brand/design-system --complete` exits 0, and each path, test and command named here was opened. The colour guard was run red on planted literals and green without them.
+**Status:** active. **Supersedes:** none. **Last updated:** 2026-11-27 (§1 and §6.2: rows are the dashboard's default; §4 the dashboard-layouts mockup). 2026-11-22 (§6.4 the colour guard covers every literal form; §4 the chart-gaps mockup).
+**Last verified:** 2026-11-27 — method: partial, §1, §4's table and §6.2's colour table re-read against the DocumentTile and DataTable cards and the new mockup; `check_design_system.py brand/design-system --complete` exits 0. 2026-11-22 — read against the working tree. `check_design_system.py brand/design-system --complete` exits 0, and each path, test and command named here was opened. The colour guard was run red on planted literals and green without them.
 **Covers:** brand/design-system, scripts/check_design_system.py, scripts/design_preview.py, frontend/src/assets/tokens.css, frontend/public/favicon.svg, frontend/public/app-icon.svg, frontend/scripts/build-app-icons.sh, frontend/src/components/layout/AppLogo.vue, frontend/index.html
 
 > Purpose
@@ -22,8 +22,8 @@ The friendliness comes from subtraction:
 - sentence-case labels and plain words
 - colour only where it means something (§6.2)
 
-Library differs in content. Its first impression is the grid of document tiles, where Finances
-leads with a figure. The reasons, the rules and every call made on the owner's behalf are in the
+Library differs in content. Its first impression is the list of documents, as rows by default,
+where Finances leads with a figure. The reasons, the rules and every call made on the owner's behalf are in the
 [brand design](superpowers/specs/2026-11-21-brand-design.md).
 
 ## 2. The design system
@@ -98,6 +98,7 @@ committed. The design-system skill's `references/mockups.md` has the loop and it
 | `261121-app-icon/` | The mark on the app icon, favicon and sidebar logo | B, a page drawn in lines under a lens |
 | `261121-documents/` | How a document type's colour shows on a tile without an outline | A, a 4px band across the tile's top |
 | `261122-chart-gaps-and-colour-roles/` | An empty month on the spending chart, money on its axis, and the roles for markdown code, tables and the thin scrollbar | A, A, A: a `quiet` stub, `EUR 200` ticks, `tile`/`line`/`quiet` |
+| `261127-dashboard-layouts/` | Which of the four dashboard layouts a new device starts on | B, Rows on every device; Tiles, Table and List stay |
 
 ## 5. The icon
 
@@ -147,7 +148,7 @@ A meaningful colour means one thing ([spec](superpowers/specs/2026-11-21-brand-d
 | `attention` on `attention-tint` (yellow) | The owner has something to do | Needs review, held emails, the review queue bar |
 | `error-ink` on `deficit-tint` (red) | Something failed | Failed jobs, error banners, the error summary |
 | `income` / `deficit` figures | Money in, a negative net | The spending and payments views only |
-| `category-1` to `category-5`, `category-other` | A series in a chart, or a document type's default colour | Charts, the tile's top band |
+| `category-1` to `category-5`, `category-other` | A series in a chart, or a document type's default colour | Charts, the row's left band, the tile's top band |
 | `brand` (violet) | Something that can be acted on | Links, the active sidebar item, the primary button |
 
 Everything else is `ink` on `tile`. That covers tags, projects, matters and topics, which are

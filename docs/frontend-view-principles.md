@@ -1,7 +1,7 @@
 # Frontend view design principles
 
-**Status:** active. **Last updated:** 2026-11-22 (§4: `library:doc-layout`). 2026-11-22 (§3: the colour guard also fails `rgb()`-style literals). 2026-11-21 (the Quiet design system: §3 is the role vocabulary, §5's label is sentence case, and §1's dark-mode item relies on the roles). Earlier entries are in this file's history.
-**Last verified:** 2026-11-22 — method: partial, §4's new key read against `useDashboardLayout.ts` and its spec. Earlier the same day, §3's guard sentence re-read against `no-raw-colour.spec.ts`. 2026-11-21 — partial, scoped to §1 items 7 and 9, §3, §5's label bullet and the closing paragraphs of §5.1. Read `utility-patterns.css`, `main.css`, `AppInput.vue`, `AppButton.vue`, `JobsView.vue`'s `jobs-filter-bar` and `no-raw-colour.spec.ts` in the working tree. §5.1's geometry table was not re-measured.
+**Status:** active. **Last updated:** 2026-11-27 (§4: `library:doc-layout-v2`, Rows the default). 2026-11-22 (§4: `library:doc-layout`). 2026-11-22 (§3: the colour guard also fails `rgb()`-style literals). 2026-11-21 (the Quiet design system: §3 is the role vocabulary, §5's label is sentence case, and §1's dark-mode item relies on the roles). Earlier entries are in this file's history.
+**Last verified:** 2026-11-27 — method: partial, §4's dashboard key and default read against `useDashboardLayout.ts` and its spec. 2026-11-22 — partial, §4's earlier key read against the same files. Earlier the same day, §3's guard sentence re-read against `no-raw-colour.spec.ts`. 2026-11-21 — partial, scoped to §1 items 7 and 9, §3, §5's label bullet and the closing paragraphs of §5.1. Read `utility-patterns.css`, `main.css`, `AppInput.vue`, `AppButton.vue`, `JobsView.vue`'s `jobs-filter-bar` and `no-raw-colour.spec.ts` in the working tree. §5.1's geometry table was not re-measured.
 
 How to build a Library view that looks **right the first time** — using the
 design system already in the app ([brand.md](brand.md); read it before any
@@ -150,9 +150,11 @@ Established pattern (mirror it — don't invent a new one):
   `sidebar-expanded` key is a legacy read-once fallback, not the pattern).
 - `JobsView.vue` persists table column visibility under `library:jobs-columns`.
 - `useDashboardLayout.ts` persists the Documents dashboard layout under
-  `library:doc-layout` (`tiles` | `rows` | `table` | `list`). It follows the
-  wide-only pattern below: the table renders as the list where the measured
-  results area is too narrow, and the stored choice stays `table`.
+  `library:doc-layout-v2` (`rows` | `tiles` | `table` | `list`, default
+  `rows`). The `-v2` came when Rows replaced Tiles as the default (2026-11-27,
+  #246); `library:doc-layout` lapses unread. It follows the wide-only pattern
+  below: the table renders as the list where the measured results area is too
+  narrow, and the stored choice stays `table`.
 - `useAskViewMode.ts` persists the Ask transcript layout under
   `library:ask-view-mode-v2` (`conversation` | `document`).
 - `useCurrencyOptions.ts` persists the custom-currency-code list under

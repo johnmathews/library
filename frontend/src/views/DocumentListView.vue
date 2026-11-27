@@ -26,6 +26,7 @@ import DocumentList from '@/components/documents/DocumentList.vue'
 import type { DocumentLayoutProps } from '@/components/documents/layoutProps'
 import {
   DASHBOARD_LAYOUTS,
+  nextIsWide,
   tableMinWidth,
   useDashboardLayout,
 } from '@/composables/useDashboardLayout'
@@ -362,25 +363,30 @@ const gridColsStyle = computed<Record<string, string>>(() => ({
 }))
 
 // --- Layout ----------------------------------------------------------------
-// Tiles, rows, table or list (composables/useDashboardLayout.ts), chosen per
-// machine. The table needs room, more with each field column, so where the
-// results area is narrower than `tableMinWidth` it renders as the list. The area is measured rather than the
-// viewport, because it is the viewport minus the sidebar. The results unmount
-// while a new filter loads, and a remounted element reads 0 until it is
-// measured again, so the last real measurement is kept: otherwise a narrow
-// area would draw the table before switching back to the list on every
-// filter change. Before any measurement (and in jsdom, which has no layout)
-// the width is 0, which counts as wide.
+// Rows (the default), tiles, table or list (composables/useDashboardLayout.ts),
+// chosen per machine. The table needs room, more with each field column, so
+// where the results area is narrower than `tableMinWidth` it renders as the
+// list. The area is measured rather than the viewport, because it is the
+// viewport minus the sidebar. The results unmount while a new filter loads,
+// and a remounted element reads 0 until it is measured again, so the last real
+// measurement is kept: otherwise a narrow area would draw the table before
+// switching back to the list on every filter change. Before any measurement
+// (and in jsdom, which has no layout) the width is 0, which counts as wide.
+// `nextIsWide` keeps its last answer inside a small band past the minimum, so a
+// scrollbar coming and going with the layout's height cannot flip it (#247).
 const resultsEl = ref<HTMLElement | null>(null)
 const { width: resultsWidth } = useElementSize(resultsEl)
 const measuredResultsWidth = ref(0)
 watch(resultsWidth, (width) => {
   if (width > 0) measuredResultsWidth.value = width
 })
-const resultsAreWide = computed<boolean>(
-  () =>
-    measuredResultsWidth.value === 0 ||
-    measuredResultsWidth.value >= tableMinWidth(auth.dashboardFields.length),
+const resultsAreWide = ref(true)
+watch(
+  [measuredResultsWidth, () => auth.dashboardFields.length],
+  ([width, fieldCount]) => {
+    resultsAreWide.value = nextIsWide(width, tableMinWidth(fieldCount), resultsAreWide.value)
+  },
+  { immediate: true },
 )
 const { layout, effectiveLayout } = useDashboardLayout(resultsAreWide)
 

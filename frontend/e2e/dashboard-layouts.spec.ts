@@ -1,12 +1,13 @@
 /**
- * Dashboard layouts (tiles, rows, table, list) in a real browser.
+ * Dashboard layouts (rows, tiles, table, list) in a real browser.
  *
  * Unit tests cover which component renders; this covers what only a browser
- * can: the remembered choice surviving a reload, a document opening from every
- * layout, the table falling back to the list where the results area is too
- * narrow (a measured width, so jsdom cannot see it), and the row's type band
- * actually painting (a components-layer rule, see tile-border-colour.spec.ts
- * for why that needs a computed-style check).
+ * can: a fresh browser starting on rows, the remembered choice surviving a
+ * reload, a document opening from every layout, the table falling back to the
+ * list where the results area is too narrow (a measured width, so jsdom
+ * cannot see it), and the row's type band actually painting (a
+ * components-layer rule, see tile-border-colour.spec.ts for why that needs a
+ * computed-style check).
  *
  * Seeds two dateless documents under a unique tag and filters to them, so the
  * shared backend's other fixtures neither show up nor get reordered.
@@ -64,9 +65,11 @@ test('each layout shows the documents, opens one, and is remembered', async ({ p
   const ids = await seedTwo(page, marker)
   await page.goto(`/?tag=${marker}`)
   await expect(page.locator(`#doc-card-${ids.invoice}`)).toBeVisible()
-  await expect(results(page)).toHaveAttribute('data-layout', 'tiles')
+  // A fresh browser starts on rows (#246), on every viewport.
+  await expect(results(page)).toHaveAttribute('data-layout', 'rows')
+  await expect(page.getByTestId('layout-select')).toHaveValue('rows')
 
-  for (const layout of ['rows', 'table', 'list'] as const) {
+  for (const layout of ['tiles', 'table', 'list'] as const) {
     await page.getByTestId('layout-select').selectOption(layout)
     // The table needs room; a phone or tablet results area shows the list instead.
     const shown = await results(page).getAttribute('data-layout')
@@ -111,7 +114,7 @@ test('the table shows where it fits and the list where it does not, keeping the 
   }
   // Either way the stored choice is still the table.
   await expect(page.getByTestId('layout-select')).toHaveValue('table')
-  expect(await page.evaluate(() => localStorage.getItem('library:doc-layout'))).toBe('table')
+  expect(await page.evaluate(() => localStorage.getItem('library:doc-layout-v2'))).toBe('table')
 })
 
 test('rows paint the type colour as a 4px band down the left edge', async ({ page }, testInfo) => {

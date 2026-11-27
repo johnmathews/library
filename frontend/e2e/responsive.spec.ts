@@ -24,7 +24,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 import { requireStack } from './fixtures/require-stack'
-import { expectNoHorizontalOverflow, gridColumnCount } from './fixtures/layout'
+import { expectNoHorizontalOverflow, gridColumnCount, pinDashboardLayout } from './fixtures/layout'
 
 const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-password-123'
@@ -73,6 +73,7 @@ test('wide desktops get the widened content container', async ({ page }, testInf
   test.skip(testInfo.project.name !== 'chromium', 'wide-desktop layout is checked once, on the desktop project')
   await page.setViewportSize({ width: 1920, height: 1080 })
 
+  await pinDashboardLayout(page, 'tiles')
   await signIn(page) // lands on / (documents)
   // DefaultLayout wraps the routed view in a max-w-[96rem] container inside
   // <main class="grow">; measure that wrapper (main's first child element).
@@ -99,6 +100,7 @@ test('wide desktops get the widened content container', async ({ page }, testInf
 test('the dashboard grid has the expected column count per viewport', async ({
   page,
 }, testInfo) => {
+  await pinDashboardLayout(page, 'tiles')
   await signIn(page) // lands on / (documents)
 
   // library.spec.ts runs first within each project, so the library holds
@@ -133,6 +135,7 @@ test('the tiles-per-row preference overrides the desktop column count', async ({
   // Seed the per-machine preference before the app boots, then sign in.
   await page.goto('/login')
   await page.addInitScript(() => localStorage.setItem('library:doc-grid-cols', '5'))
+  await pinDashboardLayout(page, 'tiles')
   await signIn(page) // lands on / (documents)
 
   await expect(page.locator('.app-doc-card').first()).toBeVisible()

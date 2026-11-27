@@ -19,6 +19,7 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 
+import { pinDashboardLayout } from './fixtures/layout'
 import { requireStack } from './fixtures/require-stack'
 
 const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
@@ -53,6 +54,8 @@ test('per-kind accent: an accented tile paints a 4px top band; a neutral tile ha
   // dark styling is class-driven and off by default here, but this keeps the
   // assertion robust.
   await page.emulateMedia({ colorScheme: 'light' })
+  // The band is the tile's; rows draw theirs down the left (dashboard-layouts.spec.ts).
+  await pinDashboardLayout(page, 'tiles')
   await signIn(page)
   const headers = await csrfHeader(page)
 

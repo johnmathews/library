@@ -1,0 +1,189 @@
+<title>Which dashboard layout by default</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="proto.css">
+<!--
+  Mockup (design-system skill, references/mockups.md) for issue #246: which of the trial's four
+  dashboard layouts becomes the default. Every option is the existing, shipped layout (PR #248),
+  redrawn by proto.js from the same rules; nothing here is a new colour, so there are no
+  --candidate-* values and no contrast measures. Data is invented. try.html draws the same
+  screen at the device's own width.
+-->
+<style>
+  body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); }
+  .mockup-page {
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: var(--space-8, 32px) var(--space-16, 64px);
+    max-width: 1280px; margin: 0 auto; display: grid; gap: var(--space-12, 48px);
+  }
+  .mockup-head { display: grid; gap: var(--space-2, 8px); max-width: 74ch; }
+  .mockup-head h1, .option h2 { margin: 0; text-wrap: balance; }
+  .mockup-head p, .option p { margin: 0; max-width: 80ch; }
+  .mockup-head ol { margin: 0; padding-left: 1.4em; display: grid; gap: 4px; }
+  .mockup-meta { color: var(--ink-secondary); }
+  .option { display: grid; gap: var(--space-4, 16px); }
+  .option-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2, 8px) var(--space-3, 12px); }
+  .option-tag { color: var(--ink-secondary); }
+  .option[data-recommended] .option-tag::after { content: " · Recommended"; color: var(--ink); }
+  .try { color: var(--brand); font-weight: 600; text-decoration: none; margin-left: auto; }
+  .try:hover { text-decoration: underline; }
+  .panes { display: grid; gap: var(--space-4, 16px); }
+  .pane { min-width: 0; background: var(--canvas); color: var(--ink); border: 1px solid var(--line);
+          border-radius: var(--radius-lg, 12px); padding: var(--space-4, 16px); display: grid; gap: var(--space-3, 12px); }
+  .pane-label { color: var(--ink-secondary); margin: 0; }
+  .devices { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 300px); gap: var(--space-4, 16px); align-items: start; }
+  @media (max-width: 760px) { .devices { grid-template-columns: minmax(0, 1fr); } .devices .ph { max-width: 300px; } }
+  figure { margin: 0; display: grid; gap: var(--space-2, 8px); min-width: 0; }
+  figcaption { color: var(--ink-secondary); }
+  .frame { position: relative; overflow: hidden; border-radius: var(--radius-md, 10px); box-shadow: 0 0 0 1px var(--line); background: var(--canvas); }
+  .ph .frame { border-radius: 24px; }
+  .frame > .inner { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+</style>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- The app icon's mark, option B of 261121-app-icon (decided). -->
+  <symbol id="mark" viewBox="0 0 32 32">
+    <g transform="translate(-1 -1)" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 5 H17 L22 10 V24 A2 2 0 0 1 20 26 H9 A2 2 0 0 1 7 24 V7 A2 2 0 0 1 9 5 Z"/>
+      <polyline points="17,5 17,10 22,10"/>
+      <line x1="11" y1="14" x2="17" y2="14"/>
+      <line x1="11" y1="18" x2="14.5" y2="18"/>
+      <circle cx="22" cy="22" r="6.75" style="fill: var(--brand-fill)" stroke="none"/>
+      <circle cx="22" cy="22" r="4.5" style="fill: var(--brand-fill)"/>
+      <line x1="25.5" y1="25.5" x2="28" y2="28" stroke-width="3"/>
+    </g>
+  </symbol>
+  <!-- Nav icons: 24px grid, 2px round strokes. -->
+  <symbol id="i-docs" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></g></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><line x1="16" y1="16" x2="20" y2="20"/></g></symbol>
+  <symbol id="i-ask" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h0.5A2.5 2.5 0 0 1 5 13.5z"/></g></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V5"/><path d="M8 9l4-4 4 4"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></g></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h8l4 4v12H6z"/><path d="M9 13h6M9 16.5h4"/></g></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 19V11M10 19V6M15 19v-5M20 19V9"/></g></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></g></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5.5A1.5 1.5 0 0 1 6.5 4H19v14H6.5A1.5 1.5 0 0 0 5 19.5z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19"/></g></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5" stroke-dasharray="3 2.9"/></g></symbol>
+  <symbol id="i-bin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M10 4h4M7 7l1 13h8l1-13"/></g></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5z"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M5 7h14M5 12h14M5 17h14"/></symbol>
+</svg>
+<main class="mockup-page">
+  <header class="mockup-head">
+    <p class="caption mockup-meta">Mockup · 2026-11-27 · Library · issue #246</p>
+    <h1 class="title-1">Which dashboard layout by default</h1>
+    <p class="body"><strong>Decided 2026-11-27: B · Rows, on every device.</strong> The other three stay in the Layout menu.</p>
+    <p class="body">The four layouts from the trial, on the same ten invented documents with the default fields (type, from, tags, date, language, status).</p>
+    <ol class="body">
+      <li>Each option shows a desktop at 1440px and a phone at 375px, in light and dark. Use <strong>Open full size</strong> to see one at your screen's own width, on your phone too.</li>
+      <li>The table needs a results area of about 912px with six fields. Below that, including phones and tablets in portrait, it shows as the list. A desktop gets the table from a window about 1230px wide with the sidebar open, or about 1060px with it collapsed.</li>
+      <li>The default can differ by device, for example the list on a phone and the table on a desktop. Choosing C already gives that.</li>
+    </ol>
+  </header>
+
+  <section class="option" id="a" aria-labelledby="a-h">
+    <div class="option-head">
+      <h2 class="title-2" id="a-h">A. Tiles</h2>
+      <span class="label option-tag">Option A</span>
+      <a class="label try" href="try.html?layout=tiles">Open full size</a>
+    </div>
+    <p class="body">Today's default. A page preview on every document, the summary under it, 4 per row on a wide screen and 2 on a phone.</p>
+    <div class="panes stack">
+      <div class="pane" data-theme="light"><p class="label pane-label">Light</p>
+        <div class="devices">
+          <figure><div class="frame" data-layout="tiles" data-w="1440" data-h="860"></div><figcaption class="caption">Desktop, 1440px</figcaption></figure>
+          <figure class="ph"><div class="frame" data-layout="tiles" data-w="375" data-h="760"></div><figcaption class="caption">Phone, 375px</figcaption></figure>
+        </div>
+      </div>
+      <div class="pane" data-theme="dark"><p class="label pane-label">Dark</p>
+        <div class="devices">
+          <figure><div class="frame" data-layout="tiles" data-w="1440" data-h="860"></div><figcaption class="caption">Desktop, 1440px</figcaption></figure>
+          <figure class="ph"><div class="frame" data-layout="tiles" data-w="375" data-h="760"></div><figcaption class="caption">Phone, 375px</figcaption></figure>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class="option" id="b" aria-labelledby="b-h">
+    <div class="option-head">
+      <h2 class="title-2" id="b-h">B. Rows</h2>
+      <span class="label option-tag">Option B · Chosen</span>
+      <a class="label try" href="try.html?layout=rows">Open full size</a>
+    </div>
+    <p class="body">Each document is a wide, thin card: the title on its own line, the fields under it, the type colour down the left edge. No preview or summary.</p>
+    <div class="panes stack">
+      <div class="pane" data-theme="light"><p class="label pane-label">Light</p>
+        <div class="devices">
+          <figure><div class="frame" data-layout="rows" data-w="1440" data-h="860"></div><figcaption class="caption">Desktop, 1440px</figcaption></figure>
+          <figure class="ph"><div class="frame" data-layout="rows" data-w="375" data-h="760"></div><figcaption class="caption">Phone, 375px</figcaption></figure>
+        </div>
+      </div>
+      <div class="pane" data-theme="dark"><p class="label pane-label">Dark</p>
+        <div class="devices">
+          <figure><div class="frame" data-layout="rows" data-w="1440" data-h="860"></div><figcaption class="caption">Desktop, 1440px</figcaption></figure>
+          <figure class="ph"><div class="frame" data-layout="rows" data-w="375" data-h="760"></div><figcaption class="caption">Phone, 375px</figcaption></figure>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class="option" id="c" aria-labelledby="c-h">
+    <div class="option-head">
+      <h2 class="title-2" id="c-h">C. Table</h2>
+      <span class="label option-tag">Option C</span>
+      <a class="label try" href="try.html?layout=table">Open full size</a>
+    </div>
+    <p class="body">One line per document with a column per field, so dates, senders and types line up for scanning. Where the screen is too narrow (every phone, and tablets in portrait) it shows as the List (D).</p>
+    <div class="panes stack">
+      <div class="pane" data-theme="light"><p class="label pane-label">Light</p>
+        <div class="devices">
+          <figure><div class="frame" data-layout="table" data-w="1440" data-h="860"></div><figcaption class="caption">Desktop, 1440px</figcaption></figure>
+          <figure class="ph"><div class="frame" data-layout="table" data-w="375" data-h="760"></div><figcaption class="caption">Phone, 375px</figcaption></figure>
+        </div>
+      </div>
+      <div class="pane" data-theme="dark"><p class="label pane-label">Dark</p>
+        <div class="devices">
+          <figure><div class="frame" data-layout="table" data-w="1440" data-h="860"></div><figcaption class="caption">Desktop, 1440px</figcaption></figure>
+          <figure class="ph"><div class="frame" data-layout="table" data-w="375" data-h="760"></div><figcaption class="caption">Phone, 375px</figcaption></figure>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class="option" id="d" aria-labelledby="d-h">
+    <div class="option-head">
+      <h2 class="title-2" id="d-h">D. List</h2>
+      <span class="label option-tag">Option D</span>
+      <a class="label try" href="try.html?layout=list">Open full size</a>
+    </div>
+    <p class="body">One line per document with no cards: a dot in the type colour, the title, and the fields as quiet text on the right. On a phone the fields go under the title.</p>
+    <div class="panes stack">
+      <div class="pane" data-theme="light"><p class="label pane-label">Light</p>
+        <div class="devices">
+          <figure><div class="frame" data-layout="list" data-w="1440" data-h="860"></div><figcaption class="caption">Desktop, 1440px</figcaption></figure>
+          <figure class="ph"><div class="frame" data-layout="list" data-w="375" data-h="760"></div><figcaption class="caption">Phone, 375px</figcaption></figure>
+        </div>
+      </div>
+      <div class="pane" data-theme="dark"><p class="label pane-label">Dark</p>
+        <div class="devices">
+          <figure><div class="frame" data-layout="list" data-w="1440" data-h="860"></div><figcaption class="caption">Desktop, 1440px</figcaption></figure>
+          <figure class="ph"><div class="frame" data-layout="list" data-w="375" data-h="760"></div><figcaption class="caption">Phone, 375px</figcaption></figure>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="proto.js"></script>
+<script>
+  // Draw each frame at its real width, then scale it to the frame's box.
+  const frames = [...document.querySelectorAll('.frame')]
+  function fit() {
+    for (const f of frames) {
+      const w = Number(f.dataset.w), h = Number(f.dataset.h)
+      let inner = f.querySelector('.inner')
+      if (!inner) { inner = document.createElement('div'); inner.className = 'inner'; f.append(inner); Dashboard.draw(inner, f.dataset.layout, w) }
+      const s = f.clientWidth / w
+      inner.style.transform = `scale(${s})`
+      f.style.height = `${h * s}px`
+    }
+  }
+  fit()
+  new ResizeObserver(fit).observe(document.querySelector('.mockup-page'))
+</script>
