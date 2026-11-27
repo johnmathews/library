@@ -1,7 +1,7 @@
 # Documentation
 
-**Status:** active. **Last updated:** 2026-11-21 (adds `brand.md` and the visual-change pointer in §1; the `frontend.md` and `frontend-view-principles.md` rows name the design system). Earlier entries are in this file's history.
-**Last verified:** 2026-11-21 — method: partial, scoped to the three rows and the §1 pointer, read against `brand.md`, `frontend.md` §1.2 and `frontend-view-principles.md` §3; `uv run python scripts/check_docs.py` for the index rules. No other row changed.
+**Status:** active. **Last updated:** 2026-11-27 (the `deployment.md` row names the live host by its SSH name, `library`). Earlier: 2026-11-21 (adds `brand.md` and the visual-change pointer in §1; the `frontend.md` and `frontend-view-principles.md` rows name the design system). Earlier entries are in this file's history.
+**Last verified:** 2026-11-27 — method: partial; the `deployment.md` row read against its §1.7.2. Before that, partial, scoped to the three rows and the §1 pointer, read against `brand.md`, `frontend.md` §1.2 and `frontend-view-principles.md` §3; `uv run python scripts/check_docs.py` for the index rules. No other row changed.
 
 Reference documentation for Library — a self-hosted document archive (FastAPI
 backend + Vue 3 SPA, Postgres/pgvector, OCR ingestion, an MCP server, and an
@@ -24,7 +24,7 @@ Changing anything visual (a screen, a component, a colour, an icon)? Read
 | Doc | What it covers |
 | --- | --- |
 | [`architecture.md`](architecture.md) | System architecture: module layout, data model, subsystems, how ingestion/search/ask fit together. |
-| [`deployment.md`](deployment.md) | Building and deploying the container (local dev + the live `documents` LXC), env/config, migrations. |
+| [`deployment.md`](deployment.md) | Building and deploying the container (local dev + the live LXC, `ssh library`), env/config, migrations. |
 | [`api.md`](api.md) | The full REST API: every endpoint, method, request/response shape, and query filters. |
 | [`ingestion.md`](ingestion.md) | How a file becomes a Document: upload → storage → OCR → extraction → markdown → embedding. |
 | [`ask.md`](ask.md) | The "Ask" semantic Q&A feature: hybrid retrieval, the agentic tool loop, citations, metadata writes. |

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Verify (default) or run a deploy of Library on the production host (the
-# `documents` LXC, CT 117).
+# Verify (default) or run a deploy of Library on the production host (CT 117,
+# reached as `ssh library`, or `libraryt` over Tailscale).
 #
 # What's Up Docker (WUD) on the host deploys every new
 # `ghcr.io/johnmathews/library:latest` by itself, within about a minute of CI's
@@ -35,7 +35,7 @@
 #   - SSH access to $LIBRARY_DEPLOY_HOST is key-based (no password prompt).
 #
 # Environment overrides:
-#   LIBRARY_DEPLOY_HOST      SSH host/alias                 (default: documents)
+#   LIBRARY_DEPLOY_HOST      SSH host/alias                 (default: library)
 #   LIBRARY_DEPLOY_DIR       Compose dir on the host        (default: /srv/apps)
 #   LIBRARY_VERIFY_TIMEOUT   Seconds to wait for HEAD to be live (default: 600)
 #   LIBRARY_VERIFY_INTERVAL  Seconds between /healthz polls      (default: 10)
@@ -43,7 +43,7 @@
 #
 set -euo pipefail
 
-HOST="${LIBRARY_DEPLOY_HOST:-documents}"
+HOST="${LIBRARY_DEPLOY_HOST:-library}"
 DIR="${LIBRARY_DEPLOY_DIR:-/srv/apps}"
 IMAGE="ghcr.io/johnmathews/library"
 SKIP_PROMOTE_CHECK="${SKIP_PROMOTE_CHECK:-0}"

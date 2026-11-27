@@ -1,10 +1,10 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-11-07 (§1.3: verify waits for the host lock before touching containers, and a failed DB read reports instead of exiting silently; `--deploy` runs the migration with `compose run --no-deps`; §1.6: the rollback downgrade uses `--no-deps` too). Earlier: 2026-11-06 (WUD deploys every new `:latest`; the script verifies by default; §1.2 apt retries; §1.3 image prune). **Supersedes:** none.
-**Last verified:** 2026-11-07 — method: partial. §1.3: `tests/test_deploy_script.py` against a fake ssh/docker/flock (seen red), the default verify run against production after WUD deployed `045b235` (passed: HEAD live, `alembic_version` = image head, no stray), and WUD's own log of that deploy, which showed `compose run` without `--no-deps` recreating `library-db`. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-27 (`scripts/deploy.sh` defaults to the `library` SSH host; every `ssh documents` example is now `ssh library`). Earlier: 2026-11-07 (§1.3: verify waits for the host lock before touching containers, and a failed DB read reports instead of exiting silently; `--deploy` runs the migration with `compose run --no-deps`; §1.6: the rollback downgrade uses `--no-deps` too). Earlier: 2026-11-06 (WUD deploys every new `:latest`; the script verifies by default; §1.2 apt retries; §1.3 image prune). **Supersedes:** none.
+**Last verified:** 2026-11-27 — method: partial. The new default host: `tests/test_deploy_script.py` (which sets its own host) and `ssh library true`/`ssh libraryt true` from the dev machine. §1.3: `tests/test_deploy_script.py` against a fake ssh/docker/flock (seen red), the default verify run against production after WUD deployed `045b235` (passed: HEAD live, `alembic_version` = image head, no stray), and WUD's own log of that deploy, which showed `compose run` without `--no-deps` recreating `library-db`. The rest carries its earlier verifications forward.
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh, scripts/ci_apt_retry.sh
 
-How to ship a merged change to the live `documents` LXC. This is the focused
+How to ship a merged change to the live Library LXC (`ssh library`). This is the focused
 "do it now" version; the full topology and rationale live in
 [../deployment.md](../deployment.md) (§1.7.2 for the live instance).
 
@@ -103,7 +103,7 @@ deploys nothing. Only when WUD is paused or broken, deploy by hand with
    not locked in by lowering the number, and on an override that has stopped
    suppressing anything. Re-quarantining a module is allowed; doing it without a
    measured count beside it is not.
-2. **Key-based SSH to the host works** (`ssh documents true` returns instantly,
+2. **Key-based SSH to the host works** (`ssh library true` returns instantly,
    no password). The script aborts early if it can't connect non-interactively.
 3. **No schema-incompatible change shipped without a backup plan.** The new
    migrations run automatically (step 1.3). They are normally additive and have
@@ -125,7 +125,7 @@ image.
 1. **Waits for HEAD to be live:** polls `/healthz` (inside the webserver
    container) until its `git_sha` is HEAD, for up to 10 minutes
    (`LIBRARY_VERIFY_TIMEOUT`). On timeout it says so and names `--deploy`:
-   WUD may be paused, or its deploy failed (`ssh documents 'docker logs --tail
+   WUD may be paused, or its deploy failed (`ssh library 'docker logs --tail
    50 wud'`).
 2. **Waits for the host lock** (and releases it at once). HEAD on `/healthz`
    means WUD migrated and started the webserver, not that its script is done:
@@ -194,7 +194,7 @@ gate — use it only when you've verified `:latest` is current yourself (e.g.
 redeploying the old image, and the script waits only for `/healthz` to answer,
 not for HEAD's commit.
 
-Overrides (env): `LIBRARY_DEPLOY_HOST` (default `documents`),
+Overrides (env): `LIBRARY_DEPLOY_HOST` (default `library`; `libraryt` over Tailscale),
 `LIBRARY_DEPLOY_DIR` (default `/srv/apps`), `LIBRARY_VERIFY_TIMEOUT` (default
 600 s), `LIBRARY_VERIFY_INTERVAL` (default 10 s), `SKIP_PROMOTE_CHECK` (`1` =
 bypass the promote gate).
@@ -205,7 +205,7 @@ The script already checks the migration state and `/healthz`, but for a human sa
 
 ```bash
 scripts/deploy.sh --status        # web/worker/db/embedder up, head = expected revision
-ssh documents 'cd /srv/apps && docker compose logs --tail 30 library-worker'
+ssh library 'cd /srv/apps && docker compose logs --tail 30 library-worker'
 ```
 
 Then click through the changed surface in the browser.
@@ -215,7 +215,7 @@ Then click through the changed surface in the browser.
 The image is content-addressed by commit SHA, so rollback = redeploy the
 previous SHA:
 
-0. **Pause WUD first** (`ssh documents 'docker stop wud'`), or it redeploys
+0. **Pause WUD first** (`ssh library 'docker stop wud'`), or it redeploys
    `:latest` within a minute. Start it again (`docker start wud`) once the fix
    or the revert has shipped as the new `:latest`.
 1. Find the previous good commit on `main` (`git log --first-parent main`).
@@ -233,7 +233,7 @@ previous SHA:
 
 ## 1.7 Troubleshooting
 
-1. **`Cannot SSH to 'documents'`** — `ssh documents true` fails. Fix your SSH
+1. **`Cannot SSH to 'library'`** — `ssh library true` fails. Fix your SSH
    config/keys, or set `LIBRARY_DEPLOY_HOST`.
 2. **`The database is at revision 'X' but the running image expects 'Y'`** or
    **`library-migrate failed — migrations FAILED`** — a migration failed or did
@@ -251,7 +251,7 @@ previous SHA:
      is not HEAD yet.
 3. **`These containers were created but never started`** — the retry did not
    clear compose's name conflict, and the stack may be down. Run
-   `ssh documents 'docker ps -a --filter name=library'`; confirm any
+   `ssh library 'docker ps -a --filter name=library'`; confirm any
    `<12 hex>_library-…` container is compose's (`docker inspect` labels
    `com.docker.compose.project=apps`, `State.StartedAt` 0001-01-01),
    `docker rm` it, and re-run `scripts/deploy.sh`.
