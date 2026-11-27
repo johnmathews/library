@@ -72,15 +72,15 @@ test('upload a markdown file, see it indexed, reader card renders it', async ({
   const duplicate = page.getByText('already in your library')
   await expect(indexed.or(duplicate).first()).toBeVisible({ timeout: 150_000 })
 
-  // The newest document is the first tile. Poll by reloading: thumbnails and
+  // The newest document comes first. Poll by reloading: thumbnails and
   // the rendered-text rows are written by background jobs.
   await page.goto('/')
   await expect(async () => {
     await page.reload()
-    await expect(page.locator('.app-doc-card').first()).toBeVisible({ timeout: 2_000 })
+    await expect(page.getByTestId('doc-card').first()).toBeVisible({ timeout: 2_000 })
   }).toPass({ timeout: 60_000 })
 
-  await page.locator('.app-doc-card__title a').first().click()
+  await page.locator('[data-testid="doc-card"] a').first().click()
   await expect(page).toHaveURL(/\/documents\/\d+$/)
 
   // The long-form reader card (#document-markdown-card) renders the markdown:

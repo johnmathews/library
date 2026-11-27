@@ -98,13 +98,13 @@ test('create a project, assign a document, filter the dashboard by it', async ({
   await page.getByTestId('pill-project').getByTestId('filter-pill-button').click()
   await page.getByTestId('pill-project').locator(`input[value="${projectSlug}"]`).check()
 
-  // The URL reflects the project slug and the document's tile is present.
+  // The URL reflects the project slug and the document is listed.
   await expect(page).toHaveURL(new RegExp(`[?&]project=${projectSlug}(?:&|$)`))
-  await expect(page.locator('.app-doc-card__title a', { hasText: docTitle })).toBeVisible()
+  await expect(page.locator('[data-testid="doc-card"] a', { hasText: docTitle })).toBeVisible()
 
   // A different filter state (a nonexistent project slug) does not show it.
   await page.goto(`/?project=${projectSlug}-nope`)
-  await expect(page.locator('.app-doc-card__title a', { hasText: docTitle })).toHaveCount(0)
+  await expect(page.locator('[data-testid="doc-card"] a', { hasText: docTitle })).toHaveCount(0)
 
   // Clean up the throwaway document (settings/taxonomy are shared across specs).
   const del = await page.request.delete(`/api/documents/${id}`, {

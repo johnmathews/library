@@ -1,8 +1,8 @@
 /**
  * W10 + W11 acceptance e2e: sign in → upload a PDF fixture → wait for the
- * pipeline to index it → find its tile on the dashboard grid → full-text
+ * pipeline to index it → find it on the dashboard → full-text
  * search by a Dutch stem through the header search modal; then the detail
- * page — open from a tile, edit the title via the summary-list Change
+ * page — open it from the dashboard, edit the title via the summary-list Change
  * flow, delete via the confirmation page. Runs in all three matrix
  * projects (desktop Chromium, 375px WebKit, iPad-portrait WebKit) — see
  * playwright.config.ts.
@@ -86,19 +86,19 @@ test('sign in, upload a PDF, see it indexed, listed and searchable', async ({ pa
   const duplicate = page.getByText('already in your library')
   await expect(indexed.or(duplicate).first()).toBeVisible({ timeout: 150_000 })
 
-  // The document appears as a tile on the dashboard grid (poll by
+  // The document appears on the dashboard (poll by
   // reloading; thumbnails and search vector are written by background jobs).
   await page.goto('/')
   await expect(async () => {
     await page.reload()
-    await expect(page.locator('.app-doc-card').first()).toBeVisible({ timeout: 2_000 })
+    await expect(page.getByTestId('doc-card').first()).toBeVisible({ timeout: 2_000 })
   }).toPass({ timeout: 60_000 })
 
   // Dutch stemming: the fixture contains "rekeningen", search the stem
   // through the header search modal.
   await searchFor(page, 'rekening')
   await expect(page).toHaveURL(/q=rekening/)
-  await expect(page.locator('.app-doc-card').first()).toBeVisible()
+  await expect(page.getByTestId('doc-card').first()).toBeVisible()
   // ts_headline snippet with the match highlighted as a real <b> element.
   await expect(page.locator('.app-doc-card__snippet b').first()).toContainText(/rekening/i)
 
@@ -135,7 +135,7 @@ test('dashboard reflects metadata preferences', async ({ page }) => {
 
     // ── Phase 3: the dashboard renders no sender lines while field is off ────
     await page.goto('/')
-    // If documents are present (uploaded by the preceding test), no tile should
+    // If documents are present (uploaded by the preceding test), none should
     // show a sender line. If the library is empty the count is trivially 0, which
     // is still correct. The meaningful assertion is Phase 2 above.
     await expect(page.locator('.app-doc-card__sender')).toHaveCount(0)
@@ -179,9 +179,9 @@ test('detail: open from list, edit title, delete via confirmation page', async (
   expect(response.status()).toBe(201)
   const { id } = (await response.json()) as { id: number }
 
-  // Newest document (no document_date, latest created_at) → first tile.
+  // Newest document (no document_date, latest created_at) → first on the dashboard.
   await page.goto('/')
-  await page.locator('.app-doc-card__title a').first().click()
+  await page.locator('[data-testid="doc-card"] a').first().click()
   await expect(page).toHaveURL(new RegExp(`/documents/${id}$`))
   await expect(page.getByText('Status', { exact: true })).toBeVisible()
 
@@ -208,7 +208,7 @@ test('detail: open from list, edit title, delete via confirmation page', async (
   // Redirected to the list with a success banner; the document is gone.
   await expect(page).toHaveURL(/\/$/)
   await expect(page.getByTestId('flash-banner')).toContainText('has been deleted')
-  await expect(page.locator('.app-doc-card__title a', { hasText: newTitle })).toHaveCount(0)
+  await expect(page.locator('[data-testid="doc-card"] a', { hasText: newTitle })).toHaveCount(0)
 
   // Navigating straight to a soft-deleted document now opens it READ-ONLY with a
   // trash banner (Restore / Delete permanently) rather than the old "Document
