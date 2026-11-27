@@ -1,4 +1,4 @@
-<!-- @dsCard group="Documents" height=730 subtitle="A document's tile with its type band" -->
+<!-- @dsCard group="Documents" height=1010 subtitle="A document's row (the dashboard default) and tile, with its type colour" -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -50,10 +50,30 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
   .title { font-size: 14px; line-height: 18px; }
   .sum { display: none; }
 }
+/* The row: the dashboard's default layout. The tile's surface without the preview. */
+.lb-label { margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--ink-secondary); }
+.lb-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.lb-dr { position: relative; background: var(--panel); border-left: 4px solid transparent; border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: 12px 20px; }
+.lb-dr[style*="--kind"] { border-left-color: var(--kind); }
+.lb-dr:hover .title a, .lb-dr .title a:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.lb-dr .title { margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-dr .meta { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; line-height: 18px; color: var(--ink-secondary); }
+@media (max-width: 640px) {
+  .lb-dr { padding: 10px 12px; }
+  .lb-dr .title { white-space: normal; }
+}
 </style>
 </head>
 <body>
-<div class="lb-pad"><ul class="lb-grid">
+<div class="lb-pad">
+<p class="lb-label">Row · the dashboard's default</p>
+<ul class="lb-rows">
+  <li class="lb-dr" style="--kind: var(--category-3)"><h2 class="title"><a href="#">Annual energy statement 2026</a></h2><p class="meta"><span class="lb-tag attn">Needs review</span><span class="lb-tag">Invoice</span><span>Energiebedrijf Noord</span><span>Date 14 Nov 2026</span><span class="lb-num">€1,284.50 due</span></p></li>
+  <li class="lb-dr" style="--kind: var(--category-2)"><h2 class="title"><a href="#">Dental check-up receipt</a></h2><p class="meta"><span class="lb-tag">Receipt</span><span>Tandartspraktijk De Kroon</span><span>Date 11 Nov 2026</span><span class="lb-num">€86.00 paid</span></p></li>
+  <li class="lb-dr"><h2 class="title"><a href="#">Re: moving the boiler service</a></h2><p class="meta"><span class="lb-tag">Email</span><span>Installatiebedrijf Zuid</span><span>Date 7 Nov 2026</span></p></li>
+</ul>
+<p class="lb-label">Tile</p>
+<ul class="lb-grid">
   <li class="lb-dt" style="--kind: var(--category-3)">
       <div class="thumb"><div class="page"><i class="h"></i><i></i><i class="m"></i><i></i><i class="s"></i></div></div>
       <div class="body"><h2 class="title"><a href="#">Annual energy statement 2026</a></h2><div class="chips"><span class="lb-tag attn">Needs review</span><span class="lb-tag">Invoice</span></div><p class="line">Energiebedrijf Noord<br>14 Nov 2026 · <span class="lb-num">€1,284.50 due</span></p><p class="sum">Final statement for the year. The balance is due by 28 Nov.</p></div>

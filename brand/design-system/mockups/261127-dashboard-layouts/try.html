@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dashboard layouts, full size</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="proto.css">
+<style>
+  html, body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--font-sans); }
+  :root { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
+  .switch { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+            padding: calc(8px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 8px max(16px, env(safe-area-inset-left, 0px));
+            background: var(--panel); border-bottom: 1px solid var(--line); font-size: 13px; }
+  .seg { display: inline-flex; border: 1px solid var(--control-border); border-radius: var(--radius-sm); overflow: hidden; }
+  .seg button { font: inherit; font-weight: 600; border: 0; background: transparent; color: var(--ink); padding: 6px 12px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--control-border); }
+  .seg button[aria-pressed="true"] { background: var(--brand-tint); color: var(--brand-on-tint); }
+  .switch a { color: var(--brand); font-weight: 600; text-decoration: none; }
+  .switch .w { color: var(--ink-secondary); margin-left: auto; }
+  #stage { overflow-x: hidden; }
+  button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- The app icon's mark, option B of 261121-app-icon (decided). -->
+  <symbol id="mark" viewBox="0 0 32 32">
+    <g transform="translate(-1 -1)" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 5 H17 L22 10 V24 A2 2 0 0 1 20 26 H9 A2 2 0 0 1 7 24 V7 A2 2 0 0 1 9 5 Z"/>
+      <polyline points="17,5 17,10 22,10"/>
+      <line x1="11" y1="14" x2="17" y2="14"/>
+      <line x1="11" y1="18" x2="14.5" y2="18"/>
+      <circle cx="22" cy="22" r="6.75" style="fill: var(--brand-fill)" stroke="none"/>
+      <circle cx="22" cy="22" r="4.5" style="fill: var(--brand-fill)"/>
+      <line x1="25.5" y1="25.5" x2="28" y2="28" stroke-width="3"/>
+    </g>
+  </symbol>
+  <!-- Nav icons: 24px grid, 2px round strokes. -->
+  <symbol id="i-docs" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></g></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><line x1="16" y1="16" x2="20" y2="20"/></g></symbol>
+  <symbol id="i-ask" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h0.5A2.5 2.5 0 0 1 5 13.5z"/></g></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V5"/><path d="M8 9l4-4 4 4"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></g></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h8l4 4v12H6z"/><path d="M9 13h6M9 16.5h4"/></g></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 19V11M10 19V6M15 19v-5M20 19V9"/></g></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></g></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5.5A1.5 1.5 0 0 1 6.5 4H19v14H6.5A1.5 1.5 0 0 0 5 19.5z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19"/></g></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5" stroke-dasharray="3 2.9"/></g></symbol>
+  <symbol id="i-bin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M10 4h4M7 7l1 13h8l1-13"/></g></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5z"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M5 7h14M5 12h14M5 17h14"/></symbol>
+</svg>
+<div class="switch">
+  <a href="index.html">All options</a>
+  <span class="seg" id="layout" role="group" aria-label="Layout">
+    <button data-v="tiles">A · Tiles</button><button data-v="rows">B · Rows</button><button data-v="table">C · Table</button><button data-v="list">D · List</button>
+  </span>
+  <span class="seg" id="theme" role="group" aria-label="Theme"><button data-v="light">Light</button><button data-v="dark">Dark</button></span>
+  <span class="w" id="w"></span>
+</div>
+<div id="stage"></div>
+<script src="proto.js"></script>
+<script>
+  const q = new URLSearchParams(location.search)
+  const state = { layout: q.get('layout') || 'table', theme: q.get('theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') }
+  function render() {
+    document.documentElement.dataset.theme = state.theme
+    for (const g of ['layout', 'theme']) for (const b of document.querySelectorAll(`#${g} button`)) b.setAttribute('aria-pressed', String(b.dataset.v === state[g]))
+    const w = document.documentElement.clientWidth
+    const r = Dashboard.draw(document.getElementById('stage'), state.layout, w)
+    document.getElementById('w').textContent = `${w}px wide · showing ${r.shown}`
+    history.replaceState(null, '', `?layout=${state.layout}&theme=${state.theme}`)
+  }
+  for (const g of ['layout', 'theme']) document.getElementById(g).addEventListener('click', (e) => { const v = e.target.closest('button')?.dataset.v; if (v) { state[g] = v; render() } })
+  let t; addEventListener('resize', () => { clearTimeout(t); t = setTimeout(render, 80) })
+  render()
+</script>
+</body></html>
