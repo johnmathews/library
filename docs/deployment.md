@@ -1,7 +1,7 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-11-07 (§1.7.3: grouped Dependabot security updates and how to handle them). Earlier: 2026-11-07 (§1.7.2 point 5: WUD deploys each new `:latest`; `scripts/deploy.sh` verifies by default). Earlier entries are in this file's history.
-**Last verified:** 2026-11-07 — method: partial. §1.7.3: the config read against GitHub's Dependabot options reference; GitHub's acceptance of it is checked after merge (journal 261107-dependabot-alerts). §1.7.2 point 5: read on the host and the verify run after WUD deployed `045b235`. The rest carries forward the 2026-11-05 `compose-smoke` check of §1.4 and the 2026-11-04 check of §1.5.
+**Status:** active. **Last updated:** 2026-11-27 (§1.7.2 point 1: the host is reached as `ssh library` (`libraryt` over Tailscale); the `documents` SSH names are no longer used). Earlier: 2026-11-07 (§1.7.3: grouped Dependabot security updates and how to handle them). Earlier: 2026-11-07 (§1.7.2 point 5: WUD deploys each new `:latest`; `scripts/deploy.sh` verifies by default). Earlier entries are in this file's history.
+**Last verified:** 2026-11-27 — method: partial. §1.7.2 point 1: `ssh -G library` and `ssh -G libraryt` resolve to the host's LAN and Tailscale addresses, and `hostname` run through both returned `documents`. §1.7.3: the config read against GitHub's Dependabot options reference; GitHub's acceptance of it is checked after merge (journal 261107-dependabot-alerts). §1.7.2 point 5: read on the host and the verify run after WUD deployed `045b235`. The rest carries forward the 2026-11-05 `compose-smoke` check of §1.4 and the 2026-11-04 check of §1.5.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
@@ -336,7 +336,7 @@ stall every connector's token refresh.
 ## 1.6 Backups
 
 This section is the general guidance for a repo-based deploy. The **live
-`documents` instance uses a different, already-automated topology** (file store
+instance uses a different, already-automated topology** (file store
 on TrueNAS NFS with ZFS snapshots + replication; local `pgdata` captured by the
 daily PBS LXC backup) — see §1.7.2 point 3.
 
@@ -404,7 +404,7 @@ restore the pre-upgrade `pg_dump` if a downgrade must cross a migration.
 ### 1.7.1 Upgrading to semantic Ask (pgvector + embedder)
 
 The Ask release swaps the `db` image to `pgvector/pgvector:pg17` and adds the
-`embedder` service. Steps (with the gotchas seen on the live `documents` LXC —
+`embedder` service. Steps (with the gotchas seen on the live LXC —
 see 1.7.2 for that instance's exact shape):
 
 1. **Back up the DB first** — always, before any DB image change:
@@ -460,17 +460,19 @@ see 1.7.2 for that instance's exact shape):
    without `LIBRARY_ANTHROPIC_API_KEY` (only the answer step calls Claude;
    embedding/indexing is local). Retrieval works without it.
 
-### 1.7.2 The live `documents` LXC instance
+### 1.7.2 The live Library LXC instance
 
 The production instance does **not** use this repo's `docker-compose.yml`
 (that file is a dev / CI-smoke reference). The live compose at
-`/srv/apps/docker-compose.yml` on the `documents` LXC is **templated from the
+`/srv/apps/docker-compose.yml` on the live LXC is **templated from the
 `home-server/proxmox-setup` Ansible repo — that repo is the deploy source of
 truth for the container wiring, mounts, and memory limits.** This repo owns the
 image; proxmox-setup owns how it is run. Concrete details:
 
-1. **Access:** `ssh documents` (root; `documentst` over Tailscale). The LXC
-   was named `paperless` until 2026-10-11, when the home-server repo renamed it. Compose at `/srv/apps/docker-compose.yml`
+1. **Access:** `ssh library` (root; `libraryt` over Tailscale). The older SSH
+   names `documents` and `documentst` are no longer used, though the container's own
+   hostname is still `documents`. The LXC was named `paperless` until 2026-10-11,
+   when the home-server repo renamed it. Compose at `/srv/apps/docker-compose.yml`
    (back it up before editing — `cp` to a `.bak-<ts>`); env in `/srv/apps/.env`.
    Edit the compose in the proxmox-setup repo and re-apply, rather than editing
    the host copy by hand, so the source of truth stays authoritative.
